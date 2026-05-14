@@ -13,8 +13,9 @@
 先读：
 
 1. `docs/目录怎么用.md`
-2. `AGENTS.md`
-3. `agent_protocols/experiment_audit.md`
+2. `docs/04_evaluation_protocols.md`
+3. `AGENTS.md`
+4. `agent_protocols/experiment_audit.md`
 
 然后运行仓库 fast gate：
 
@@ -45,6 +46,14 @@ python scripts/repo_doctor.py fast
 - 完整 P1/P2/P3 protocol runner。
 - 图模型、heads、复杂训练 callback。
 - candidate 级真实实验结果。
+
+P1/P2/P3 当前已迁入为 protocol 配置和 dry-run plan。它们定义评估口径和工作量，不会自动训练：
+
+```bash
+python scripts/plan_evaluation_protocol.py --protocol p1 --route-config configs/routes/models/ea_deformer.yaml
+python scripts/plan_evaluation_protocol.py --protocol p2 --route-config configs/routes/models/ea_deformer.yaml
+python scripts/plan_evaluation_protocol.py --protocol p3 --route-config configs/routes/models/ea_deformer.yaml --grid-size ea_deformer=6
+```
 
 Torch 模型 forward smoke 不在默认 fast gate 中运行；改动模型路径时由 `.github/workflows/model_smoke.yml` 触发，也可以手动运行：
 
