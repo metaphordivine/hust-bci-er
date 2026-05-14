@@ -27,6 +27,16 @@ def route_top4_required(route_id: str, route_config: Path | None = None) -> bool
     return bool(inference.get("top4")) if isinstance(inference, dict) else False
 
 
+def resolve_repo_file(value: str, *, field: str) -> Path:
+    path = Path(value)
+    resolved = (ROOT / path).resolve() if not path.is_absolute() else path.resolve()
+    try:
+        resolved.relative_to(ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{field} must be inside repository: {value}") from exc
+    return resolved
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check promotion audit fields and candidate report binding.")
     parser.add_argument("--promotion-audit", type=Path, required=True)
@@ -40,7 +50,12 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             errors.append(str(exc))
             top4_required = False
-        errors.extend(check_candidate_audit(ROOT / fields["candidate_audit_report"], route_id=fields["route_id"], top4_required=top4_required))
+        try:
+            candidate_report = resolve_repo_file(fields["candidate_audit_report"], field="candidate_audit_report")
+        except ValueError as exc:
+            errors.append(str(exc))
+        else:
+            errors.extend(check_candidate_audit(candidate_report, route_id=fields["route_id"], top4_required=top4_required))
     if errors:
         print("Promotion audit check failed:")
         for err in errors:

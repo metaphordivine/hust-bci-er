@@ -1,17 +1,42 @@
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import yaml
 
+import hust_bci_er.training.reproducibility as reproducibility_module
 from hust_bci_er.audit.manifest import sha256_file, validate_manifest
 from hust_bci_er.audit.run_manifest import write_run_manifest
 from hust_bci_er.evaluation.crop_policy import crop_policy_manifest, select_crop_matrix, worst_crop_score
 from hust_bci_er.evaluation.protocols.runner import build_protocol_jobs, materialize_protocol_run
-from hust_bci_er.training.reproducibility import ReproducibilityConfig, apply_reproducibility, dataloader_worker_seed
+from hust_bci_er.training.reproducibility import dataloader_worker_seed
 from scripts.audit_experiment import run_audit
 
 
 ROUTE = Path("configs/routes/models/ea_deformer.yaml")
+
+
+def lock_pythonhashseed(monkeypatch, seed: int) -> None:
+    value = str(seed)
+    monkeypatch.setenv("PYTHONHASHSEED", value)
+    monkeypatch.setattr(reproducibility_module, "PROCESS_START_PYTHONHASHSEED", value)
+
+
+def run_reproducibility_subprocess(*, seed: int, pythonhashseed: str | None) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path.cwd() / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    if pythonhashseed is None:
+        env.pop("PYTHONHASHSEED", None)
+    else:
+        env["PYTHONHASHSEED"] = pythonhashseed
+    code = (
+        "import json; "
+        "from hust_bci_er.training.reproducibility import ReproducibilityConfig, apply_reproducibility; "
+        f"print(json.dumps(apply_reproducibility(ReproducibilityConfig(seed={seed})), sort_keys=True))"
+    )
+    return subprocess.run([sys.executable, "-c", code], cwd=Path.cwd(), env=env, text=True, capture_output=True, timeout=60)
 
 
 def test_protocol_runner_materializes_p2_crop_jobs(tmp_path):
@@ -59,7 +84,8 @@ def test_protocol_runner_counts_p1_and_p3_jobs():
     assert all(job.split_id != job.source_split_id for job in p3_jobs)
 
 
-def test_write_run_manifest_locks_artifact_hashes(tmp_path):
+def test_write_run_manifest_locks_artifact_hashes(monkeypatch, tmp_path):
+    lock_pythonhashseed(monkeypatch, 42)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     predictions = run_dir / "predictions.csv"
@@ -93,10 +119,11 @@ def test_write_run_manifest_locks_artifact_hashes(tmp_path):
     assert json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["audit_schema_version"] == 2
 
 
-def test_write_run_manifest_accepts_job_specific_split_and_seed(tmp_path):
+def test_write_run_manifest_accepts_job_specific_split_and_seed(monkeypatch, tmp_path):
     protocol_run = tmp_path / "protocol"
     protocol_manifest = materialize_protocol_run("p1", [ROUTE], run_dir=protocol_run, seeds=[123], n_folds=2)
     job = protocol_manifest["jobs"][0]
+    lock_pythonhashseed(monkeypatch, int(job["seed"]))
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -169,7 +196,8 @@ def test_write_run_manifest_accepts_job_specific_split_and_seed(tmp_path):
     assert rules["PRIMARY_METRIC_RECOMPUTE"] == "PASS"
 
 
-def test_write_run_manifest_requires_split_evidence_for_split_override(tmp_path):
+def test_write_run_manifest_requires_split_evidence_for_split_override(monkeypatch, tmp_path):
+    lock_pythonhashseed(monkeypatch, 42)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     predictions = run_dir / "predictions.csv"
@@ -195,7 +223,8 @@ def test_write_run_manifest_requires_split_evidence_for_split_override(tmp_path)
         raise AssertionError("write_run_manifest should reject split_id override without split evidence")
 
 
-def test_write_run_manifest_records_group_keys_and_route_crop_tie_break(tmp_path):
+def test_write_run_manifest_records_group_keys_and_route_crop_tie_break(monkeypatch, tmp_path):
+    lock_pythonhashseed(monkeypatch, 42)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     predictions = run_dir / "predictions.csv"
@@ -223,12 +252,31 @@ def test_write_run_manifest_records_group_keys_and_route_crop_tie_break(tmp_path
 
 
 def test_reproducibility_helpers_define_worker_seed_and_apply():
-    applied = apply_reproducibility(ReproducibilityConfig(seed=123, dataloader_worker_seed_base=500))
+    proc = run_reproducibility_subprocess(seed=123, pythonhashseed="123")
+
+    assert proc.returncode == 0, proc.stderr
+    applied = json.loads(proc.stdout)
     assert applied["python_seed"] == 123
+    assert applied["python_hash_seed"] == 123
+    assert applied["pythonhashseed_env"] == "123"
     assert applied["numpy_seed"] == 123
     assert applied["torch_seed"] == 123
-    assert applied["dataloader_worker_seed_base"] == 500
+    assert applied["dataloader_worker_seed_base"] == 123
     assert dataloader_worker_seed(500, 3) == 503
+
+
+def test_reproducibility_rejects_mismatched_pythonhashseed():
+    proc = run_reproducibility_subprocess(seed=123, pythonhashseed="999")
+
+    assert proc.returncode != 0
+    assert "PYTHONHASHSEED mismatch" in proc.stderr
+
+
+def test_reproducibility_rejects_missing_pythonhashseed():
+    proc = run_reproducibility_subprocess(seed=123, pythonhashseed=None)
+
+    assert proc.returncode != 0
+    assert "restart Python with PYTHONHASHSEED=123" in proc.stderr
 
 
 def test_crop_policy_random_and_worst_are_deterministic():

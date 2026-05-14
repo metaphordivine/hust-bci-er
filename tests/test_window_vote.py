@@ -26,6 +26,33 @@ def test_aggregate_window_predictions_returns_one_trial_row():
     ]
 
 
+def test_aggregate_window_predictions_preserves_consistent_audit_metadata():
+    rows = [
+        {"route_id": "r1", "seed": "42", "fold": "0", "subject_id": "s1", "trial_id": "t1", "crop_id": 0, "y_score": 0.9, "y_pred": 1, "y_true": 1},
+        {"route_id": "r1", "seed": "42", "fold": "0", "subject_id": "s1", "trial_id": "t1", "crop_id": 1, "y_score": 0.8, "y_pred": 1, "y_true": 1},
+        {"route_id": "r1", "seed": "42", "fold": "0", "subject_id": "s1", "trial_id": "t1", "crop_id": 2, "y_score": 0.7, "y_pred": 1, "y_true": 1},
+        {"route_id": "r1", "seed": "42", "fold": "0", "subject_id": "s1", "trial_id": "t1", "crop_id": 3, "y_score": 0.2, "y_pred": 0, "y_true": 1},
+    ]
+
+    out = aggregate_window_predictions(rows)
+
+    assert out[0]["route_id"] == "r1"
+    assert out[0]["seed"] == "42"
+    assert out[0]["fold"] == "0"
+    assert out[0]["y_true"] == 1
+    assert "crop_id" not in out[0]
+
+
+def test_aggregate_window_predictions_rejects_conflicting_audit_metadata():
+    rows = [
+        {"subject_id": "s1", "trial_id": "t1", "crop_id": 0, "y_score": 0.9, "y_pred": 1, "y_true": 1},
+        {"subject_id": "s1", "trial_id": "t1", "crop_id": 1, "y_score": 0.8, "y_pred": 1, "y_true": 0},
+    ]
+
+    with pytest.raises(ValueError, match="conflicting metadata y_true"):
+        aggregate_window_predictions(rows)
+
+
 def test_aggregate_window_predictions_rejects_partial_score_or_class_rows():
     with pytest.raises(ValueError, match="must include y_score"):
         aggregate_window_predictions(

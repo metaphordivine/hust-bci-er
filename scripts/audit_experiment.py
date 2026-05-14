@@ -814,6 +814,8 @@ def check_reproducibility_manifest(manifest: dict[str, Any], checks: list[AuditC
     determinism = manifest.get("determinism")
     required_determinism = {
         "python_seed",
+        "python_hash_seed",
+        "pythonhashseed_env",
         "numpy_seed",
         "torch_seed",
         "deterministic_algorithms",
@@ -828,11 +830,16 @@ def check_reproducibility_manifest(manifest: dict[str, Any], checks: list[AuditC
         absent = sorted(key for key in required_determinism if key not in determinism)
         malformed.extend(f"determinism.{key}" for key in absent)
         manifest_seed = manifest.get("seed")
-        for key in ["python_seed", "numpy_seed", "torch_seed", "dataloader_worker_seed_base"]:
+        for key in ["python_seed", "python_hash_seed", "numpy_seed", "torch_seed", "dataloader_worker_seed_base"]:
             if key in determinism and type(determinism[key]) is not int:
                 malformed.append(f"determinism.{key} must be int")
             elif key in determinism and type(manifest_seed) is int and determinism[key] != manifest_seed:
                 malformed.append(f"determinism.{key} must match manifest seed")
+        if "pythonhashseed_env" in determinism:
+            if determinism["pythonhashseed_env"] in {None, ""}:
+                malformed.append("determinism.pythonhashseed_env must be set before Python starts")
+            elif type(manifest_seed) is int and str(determinism["pythonhashseed_env"]) != str(manifest_seed):
+                malformed.append("determinism.pythonhashseed_env must match manifest seed")
         if "seed" in determinism and type(manifest_seed) is int and determinism["seed"] != manifest_seed:
             malformed.append("determinism.seed must match manifest seed")
         if determinism.get("deterministic_algorithms") is not True:

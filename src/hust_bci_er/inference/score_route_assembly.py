@@ -19,7 +19,8 @@ from hust_bci_er.inference.topk import subject_top4
 
 @dataclass(frozen=True)
 class ComponentScoreTable:
-    keys: tuple[tuple[str, str], ...]
+    key_columns: tuple[str, ...]
+    keys: tuple[tuple[str, ...], ...]
     scores: np.ndarray
 
 
@@ -35,12 +36,25 @@ def read_component_score_table(path: Path) -> ComponentScoreTable:
     if subject_col is None or trial_col is None or score_col is None:
         raise ValueError(f"component score table must include subject, trial, and score columns: {path}")
 
-    keys: list[tuple[str, str]] = []
+    optional_key_cols: list[str] = []
+    for col in ("seed", "fold"):
+        if col not in rows[0]:
+            continue
+        present = [row.get(col) not in {None, ""} for row in rows]
+        if any(present) and not all(present):
+            raise ValueError(f"component score table has partial {col} values: {path}")
+        if all(present):
+            optional_key_cols.append(col)
+
+    key_sources = tuple(optional_key_cols + [subject_col, trial_col])
+    key_columns = tuple(optional_key_cols + ["subject_id", "trial_id"])
+    keys: list[tuple[str, ...]] = []
+    seen_keys: set[tuple[str, ...]] = set()
     scores: list[float] = []
     for row in rows:
-        key = (str(row[subject_col]), str(row[trial_col]))
-        if key in keys:
-            raise ValueError(f"duplicate subject/trial row in component score table: {path}")
+        key = tuple(str(row[col]) for col in key_sources)
+        if key in seen_keys:
+            raise ValueError(f"duplicate component alignment row in component score table: {path}")
         try:
             score = float(row[score_col])
         except ValueError as exc:
@@ -48,38 +62,58 @@ def read_component_score_table(path: Path) -> ComponentScoreTable:
         if not np.isfinite(score):
             raise ValueError(f"component score is not finite in {path}: {key}")
         keys.append(key)
+        seen_keys.add(key)
         scores.append(score)
-    return ComponentScoreTable(tuple(keys), np.asarray(scores, dtype=np.float64))
+    return ComponentScoreTable(key_columns, tuple(keys), np.asarray(scores, dtype=np.float64))
 
 
-def matrices_from_component_tables(tables: Mapping[str, ComponentScoreTable], required_components: tuple[str, ...]) -> tuple[list[str], list[list[str]], dict[str, np.ndarray]]:
+def alignment_key(key_columns: tuple[str, ...], group_columns: tuple[str, ...], group: tuple[str, ...], trial: str) -> tuple[str, ...]:
+    values = dict(zip(group_columns, group))
+    values["trial_id"] = trial
+    return tuple(values[col] for col in key_columns)
+
+
+def matrices_from_component_tables(
+    tables: Mapping[str, ComponentScoreTable],
+    required_components: tuple[str, ...],
+) -> tuple[tuple[str, ...], list[tuple[str, ...]], list[list[str]], dict[str, np.ndarray]]:
     first = tables[required_components[0]]
     first_keys = list(first.keys)
-    subjects: list[str] = []
-    trials_by_subject: dict[str, list[str]] = defaultdict(list)
-    for subject, trial in first_keys:
-        if subject not in trials_by_subject:
-            subjects.append(subject)
-        trials_by_subject[subject].append(trial)
+    if "trial_id" not in first.key_columns or "subject_id" not in first.key_columns:
+        raise ValueError("component score table key columns must include subject_id and trial_id")
+    trial_idx = first.key_columns.index("trial_id")
+    group_indices = tuple(idx for idx, col in enumerate(first.key_columns) if col != "trial_id")
+    group_columns = tuple(first.key_columns[idx] for idx in group_indices)
 
-    trial_counts = {len(trials) for trials in trials_by_subject.values()}
+    groups: list[tuple[str, ...]] = []
+    trials_by_group: dict[tuple[str, ...], list[str]] = defaultdict(list)
+    for key in first_keys:
+        group_key = tuple(key[idx] for idx in group_indices)
+        trial = key[trial_idx]
+        if group_key not in trials_by_group:
+            groups.append(group_key)
+        trials_by_group[group_key].append(trial)
+
+    trial_counts = {len(trials) for trials in trials_by_group.values()}
     if len(trial_counts) != 1:
-        raise ValueError("all subjects must have the same number of trial rows")
+        raise ValueError("all component alignment groups must have the same number of trial rows")
     n_trials = trial_counts.pop()
 
     component_matrices: dict[str, np.ndarray] = {}
     first_key_set = set(first_keys)
     for name in required_components:
         table = tables[name]
+        if table.key_columns != first.key_columns:
+            raise ValueError(f"component score table key columns do not match first component: {name}")
         if set(table.keys) != first_key_set:
             raise ValueError(f"component score table keys do not match first component: {name}")
         score_map = dict(zip(table.keys, table.scores))
         component_matrices[name] = np.asarray(
-            [[score_map[(subject, trial)] for trial in trials_by_subject[subject]] for subject in subjects],
+            [[score_map[alignment_key(first.key_columns, group_columns, group, trial)] for trial in trials_by_group[group]] for group in groups],
             dtype=np.float64,
-        ).reshape(len(subjects), n_trials)
+        ).reshape(len(groups), n_trials)
 
-    return subjects, [trials_by_subject[subject] for subject in subjects], component_matrices
+    return group_columns, groups, [trials_by_group[group] for group in groups], component_matrices
 
 
 def assemble_score_route_rows(route_config_path: Path, component_score_paths: Mapping[str, Path]) -> list[dict[str, str]]:
@@ -94,31 +128,35 @@ def assemble_score_route_rows(route_config_path: Path, component_score_paths: Ma
         raise ValueError(f"missing component score tables: {missing}")
 
     tables = {name: read_component_score_table(Path(component_score_paths[name])) for name in route.components}
-    subjects, trials_by_subject, component_matrices = matrices_from_component_tables(tables, route.components)
+    group_columns, groups, trials_by_group, component_matrices = matrices_from_component_tables(tables, route.components)
     route_scores = assemble_score_route(route, component_matrices)
 
     rows: list[dict[str, str]] = []
-    for subject_idx, subject in enumerate(subjects):
-        scores = route_scores[subject_idx]
+    for group_idx, group in enumerate(groups):
+        group_values = dict(zip(group_columns, group))
+        scores = route_scores[group_idx]
         if scores.size != 8:
-            raise ValueError(f"Top-4 score routes require 8 trial rows per subject: {subject}")
+            context = "|".join(group)
+            raise ValueError(f"Top-4 score routes require 8 trial rows per alignment group: {context}")
         pred = subject_top4(scores)
-        for trial, score, top4 in zip(trials_by_subject[subject_idx], scores, pred):
-            rows.append(
+        for trial, score, top4 in zip(trials_by_group[group_idx], scores, pred):
+            item = {"route_id": route.route_id}
+            item.update(group_values)
+            item.update(
                 {
-                    "route_id": route.route_id,
-                    "subject_id": subject,
                     "trial_id": trial,
                     "score": f"{float(score):.12g}",
                     "pred_top4": str(int(top4)),
                 }
             )
+            rows.append(item)
     return rows
 
 
 def write_score_route_rows(rows: list[dict[str, str]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["route_id", "subject_id", "trial_id", "score", "pred_top4"]
+    metadata_fields = [field for field in ("seed", "fold") if any(field in row for row in rows)]
+    fieldnames = ["route_id", *metadata_fields, "subject_id", "trial_id", "score", "pred_top4"]
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

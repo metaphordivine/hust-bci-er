@@ -115,6 +115,23 @@ def test_score_matrix_report_preserves_subject_with_composite_group_keys(tmp_pat
     assert report["subjects"][0]["group_key"] == "42|0|s1"
 
 
+def test_prediction_report_respects_composite_metric_group_keys(tmp_path):
+    prediction_csv = tmp_path / "predictions.csv"
+    prediction_csv.write_text(
+        "seed,fold,subject_id,trial_id,y_pred,y_true\n"
+        "42,0,s1,t0,0,0\n"
+        "42,0,s1,t1,1,1\n"
+        "43,0,s1,t0,1,0\n"
+        "43,0,s1,t1,0,1\n",
+        encoding="utf-8",
+    )
+
+    report = build_metric_report(route_id="r1", prediction_csv=prediction_csv, primary_metric="no_top4_BA", metric_group_keys=("seed", "fold", "subject_id"))
+
+    assert [row["group_key"] for row in report["subjects"]] == ["42|0|s1", "43|0|s1"]
+    assert report["metrics"]["no_top4_BA"] == 0.5
+
+
 def test_source_scanner_finds_leakage_pattern(tmp_path):
     root = tmp_path
     src = root / "src"
@@ -211,6 +228,49 @@ def test_summary_and_promotion_helpers(tmp_path):
     assert "checks list" in "; ".join(check_candidate_audit(minimal, route_id="r1"))
 
 
+def test_route_summary_normalizes_repo_relative_evidence_paths(tmp_path):
+    root = tmp_path
+    run_dir = root / "outputs" / "r1" / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "audit_report.json").write_text(json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS"}), encoding="utf-8")
+    manifest = run_dir / "manifest.json"
+    manifest.write_text(json.dumps({"route_id": "r1", "primary_metric": "top4_BA", "metrics": {"top4_BA": 0.5}}), encoding="utf-8")
+
+    summary = render_route_summary(
+        route_data={"route_id": "r1", "status": "CANDIDATE", "dataset_version": "d1", "split_id": "s1", "seed": 42, "evaluation": {"protocol": "p1", "primary_metric": "top4_BA"}},
+        audit_report={"route_id": "r1", "overall": "PASS", "gate": "candidate", "route_config": "configs/routes/models/r1.yaml", "run_dir": str(run_dir), "metrics": {"top4_BA": 0.5}},
+        manifest_path=manifest,
+        root=root,
+    )
+
+    assert "audit_report_path: outputs/r1/run/audit_report.json" in summary
+    assert "manifest_path: outputs/r1/run/manifest.json" in summary
+    assert str(root) not in summary
+    outside_manifest = tmp_path.parent / "outside_manifest.json"
+    outside_manifest.write_text(json.dumps({"route_id": "r1"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="manifest_path must be inside repository"):
+        render_route_summary(
+            route_data={"route_id": "r1", "evaluation": {"primary_metric": "top4_BA"}},
+            audit_report={"route_id": "r1", "overall": "PASS", "gate": "candidate", "run_dir": str(run_dir)},
+            manifest_path=outside_manifest,
+            root=root,
+        )
+    with pytest.raises(ValueError, match="manifest_path must be inside repository"):
+        render_route_summary(
+            route_data={"route_id": "r1", "evaluation": {"primary_metric": "top4_BA"}},
+            audit_report={"route_id": "r1", "overall": "PASS", "gate": "candidate", "run_dir": str(run_dir)},
+            manifest_path=tmp_path.parent / "missing_outside_manifest.json",
+            root=root,
+        )
+    with pytest.raises(ValueError, match="manifest_path does not exist"):
+        render_route_summary(
+            route_data={"route_id": "r1", "evaluation": {"primary_metric": "top4_BA"}},
+            audit_report={"route_id": "r1", "overall": "PASS", "gate": "candidate", "run_dir": str(run_dir)},
+            manifest_path=root / "missing_manifest.json",
+            root=root,
+        )
+
+
 def test_promotion_cli_derives_top4_requirement_from_route_config(monkeypatch, tmp_path):
     from scripts import check_promotion_audit as promotion_cli
 
@@ -264,6 +324,36 @@ def test_promotion_cli_derives_top4_requirement_from_route_config(monkeypatch, t
     )
 
     assert promotion_cli.main(["--promotion-audit", str(promotion), "--route-config", str(route)]) == 1
+
+
+def test_promotion_cli_rejects_candidate_report_outside_repo(monkeypatch, tmp_path, capsys):
+    from scripts import check_promotion_audit as promotion_cli
+
+    monkeypatch.setattr(promotion_cli, "ROOT", tmp_path)
+    route = tmp_path / "r1.yaml"
+    route.write_text("route_id: r1\ninference:\n  top4: false\n", encoding="utf-8")
+    promotion = tmp_path / "promotion.md"
+    promotion.write_text(
+        "\n".join(
+            [
+                "route_id: r1",
+                "promoted_from_run: outputs/r1/run",
+                "candidate_audit_report: ../outside.json",
+                "primary_metric: top4_BA",
+                "comparison_baseline: baseline",
+                "risk_review: reviewed",
+                "no_leakage_review: reviewed",
+                "decision: promote",
+                "reviewer: test",
+                "date: 2026-05-14",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert promotion_cli.main(["--promotion-audit", str(promotion), "--route-config", str(route)]) == 1
+    assert "candidate_audit_report must be inside repository" in capsys.readouterr().out
 
 
 def test_registry_docs_checker_monitor_and_cache_manager(tmp_path):

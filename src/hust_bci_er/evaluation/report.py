@@ -37,18 +37,33 @@ def prediction_column_for_metric(primary_metric: str, fields: set[str]) -> str:
     raise ValueError(f"{primary_metric} requires pred_top4 or y_pred")
 
 
-def subject_ba_rows(prediction_rows: list[Mapping[str, Any]], *, primary_metric: str = "top4_BA") -> list[dict[str, Any]]:
+def subject_ba_rows(
+    prediction_rows: list[Mapping[str, Any]],
+    *,
+    primary_metric: str = "top4_BA",
+    metric_group_keys: tuple[str, ...] = ("subject_id",),
+) -> list[dict[str, Any]]:
     if not prediction_rows:
         return []
-    pred_col = prediction_column_for_metric(primary_metric, set(prediction_rows[0]))
-    groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    fields = set(prediction_rows[0])
+    schema = prediction_schema(fields)
+    truth_col = schema["y_true"]
+    if truth_col is None:
+        raise ValueError("prediction CSV must include y_true")
+    pred_col = prediction_column_for_metric(primary_metric, fields)
+    keys = group_columns(fields, schema, metric_group_keys)
+    groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = defaultdict(list)
     for row in prediction_rows:
-        groups[str(row["subject_id"])].append(row)
+        groups[tuple(str(row[key]) for key in keys)].append(row)
     out = []
-    for subject_id, rows in sorted(groups.items()):
-        y_true = np.array([int(row["y_true"]) for row in rows], dtype=int)
-        y_pred = np.array([int(row[pred_col]) for row in rows], dtype=int)
-        out.append({"subject_id": subject_id, "balanced_accuracy": balanced_accuracy(y_true, y_pred), "n_rows": len(rows)})
+    for group_key, rows in sorted(groups.items()):
+        context = "|".join(group_key)
+        y_true = np.array([parse_binary(row[truth_col], field=truth_col, context=context) for row in rows], dtype=int)
+        y_pred = np.array([parse_binary(row[pred_col], field=pred_col, context=context) for row in rows], dtype=int)
+        value = balanced_accuracy(y_true, y_pred)
+        subject_col = schema["subject_id"]
+        subject_id = str(rows[0][subject_col]) if subject_col is not None else group_key[0]
+        out.append({"subject_id": subject_id, "group_key": context, "balanced_accuracy": value, "metric_value": value, "n_rows": len(rows)})
     return out
 
 
@@ -161,7 +176,7 @@ def build_metric_report(
     if prediction_csv is None:
         raise ValueError("prediction_csv or score_matrix_csv is required")
     rows = read_csv_rows(prediction_csv)
-    subject_rows = subject_ba_rows(rows, primary_metric=primary_metric)
+    subject_rows = subject_ba_rows(rows, primary_metric=primary_metric, metric_group_keys=metric_group_keys)
     mean_ba = float(np.mean([row["balanced_accuracy"] for row in subject_rows])) if subject_rows else float("nan")
     return {
         "route_id": route_id,

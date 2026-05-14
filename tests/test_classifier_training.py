@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+import hust_bci_er.training.reproducibility as reproducibility_module
 from hust_bci_er.training.classifier import (
     ClassifierTrainConfig,
     EarlyStoppingConfig,
@@ -15,6 +16,19 @@ from hust_bci_er.training.classifier import (
     fit_classifier,
     logits_from_output,
 )
+
+
+@pytest.fixture(autouse=True)
+def _lock_pythonhashseed(monkeypatch, request):
+    seeds = {
+        "test_fit_classifier_reduces_training_loss_for_tensor_batches": "0",
+        "test_fit_classifier_accepts_mapping_batches_and_dict_model_output": "1",
+        "test_fit_classifier_seed_resets_prebuilt_model_parameters": "7",
+    }
+    seed = seeds.get(request.node.name)
+    if seed is not None:
+        monkeypatch.setenv("PYTHONHASHSEED", seed)
+        monkeypatch.setattr(reproducibility_module, "PROCESS_START_PYTHONHASHSEED", seed)
 
 
 class DictOutputClassifier(nn.Module):

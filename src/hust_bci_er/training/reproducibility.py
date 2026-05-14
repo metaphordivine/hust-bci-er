@@ -11,6 +11,7 @@ import numpy as np
 
 
 UINT32_MOD = 2**32
+PROCESS_START_PYTHONHASHSEED = os.environ.get("PYTHONHASHSEED")
 
 
 @dataclass(frozen=True)
@@ -30,9 +31,12 @@ class ReproducibilityConfig:
 def reproducibility_manifest(config: ReproducibilityConfig) -> dict[str, Any]:
     data = asdict(config)
     worker_base = config.normalized_worker_seed_base()
+    pythonhashseed_env = PROCESS_START_PYTHONHASHSEED
     data.update(
         {
             "python_seed": int(config.seed),
+            "python_hash_seed": int(config.seed),
+            "pythonhashseed_env": pythonhashseed_env,
             "numpy_seed": int(config.seed),
             "torch_seed": int(config.seed),
             "dataloader_worker_seed_base": worker_base,
@@ -70,12 +74,21 @@ def make_torch_generator(seed: int):
 
 def apply_reproducibility(config: ReproducibilityConfig) -> dict[str, Any]:
     """Apply deterministic settings and return the manifest-ready settings."""
-    os.environ.setdefault("PYTHONHASHSEED", str(int(config.seed)))
-    random.seed(int(config.seed))
-    np.random.seed(int(config.seed))
+    seed = int(config.seed)
+    expected_hash_seed = str(seed)
+    start_hash_seed = PROCESS_START_PYTHONHASHSEED
+    current_hash_seed = os.environ.get("PYTHONHASHSEED")
+    if start_hash_seed != expected_hash_seed:
+        raise ValueError(
+            f"PYTHONHASHSEED mismatch: expected {expected_hash_seed}, got {start_hash_seed}; "
+            f"restart Python with PYTHONHASHSEED={expected_hash_seed}"
+        )
+    if current_hash_seed != expected_hash_seed:
+        raise ValueError(f"PYTHONHASHSEED was changed after Python startup: expected {expected_hash_seed}, got {current_hash_seed}")
+    random.seed(seed)
+    np.random.seed(seed)
 
     applied = reproducibility_manifest(config)
-    applied["pythonhashseed_env"] = os.environ.get("PYTHONHASHSEED")
     applied["torch_available"] = False
 
     try:
@@ -83,9 +96,9 @@ def apply_reproducibility(config: ReproducibilityConfig) -> dict[str, Any]:
     except Exception:
         return applied
 
-    torch.manual_seed(int(config.seed))
+    torch.manual_seed(seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(int(config.seed))
+        torch.cuda.manual_seed_all(seed)
     torch.use_deterministic_algorithms(bool(config.deterministic_algorithms), warn_only=bool(config.torch_warn_only))
     torch.backends.cudnn.deterministic = bool(config.cudnn_deterministic)
     torch.backends.cudnn.benchmark = bool(config.cudnn_benchmark)

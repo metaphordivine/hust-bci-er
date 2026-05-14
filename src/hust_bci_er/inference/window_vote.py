@@ -9,6 +9,21 @@ from typing import Any
 import numpy as np
 
 
+WINDOW_LOCAL_COLUMNS = {
+    "crop_id",
+    "window_id",
+    "window_index",
+    "window_start",
+    "window_end",
+    "window_start_sec",
+    "window_end_sec",
+}
+
+
+def is_empty_metadata_value(value: Any) -> bool:
+    return value is None or value == ""
+
+
 def strict_majority_class(
     classes: Iterable[int],
     *,
@@ -36,6 +51,30 @@ def strict_majority_class(
     if tie_break == "higher":
         return winners[-1]
     raise ValueError(f"unsupported tie_break: {tie_break}")
+
+
+def consistent_group_metadata(
+    group: list[Mapping[str, Any]],
+    *,
+    group_keys: tuple[str, ...],
+    score_key: str,
+    class_key: str,
+) -> dict[str, Any]:
+    excluded = set(group_keys) | {score_key, class_key} | WINDOW_LOCAL_COLUMNS
+    fields = sorted(set().union(*(set(row) for row in group)) - excluded)
+    metadata: dict[str, Any] = {}
+    for field in fields:
+        values = [row.get(field) for row in group]
+        filled = [value for value in values if not is_empty_metadata_value(value)]
+        if not filled:
+            continue
+        if len(filled) != len(values):
+            raise ValueError(f"conflicting metadata {field} in group {tuple(group[0].get(key) for key in group_keys)}")
+        first = filled[0]
+        if any(value != first for value in filled[1:]):
+            raise ValueError(f"conflicting metadata {field} in group {tuple(group[0].get(key) for key in group_keys)}")
+        metadata[field] = first
+    return metadata
 
 
 def aggregate_window_predictions(
@@ -68,6 +107,7 @@ def aggregate_window_predictions(
             raise ValueError("rows must provide class values or scores")
 
         item = {field: value for field, value in zip(group_keys, key)}
+        item.update(consistent_group_metadata(group, group_keys=group_keys, score_key=score_key, class_key=class_key))
         if scores:
             item[score_key] = float(np.mean(scores))
         item[class_key] = strict_majority_class(classes, scores=scores or None, threshold=threshold, tie_break=tie_break)

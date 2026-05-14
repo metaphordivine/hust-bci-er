@@ -30,6 +30,8 @@ def reproducibility_metadata():
         },
         "determinism": {
             "python_seed": 42,
+            "python_hash_seed": 42,
+            "pythonhashseed_env": "42",
             "numpy_seed": 42,
             "torch_seed": 42,
             "deterministic_algorithms": True,
