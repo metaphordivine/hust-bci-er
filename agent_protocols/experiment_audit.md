@@ -13,7 +13,7 @@ Run this when an experiment is said to be finished, when a route is proposed as 
 - Route config path.
 - Run output directory, if an experiment was executed.
 - Expected evaluation protocol.
-- Intended route status: `SMOKE_ONLY`, `DIAGNOSTIC_ONLY`, `CANDIDATE`, `PROMOTED`, `REJECTED`, or `ARCHIVED`.
+- Intended route status: one of the statuses declared in `configs/statuses.yaml`.
 
 ## Required Commands
 
@@ -47,4 +47,3 @@ python scripts/audit_experiment.py --route <route_config> --run <run_dir>
 | Fast gate | every PR | schema, naming, no-leakage tests, metric unit tests |
 | Experiment gate | after a local experiment | manifest, prediction shape, metric recompute, summary check |
 | Heavy gate | manual or scheduled | full CV, pseudo-public holdout, worst crop stress test |
-

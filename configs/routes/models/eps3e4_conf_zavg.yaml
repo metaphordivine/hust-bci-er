@@ -1,5 +1,5 @@
 route_id: eps3e4_conf_zavg
-status: CANDIDATE
+status: IDEA
 dataset_version: train_v1
 split_id: route_component_split_v1
 seed: 42

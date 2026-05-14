@@ -1,15 +1,15 @@
-route_id: qkv_best_no_c4
+route_id: old_whitening_clean
 status: IDEA
 dataset_version: train_v1
 split_id: route_component_split_v1
 seed: 42
 input_window_sec: 10
-preprocessing: [whitening_eps1e3, whitening_eps3e4]
+preprocessing: [whitening_eps1e3]
 features: []
 model:
   name: score_fusion
-  score_node: qkv_best_no_c4_score
-  components: [eps1e3_component, eps3e4_component, srf_long_component]
+  score_node: old_whitening_clean_score
+  components: [conf_component, srf_long_component, eps1e3_component]
 adaptation: none
 inference:
   top4: true
@@ -17,5 +17,5 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: clean QKV-style ablation with C4/trial-prior removed
+notes: clean old+whitening score-fusion ablation without trial-prior components
 

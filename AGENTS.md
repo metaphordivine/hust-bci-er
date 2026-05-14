@@ -13,7 +13,7 @@ Before code, experiment, or report changes:
 
 ## Allowed
 
-- Add route configs under `configs/routes/experimental/`.
+- Add route configs under `configs/routes/models/`.
 - Add reusable components under `src/hust_bci_er/`.
 - Add tests for new components.
 - Add concise route summaries under `reports/route_summaries/`.
@@ -44,4 +44,3 @@ python scripts/audit_experiment.py --route <route_config> --run <run_dir>
 ```
 
 If any command fails, report the failure and keep the route blocked or diagnostic-only.
-

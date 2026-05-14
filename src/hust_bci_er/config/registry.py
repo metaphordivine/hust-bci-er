@@ -1,14 +1,24 @@
 """Central registry for valid route component names."""
 
-ROUTE_STATUSES = {
-    "IDEA",
-    "SMOKE_ONLY",
-    "DIAGNOSTIC_ONLY",
-    "CANDIDATE",
-    "PROMOTED",
-    "REJECTED",
-    "ARCHIVED",
-}
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+@lru_cache(maxsize=1)
+def route_statuses() -> set[str]:
+    path = ROOT / "configs" / "statuses.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return set((data.get("statuses") or {}).keys())
+
+
+ROUTE_STATUSES = route_statuses()
 
 PREPROCESSING = {
     "zscore",

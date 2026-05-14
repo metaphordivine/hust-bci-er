@@ -1,7 +1,7 @@
 """High-value clean score-route DAG declarations.
 
-Routes that require C4/trial-prior components are intentionally omitted from
-this clean repository. Keep C4 ablations outside the clean route registry.
+Routes that require trial-prior components are intentionally omitted from this
+clean repository. Keep trial-prior ablations outside the clean route registry.
 """
 
 from __future__ import annotations
@@ -25,6 +25,6 @@ HIGH_VALUE_ROUTES = [
     ScoreRoute("h025_eps1e3_heuristic_blend", "h025_score", ("conf_component", "eps1e3_component", "heuristic_component"), True, "heuristic blend h=0.25"),
     ScoreRoute("h030_eps1e3_heuristic_blend", "h030_score", ("conf_component", "eps1e3_component", "heuristic_component"), True, "heuristic blend h=0.30"),
     ScoreRoute("h040_eps1e3_heuristic_blend", "h040_score", ("conf_component", "eps1e3_component", "heuristic_component"), True, "heuristic blend h=0.40"),
-    ScoreRoute("old_whitening_no_c4", "old_whitening_no_c4_score", ("conf_component", "srf_long_component", "eps1e3_component"), True, "old+whitening with C4 removed"),
-    ScoreRoute("qkv_best_no_c4", "qkv_best_no_c4_score", ("eps1e3_component", "eps3e4_component", "srf_long_component"), True, "QKV-style score fusion with C4 removed"),
+    ScoreRoute("old_whitening_clean", "old_whitening_clean_score", ("conf_component", "srf_long_component", "eps1e3_component"), True, "old+whitening score fusion without trial-prior components"),
+    ScoreRoute("qkv_best_clean", "qkv_best_clean_score", ("eps1e3_component", "eps3e4_component", "srf_long_component"), True, "QKV-style score fusion without trial-prior components"),
 ]

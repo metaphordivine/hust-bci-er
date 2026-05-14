@@ -28,7 +28,13 @@ def tracked_files() -> list[Path] | None:
 def main() -> int:
     errors: list[str] = []
 
-    for path in (ROOT / "configs" / "routes").glob("**/*.yaml"):
+    routes_root = ROOT / "configs" / "routes"
+    forbidden_route_dirs = {"stable", "candidates", "deprecated", "experimental"}
+    for name in forbidden_route_dirs:
+        if (routes_root / name).exists():
+            errors.append(f"route tier directory is not allowed: configs/routes/{name}")
+
+    for path in routes_root.glob("**/*.yaml"):
         if not ROUTE_NAME.match(path.name):
             errors.append(f"route config file must be snake_case: {path.relative_to(ROOT)}")
 

@@ -121,5 +121,7 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
         if not data.get(required):
             errors.append(f"{required} must be set")
 
-    return errors
+    if "tier" in data:
+        errors.append("tier is not allowed; all routes are peers before audit")
 
+    return errors
