@@ -92,6 +92,19 @@ reports/promotion_audits/<route_id>_promotion.md
 The promotion audit must reference a passing candidate audit report and include the fields shown in `reports/promotion_audits/_template.md`.
 The referenced candidate audit report must include passing critical evidence rules such as `MANIFEST_VALID`, `PRIMARY_METRIC_RECOMPUTE`, `PRIMARY_METRIC_REPORTED`, `RUN_DATASET_EVIDENCE_VALID`, and `RUN_SPLIT_EVIDENCE_VALID`; Top-4 routes must also include passing Top-4 semantic rules.
 
+## Route Summary Evidence
+
+For advanced route statuses (`CANDIDATE`, `PROMOTED`, `REJECTED`, `ARCHIVED`), the route summary must bind to audit evidence:
+
+```text
+audit_report_path:
+manifest_path:
+manifest_sha256:
+primary_metric_value:
+```
+
+`check_summary_consistency.py` validates that these paths stay inside the repository, the manifest hash matches, the manifest is valid JSON, `route_id` and `primary_metric` match the summary, and `primary_metric_value` matches the manifest `metrics` entry.
+
 ## Gate Types
 
 | Gate | When | Contents |
