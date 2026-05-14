@@ -13,7 +13,7 @@ import numpy as np
 from hust_bci_er.audit.manifest import sha256_file
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema
 from hust_bci_er.evaluation.exact_single_crop import exact_all_correct_rate_from_matrix, exact_ba_from_matrix
-from hust_bci_er.evaluation.metrics import balanced_accuracy
+from hust_bci_er.evaluation.metrics import all_correct_rate, balanced_accuracy
 
 
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -69,6 +69,40 @@ def subject_ba_rows(
     return out
 
 
+def prediction_metric_rows(
+    prediction_rows: list[Mapping[str, Any]],
+    *,
+    primary_metric: str = "top4_BA",
+    metric_group_keys: tuple[str, ...] = ("subject_id",),
+) -> list[dict[str, Any]]:
+    if primary_metric != "all_correct_rate":
+        return subject_ba_rows(prediction_rows, primary_metric=primary_metric, metric_group_keys=metric_group_keys)
+    if not prediction_rows:
+        return []
+    fields = set(prediction_rows[0])
+    schema = prediction_schema(fields)
+    truth_col = schema["y_true"]
+    pred_col = canonical_prediction_column("y_pred", schema)
+    if truth_col is None or pred_col is None:
+        raise ValueError("all_correct_rate requires y_true and y_pred")
+    keys = group_columns(fields, schema, metric_group_keys)
+    groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = defaultdict(list)
+    for row in prediction_rows:
+        groups[tuple(str(row[key]) for key in keys)].append(row)
+    out = []
+    for group_key, rows in sorted(groups.items()):
+        context = "|".join(group_key)
+        if len(rows) != 8:
+            raise ValueError(f"all-correct group must contain 8 trials: {context}")
+        y_true = np.array([[parse_binary(row[truth_col], field=truth_col, context=context) for row in rows]], dtype=int)
+        y_pred = np.array([[parse_binary(row[pred_col], field=pred_col, context=context) for row in rows]], dtype=int)
+        value = all_correct_rate(y_true, y_pred)
+        subject_col = schema["subject_id"]
+        subject_id = str(rows[0][subject_col]) if subject_col is not None else group_key[0]
+        out.append({"subject_id": subject_id, "group_key": context, "balanced_accuracy": value, "metric_value": value, "n_rows": len(rows)})
+    return out
+
+
 def crop_score_columns(fields: set[str]) -> list[str]:
     for columns in ([f"crop_{idx}" for idx in range(5)], [f"crop{idx}" for idx in range(5)]):
         if all(col in fields for col in columns):
@@ -87,13 +121,10 @@ def group_columns(fields: set[str], schema: dict[str, str | None], raw_keys: tup
 
 
 def parse_binary(value: Any, *, field: str, context: str) -> int:
-    try:
-        parsed = int(str(value))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field} is not binary in {context}: {value}") from exc
-    if parsed not in {0, 1}:
+    parsed = parse_finite_float(value, field=field, context=context)
+    if parsed not in {0.0, 1.0}:
         raise ValueError(f"{field} is not binary in {context}: {value}")
-    return parsed
+    return int(parsed)
 
 
 def parse_finite_float(value: Any, *, field: str, context: str) -> float:
@@ -178,12 +209,12 @@ def build_metric_report(
     if prediction_csv is None:
         raise ValueError("prediction_csv or score_matrix_csv is required")
     rows = read_csv_rows(prediction_csv)
-    subject_rows = subject_ba_rows(rows, primary_metric=primary_metric, metric_group_keys=metric_group_keys)
-    mean_ba = float(np.mean([row["balanced_accuracy"] for row in subject_rows])) if subject_rows else float("nan")
+    subject_rows = prediction_metric_rows(rows, primary_metric=primary_metric, metric_group_keys=metric_group_keys)
+    mean_value = float(np.mean([row["metric_value"] for row in subject_rows])) if subject_rows else float("nan")
     return {
         "route_id": route_id,
         "primary_metric": primary_metric,
-        "metrics": {primary_metric: mean_ba},
+        "metrics": {primary_metric: mean_value},
         "prediction_csv": prediction_csv.as_posix(),
         "prediction_sha256": sha256_file(prediction_csv),
         "subjects": subject_rows,

@@ -122,6 +122,21 @@ def test_metric_report_builder_accepts_prediction_alias_columns(tmp_path):
     assert top4_report["metrics"]["top4_BA"] == 1.0
 
 
+def test_prediction_report_all_correct_rate_uses_group_all_or_none_and_float_binary(tmp_path):
+    prediction_csv = tmp_path / "all_correct_predictions.csv"
+    lines = ["subject_id,trial_id,y_pred,y_true"]
+    for idx in range(8):
+        y_true = 1.0 if idx < 4 else 0.0
+        y_pred = 0.0 if idx == 0 else y_true
+        lines.append(f"s1,t{idx},{y_pred},{y_true}")
+    prediction_csv.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    report = build_metric_report(route_id="r1", prediction_csv=prediction_csv, primary_metric="all_correct_rate")
+
+    assert report["metrics"]["all_correct_rate"] == 0.0
+    assert report["subjects"][0]["metric_value"] == 0.0
+
+
 def test_metric_report_builder_supports_score_matrix_exact_metric(tmp_path):
     score_matrix = tmp_path / "score_matrix.csv"
     lines = ["subject_id,trial_id,y_true,crop_0,crop_1,crop_2,crop_3,crop_4"]

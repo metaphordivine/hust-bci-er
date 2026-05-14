@@ -130,6 +130,25 @@ def test_dataset_qa_reports_counts_and_checksum_gaps():
     assert "Dataset QA Report" in render_qa_markdown(report)
 
 
+def test_dataset_qa_accepts_trial_rows_without_trial_index():
+    manifest = {
+        "dataset_version": "toy_v1",
+        "trial_rows": [
+            {"subject_id": "s1", "trial_id": "t1", "crop_id": 0, "y_true": 1},
+            {"subject_id": "s1", "trial_id": "t1", "crop_id": 1, "y_true": 1},
+            {"subject_id": "s2", "trial_id": "t2", "crop_id": 0, "label_available": True},
+        ],
+    }
+
+    report = dataset_qa(manifest)
+
+    assert report["n_subjects"] == 2
+    assert report["n_trials"] == 2
+    assert report["n_rows"] == 3
+    assert report["n_crops"] == 3
+    assert report["label_available_rows"] == 3
+
+
 def test_dataset_manifest_builder_marks_missing_sources_without_fake_checksum(tmp_path):
     manifest = build_dataset_manifest(
         dataset_version="toy_v1",

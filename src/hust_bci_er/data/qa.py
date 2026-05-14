@@ -7,7 +7,8 @@ from typing import Any, Mapping
 
 
 def dataset_qa(manifest: Mapping[str, Any]) -> dict[str, Any]:
-    rows = [row for row in manifest.get("trial_index", []) if isinstance(row, Mapping)]
+    row_source = manifest.get("trial_index") or manifest.get("trial_rows") or []
+    rows = [row for row in row_source if isinstance(row, Mapping)]
     subjects = {str(row.get("subject_id")) for row in rows if row.get("subject_id") is not None}
     trials = {(str(row.get("subject_id")), str(row.get("trial_id"))) for row in rows if row.get("trial_id") is not None}
     crops = [row.get("crop_id") for row in rows if row.get("crop_id") not in {None, ""}]

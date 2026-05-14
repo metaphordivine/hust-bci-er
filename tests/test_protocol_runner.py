@@ -16,6 +16,7 @@ from scripts.audit_experiment import run_audit
 
 
 ROUTE = Path("configs/routes/models/ea_deformer.yaml")
+ROUTE2 = Path("configs/routes/models/sliding_window_eegnet.yaml")
 
 
 def lock_pythonhashseed(monkeypatch, seed: int) -> None:
@@ -101,6 +102,18 @@ def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_p
     assert split_payload["param_indices"] == [0, 1, 2]
     assert "seed" not in split_payload
     assert split_payload["seeds"] == [123, 124, 125]
+
+
+def test_protocol_runner_records_multiple_routes_in_shared_split_contract(tmp_path):
+    manifest = materialize_protocol_run("p2", [ROUTE, ROUTE2], run_dir=tmp_path / "p2_multi_route")
+    first_job = manifest["jobs"][0]
+
+    split_payload = yaml.safe_load((tmp_path / "p2_multi_route" / first_job["split_manifest_path"]).read_text(encoding="utf-8"))
+
+    assert "route_id" not in split_payload
+    assert split_payload["route_ids"] == ["ea_deformer", "sliding_window_eegnet"]
+    assert any(job_id.startswith("p2__ea_deformer__") for job_id in split_payload["job_ids"])
+    assert any(job_id.startswith("p2__sliding_window_eegnet__") for job_id in split_payload["job_ids"])
 
 
 def test_write_run_manifest_locks_artifact_hashes(monkeypatch, tmp_path):
