@@ -1,0 +1,8 @@
+split_id: route_component_split_v1
+subject_group_split: true
+status: declared_without_subject_list
+description: Placeholder split manifest for component-route planning. Fill subject lists before candidate review.
+train_subjects: []
+val_subjects: []
+test_subjects: []
+trial_rows: []

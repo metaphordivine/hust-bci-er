@@ -39,6 +39,8 @@ def main() -> int:
     for rel in required_files:
         if not (ROOT / rel).exists():
             errors.append(f"required governance file is missing: {rel}")
+    if not (ROOT / "configs" / "splits").is_dir():
+        errors.append("required split manifest directory is missing: configs/splits")
 
     routes_root = ROOT / "configs" / "routes"
     tier_route_dirs = {"stable", "candidates", "deprecated", "experimental"}

@@ -17,3 +17,5 @@ python scripts/repo_doctor.py fast
 No trained parameters, checkpoints, raw outputs, public/private labels, or leaderboard feedback should be committed.
 
 All model routes are peers by default. Route names should describe components and evaluation behavior directly.
+
+Use `python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir> --gate candidate` before treating a completed run as candidate evidence.

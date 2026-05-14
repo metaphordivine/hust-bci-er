@@ -46,17 +46,28 @@ FEATURES = {
     "connectivity",
 }
 
-MODELS = {
+TORCH_BACKBONES = {
     "eegnet",
     "conformer_lite",
     "deformer_lite",
     "srfnet",
+}
+
+SKLEARN_MODELS = {
     "random_forest",
     "extra_trees",
     "logistic_regression",
+}
+
+GRAPH_MODELS = {
     "lggnet",
+}
+
+SCORE_ROUTE_MODELS = {
     "score_fusion",
 }
+
+MODELS = TORCH_BACKBONES | SKLEARN_MODELS | GRAPH_MODELS | SCORE_ROUTE_MODELS
 
 ADAPTATION = {
     "none",

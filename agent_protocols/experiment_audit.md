@@ -26,7 +26,7 @@ python scripts/repo_doctor.py fast
 If a run directory exists:
 
 ```bash
-python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir>
+python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir> --gate candidate
 ```
 
 The experiment gate writes:
@@ -38,6 +38,15 @@ The experiment gate writes:
 
 Each failed check must include a rule id, severity, reason, and suggested fix.
 
+Gate behavior:
+
+| Gate | Use | WARN handling |
+|---|---|---|
+| `smoke` | code-path or tiny-run check | may exit zero with WARN |
+| `diagnostic` | analysis-only run | may exit zero with non-critical WARN |
+| `candidate` | route comparison evidence | unresolved WARN blocks the gate |
+| `promoted` | strongest review evidence | unresolved WARN blocks the gate |
+
 ## Decision Rules
 
 | Result | Decision |
@@ -48,6 +57,8 @@ Each failed check must include a rule id, severity, reason, and suggested fix.
 | route summary is missing | `BLOCKED` |
 | only smoke was run | keep route status as `SMOKE_ONLY`; audit decision is `WARN` unless a stricter check fails |
 | all required checks pass | route may advance to its requested lifecycle status |
+
+`WARN` is allowed to keep diagnostic evidence, but it never supports promotion to `CANDIDATE` or `PROMOTED`.
 
 ## Gate Types
 

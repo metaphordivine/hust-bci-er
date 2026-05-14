@@ -17,7 +17,9 @@ def builder_keys_from_source() -> set[str]:
 
 
 def test_model_registry_matches_buildable_backbones():
-    assert builder_keys_from_source().issubset(registry.MODELS)
+    assert builder_keys_from_source() == registry.TORCH_BACKBONES
+    assert registry.MODELS == registry.TORCH_BACKBONES | registry.SKLEARN_MODELS | registry.GRAPH_MODELS | registry.SCORE_ROUTE_MODELS
+    assert registry.SCORE_ROUTE_MODELS == {"score_fusion"}
 
 
 def test_registered_protocols_have_config_files():

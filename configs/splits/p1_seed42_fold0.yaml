@@ -1,0 +1,8 @@
+split_id: p1_seed42_fold0
+subject_group_split: true
+status: declared_without_subject_list
+description: Placeholder split manifest for the first repeated-group-fold example. Fill subject lists before candidate review.
+train_subjects: []
+val_subjects: []
+test_subjects: []
+trial_rows: []

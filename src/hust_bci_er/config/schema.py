@@ -121,6 +121,12 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
         if not data.get(required):
             errors.append(f"{required} must be set")
 
+    split_id = data.get("split_id")
+    if isinstance(split_id, str) and split_id:
+        split_path = registry.ROOT / "configs" / "splits" / f"{split_id}.yaml"
+        if not split_path.exists():
+            errors.append(f"split_id has no manifest: {split_id}")
+
     if "tier" in data:
         errors.append("tier is not allowed; all routes are peers before audit")
 

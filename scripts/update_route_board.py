@@ -10,6 +10,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BOARD_PATH = ROOT / "reports" / "route_board.md"
+SUMMARY_REQUIRED_STATUSES = {"CANDIDATE", "PROMOTED", "REJECTED", "ARCHIVED"}
 
 
 def route_files() -> list[Path]:
@@ -55,7 +56,12 @@ def generate_board() -> str:
         model = model_name(data.get("model"))
         protocol = protocol_name(data.get("evaluation"))
         summary = ROOT / "reports" / "route_summaries" / f"{route_id}_summary.md"
-        summary_state = "present" if summary.exists() else "missing"
+        if summary.exists():
+            summary_state = "present"
+        elif status in SUMMARY_REQUIRED_STATUSES:
+            summary_state = "missing_required"
+        else:
+            summary_state = "not_required"
         lines.append(f"| `{route_id}` | {status} | `{model}` | `{protocol}` | {summary_state} |")
     return "\n".join(lines) + "\n"
 
