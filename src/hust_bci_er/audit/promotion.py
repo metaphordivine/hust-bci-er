@@ -50,7 +50,7 @@ def check_promotion_fields(fields: Mapping[str, str]) -> list[str]:
     return [f"missing promotion field: {key}" for key in sorted(REQUIRED_PROMOTION_FIELDS) if not fields.get(key)]
 
 
-def check_candidate_audit(path: Path, *, route_id: str) -> list[str]:
+def check_candidate_audit(path: Path, *, route_id: str, top4_required: bool = False) -> list[str]:
     if not path.exists():
         return [f"candidate audit report not found: {path}"]
     report: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
@@ -67,7 +67,7 @@ def check_candidate_audit(path: Path, *, route_id: str) -> list[str]:
         return errors
     statuses = {str(item.get("rule_id")): item.get("status") for item in checks if isinstance(item, Mapping)}
     required = set(REQUIRED_CANDIDATE_RULES)
-    if "PREDICTION_TOP4_RANKING" in statuses:
+    if top4_required:
         required.update(REQUIRED_TOP4_RULES)
     missing_or_failed = sorted(rule for rule in required if statuses.get(rule) != "PASS")
     if missing_or_failed:

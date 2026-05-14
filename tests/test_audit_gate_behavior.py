@@ -247,6 +247,65 @@ def test_no_top4_route_skips_top4_semantics_even_when_empty_top4_column_exists(t
     report = run_audit(route, run_dir, gate="candidate")
     top4_checks = [check for check in report["checks"] if check["rule_id"] == "PREDICTION_TOP4_GROUPS"]
     assert top4_checks[-1]["status"] == "PASS"
+    score_checks = [check for check in report["checks"] if check["rule_id"] == "PREDICTION_SCORE_COLUMN"]
+    assert score_checks[-1]["status"] == "PASS"
+
+
+def test_no_top4_route_does_not_require_score_column_for_candidate(tmp_path):
+    route = tmp_path / "no_top4_route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: no_top4_route",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: deformer_lite}",
+                "adaptation: none",
+                "inference: {top4: false, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: no_top4_BA}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    snapshot = run_dir / "config_snapshot.yaml"
+    snapshot.write_text(route.read_text(encoding="utf-8"), encoding="utf-8")
+    prediction = run_dir / "predictions.csv"
+    prediction.write_text("subject_id,trial_id,y_pred,y_true\ns1,t1,0,0\ns1,t2,1,1\n", encoding="utf-8")
+    manifest = {
+        "audit_schema_version": 1,
+        "route_id": "no_top4_route",
+        "git_commit": "test",
+        "config_path": str(route),
+        "config_snapshot_path": "config_snapshot.yaml",
+        "config_sha256": sha256_file(snapshot),
+        "dataset_manifest_path": "configs/datasets/train_v1.yaml",
+        "dataset_manifest_sha256": sha256_file(Path("configs/datasets/train_v1.yaml")),
+        "split_manifest_path": "configs/splits/p1_seed42_fold0.yaml",
+        "split_id": "p1_seed42_fold0",
+        "split_sha256": sha256_file(Path("configs/splits/p1_seed42_fold0.yaml")),
+        "seed": 42,
+        "command": "test",
+        "primary_metric": "no_top4_BA",
+        "metrics": {"no_top4_BA": 1.0},
+        "prediction_csv": "predictions.csv",
+        "prediction_sha256": sha256_file(prediction),
+        "prediction_record_level": "trial",
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = run_audit(route, run_dir, gate="candidate")
+    rules = {check["rule_id"]: check["status"] for check in report["checks"]}
+    assert rules["PREDICTION_SCORE_COLUMN"] == "PASS"
+    assert rules["METRIC_RECOMPUTE_BA"] == "PASS"
+    assert rules["PRIMARY_METRIC_RECOMPUTE"] == "PASS"
 
 
 def test_exact_primary_metric_is_recomputed_from_score_matrix(tmp_path):
@@ -321,6 +380,76 @@ def test_exact_primary_metric_is_recomputed_from_score_matrix(tmp_path):
     assert rules["PRIMARY_METRIC_RECOMPUTE"] == "PASS"
     assert rules["PRIMARY_METRIC_REPORTED"] == "PASS"
     assert rules["PREDICTION_TOP4_RANKING"] == "PASS"
+
+
+def test_exact_metric_with_score_matrix_does_not_require_y_pred(tmp_path):
+    route = tmp_path / "exact_metric_route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: exact_metric_route",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: deformer_lite}",
+                "adaptation: none",
+                "inference: {top4: true, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: exact_single_crop_expected_BA}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    snapshot = run_dir / "config_snapshot.yaml"
+    snapshot.write_text(route.read_text(encoding="utf-8"), encoding="utf-8")
+    predictions = run_dir / "predictions.csv"
+    lines = ["subject_id,trial_id,y_score,y_true,pred_top4"]
+    for idx in range(8):
+        label = 1 if idx < 4 else 0
+        score = 1.0 - idx * 0.01
+        lines.append(f"s1,t{idx},{score},{label},{label}")
+    predictions.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    matrix = run_dir / "score_matrix.csv"
+    matrix_lines = ["subject_id,trial_id,y_true,crop_0,crop_1,crop_2,crop_3,crop_4"]
+    for idx in range(8):
+        label = 1 if idx < 4 else 0
+        score = 1.0 - idx * 0.01
+        matrix_lines.append(f"s1,t{idx},{label},{score},{score},{score},{score},{score}")
+    matrix.write_text("\n".join(matrix_lines) + "\n", encoding="utf-8")
+    manifest = {
+        "audit_schema_version": 1,
+        "route_id": "exact_metric_route",
+        "git_commit": "test",
+        "config_path": str(route),
+        "config_snapshot_path": "config_snapshot.yaml",
+        "config_sha256": sha256_file(snapshot),
+        "dataset_manifest_path": "configs/datasets/train_v1.yaml",
+        "dataset_manifest_sha256": sha256_file(Path("configs/datasets/train_v1.yaml")),
+        "split_manifest_path": "configs/splits/p1_seed42_fold0.yaml",
+        "split_id": "p1_seed42_fold0",
+        "split_sha256": sha256_file(Path("configs/splits/p1_seed42_fold0.yaml")),
+        "seed": 42,
+        "command": "test",
+        "primary_metric": "exact_single_crop_expected_BA",
+        "metrics": {"exact_single_crop_expected_BA": 1.0},
+        "prediction_csv": "predictions.csv",
+        "prediction_sha256": sha256_file(predictions),
+        "prediction_record_level": "trial",
+        "top4_group_keys": ["subject_id"],
+        "metric_inputs": {"score_matrix_csv": "score_matrix.csv", "score_matrix_sha256": sha256_file(matrix)},
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = run_audit(route, run_dir, gate="candidate")
+    rules = {check["rule_id"]: check["status"] for check in report["checks"]}
+    assert rules["METRIC_RECOMPUTE_BA"] == "PASS"
+    assert rules["PRIMARY_METRIC_RECOMPUTE"] == "PASS"
 
 
 def test_manifest_path_escape_is_rejected(tmp_path):
@@ -1317,6 +1446,52 @@ def test_promotion_audit_rejects_minimal_candidate_report(monkeypatch, tmp_path)
     rules = {check["rule_id"]: check["status"] for check in checks}
     assert rules["PROMOTION_AUDIT_CANDIDATE_REPORT"] == "PASS"
     assert rules["PROMOTION_AUDIT_CANDIDATE_RULES"] == "FAIL"
+
+
+def test_promotion_audit_requires_top4_rules_from_route_policy(monkeypatch, tmp_path):
+    monkeypatch.setattr("scripts.audit_experiment.ROOT", tmp_path)
+    critical_rules = [
+        "MANIFEST_VALID",
+        "PRIMARY_METRIC_RECOMPUTE",
+        "PRIMARY_METRIC_REPORTED",
+        "RUN_DATASET_EVIDENCE_VALID",
+        "RUN_SPLIT_EVIDENCE_VALID",
+        "RUN_SPLIT_EVIDENCE_CONSISTENT",
+        "RUN_REPRODUCIBILITY_LOCKED",
+    ]
+    audit = tmp_path / "reports" / "audits" / "candidate.json"
+    audit.parent.mkdir(parents=True)
+    audit.write_text(
+        json.dumps({"route_id": "summary_route", "gate": "candidate", "overall": "PASS", "checks": [{"rule_id": rule, "status": "PASS"} for rule in critical_rules]}),
+        encoding="utf-8",
+    )
+    promotion = tmp_path / "reports" / "promotion_audits" / "summary_route_promotion.md"
+    promotion.parent.mkdir(parents=True)
+    promotion.write_text(
+        "\n".join(
+            [
+                "route_id: summary_route",
+                "promoted_from_run: outputs/summary_route/run",
+                "candidate_audit_report: reports/audits/candidate.json",
+                "primary_metric: top4_BA",
+                "comparison_baseline: baseline",
+                "risk_review: reviewed",
+                "no_leakage_review: reviewed",
+                "decision: promote",
+                "reviewer: test",
+                "date: 2026-05-14",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    checks = []
+    check_promotion_audit("summary_route", promotion, checks, top4_required=True)
+
+    rule = next(check for check in checks if check["rule_id"] == "PROMOTION_AUDIT_CANDIDATE_RULES")
+    assert rule["status"] == "FAIL"
+    assert "PREDICTION_TOP4_RANKING" in rule["message"]
 
 
 def test_split_evidence_allows_empty_validation_holdout():

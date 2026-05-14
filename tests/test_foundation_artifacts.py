@@ -202,7 +202,8 @@ def test_summary_and_promotion_helpers(tmp_path):
         json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS", "checks": top4_checks}),
         encoding="utf-8",
     )
-    assert "PREDICTION_TOP4_TRUTH_BALANCE" in "; ".join(check_candidate_audit(top4_missing_truth_balance, route_id="r1"))
+    assert check_candidate_audit(top4_missing_truth_balance, route_id="r1") == []
+    assert "PREDICTION_TOP4_TRUTH_BALANCE" in "; ".join(check_candidate_audit(top4_missing_truth_balance, route_id="r1", top4_required=True))
 
     minimal = tmp_path / "minimal_candidate.json"
     minimal.write_text(json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS"}), encoding="utf-8")

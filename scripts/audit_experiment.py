@@ -1270,15 +1270,19 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
     add_check(checks, rule_id="PREDICTION_NONEMPTY", severity="INFO", status="PASS", message=f"prediction rows: {len(rows)}")
 
     schema = prediction_schema(fields)
+    metric_name = route_primary_metric(route_data)
     if schema["score"] is None:
-        add_check(
-            checks,
-            rule_id="PREDICTION_SCORE_COLUMN",
-            severity="WARN",
-            status="WARN",
-            message="prediction CSV has no standard score column",
-            fix="Use one of: score, y_score, probability, logit.",
-        )
+        if route_uses_top4(route_data):
+            add_check(
+                checks,
+                rule_id="PREDICTION_SCORE_COLUMN",
+                severity="WARN",
+                status="WARN",
+                message="prediction CSV has no standard score column",
+                fix="Use one of: score, y_score, probability, logit.",
+            )
+        else:
+            add_check(checks, rule_id="PREDICTION_SCORE_COLUMN", severity="INFO", status="PASS", message="score column is not required for this no-Top4 route")
     else:
         add_check(checks, rule_id="PREDICTION_SCORE_COLUMN", severity="INFO", status="PASS", message="score column found")
 
@@ -1376,15 +1380,23 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             )
         else:
             add_check(checks, rule_id="METRIC_RECOMPUTE_BA", severity="INFO", status="PASS", message=f"recomputed BA: {score:.6f}")
-    else:
+    elif metric_name == "no_top4_BA":
         add_warn_or_fail(
             checks,
             gate=gate,
             fail_gate=STRICT_GATES,
             rule_id="METRIC_RECOMPUTE_BA",
             message="y_true/y_pred columns are not present; BA recompute skipped",
-            fix="For labeled validation runs, include y_true and y_pred in the prediction CSV.",
+            fix="For no_top4_BA validation runs, include y_true and y_pred in the prediction CSV.",
             decision_if_fail="DIAGNOSTIC_ONLY",
+        )
+    else:
+        add_check(
+            checks,
+            rule_id="METRIC_RECOMPUTE_BA",
+            severity="INFO",
+            status="PASS",
+            message=f"BA recompute skipped because {metric_name or 'the primary metric'} is checked by primary metric recompute",
         )
 
     check_primary_metric(checks, manifest=manifest, route_data=route_data, rows=rows, fields=fields, schema=schema, run_dir=path.parent, gate=gate)
@@ -1436,7 +1448,7 @@ def write_reports(run_dir: Path, report: dict[str, Any]) -> None:
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[AuditCheck]) -> None:
+def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[AuditCheck], *, top4_required: bool = False) -> None:
     if not promotion_path.exists():
         add_check(
             checks,
@@ -1541,7 +1553,7 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         return
     statuses = {str(item.get("rule_id")): item.get("status") for item in report_checks if isinstance(item, dict)}
     required = set(PROMOTION_REQUIRED_CANDIDATE_RULES)
-    if "PREDICTION_TOP4_RANKING" in statuses:
+    if top4_required:
         required.update(PROMOTION_REQUIRED_TOP4_RULES)
     missing_or_failed = sorted(rule for rule in required if statuses.get(rule) != "PASS")
     if missing_or_failed:
@@ -1659,7 +1671,7 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
 
             if gate == "promoted":
                 promotion_path = ROOT / "reports" / "promotion_audits" / f"{route_id}_promotion.md"
-                check_promotion_audit(route_id, promotion_path, checks)
+                check_promotion_audit(route_id, promotion_path, checks, top4_required=route_uses_top4(route_data))
 
     decision = overall_decision(checks, gate=gate)
     if decision not in AUDIT_DECISIONS:

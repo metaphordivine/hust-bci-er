@@ -24,3 +24,20 @@ def test_aggregate_window_predictions_returns_one_trial_row():
     assert aggregate_window_predictions(rows) == [
         {"subject_id": "s1", "trial_id": "t1", "y_score": pytest.approx(0.65), "y_pred": 1, "n_windows": 4}
     ]
+
+
+def test_aggregate_window_predictions_rejects_partial_score_or_class_rows():
+    with pytest.raises(ValueError, match="must include y_score"):
+        aggregate_window_predictions(
+            [
+                {"subject_id": "s1", "trial_id": "t1", "crop_id": 0, "y_score": 0.9},
+                {"subject_id": "s1", "trial_id": "t1", "crop_id": 1},
+            ]
+        )
+    with pytest.raises(ValueError, match="must include y_pred"):
+        aggregate_window_predictions(
+            [
+                {"subject_id": "s1", "trial_id": "t1", "crop_id": 0, "y_score": 0.9, "y_pred": 1},
+                {"subject_id": "s1", "trial_id": "t1", "crop_id": 1, "y_score": 0.2},
+            ]
+        )

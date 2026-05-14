@@ -53,10 +53,16 @@ def aggregate_window_predictions(
 
     out: list[dict[str, Any]] = []
     for key, group in grouped.items():
-        scores = [float(row[score_key]) for row in group if score_key in row]
-        if class_key in group[0]:
+        has_score = [score_key in row and row.get(score_key) not in {None, ""} for row in group]
+        has_class = [class_key in row and row.get(class_key) not in {None, ""} for row in group]
+        if any(has_score) and not all(has_score):
+            raise ValueError(f"all rows in group {key} must include {score_key}")
+        if any(has_class) and not all(has_class):
+            raise ValueError(f"all rows in group {key} must include {class_key}")
+        scores = [float(row[score_key]) for row in group] if all(has_score) else []
+        if all(has_class):
             classes = [int(row[class_key]) for row in group]
-        elif scores:
+        elif all(has_score):
             classes = [int(score >= threshold) for score in scores]
         else:
             raise ValueError("rows must provide class values or scores")
