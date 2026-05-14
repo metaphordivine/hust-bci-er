@@ -1,0 +1,7 @@
+dataset_id: hust_bci_er
+version: train_v1
+description: HUST BCI emotion-recognition dataset schema placeholder.
+raw_data_required: true
+labels_required_for_training: true
+public_private_labels_allowed: false
+

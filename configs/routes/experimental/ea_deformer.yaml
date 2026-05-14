@@ -1,0 +1,17 @@
+route_id: ea_deformer
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 10
+preprocessing: [euclidean_alignment, zscore]
+features: []
+model:
+  name: deformer_lite
+adaptation: none
+inference:
+  top4: true
+  crop_policy: single
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA

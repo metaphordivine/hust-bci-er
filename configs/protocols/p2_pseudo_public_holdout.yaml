@@ -1,0 +1,6 @@
+protocol: p2_pseudo_public_holdout
+subject_group_split: true
+holdout_subject_fraction: 0.2
+crop_policies: [crop1, crop2, crop3, crop4, crop5, random, worst]
+primary_metric: exact_single_crop_expected_BA
+

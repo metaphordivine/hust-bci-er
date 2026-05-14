@@ -1,0 +1,6 @@
+protocol: p1_repeated_group_kfold
+subject_group_split: true
+n_splits: 5
+seeds: [42, 123, 456, 789, 1024]
+primary_metric: exact_single_crop_expected_BA
+

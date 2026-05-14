@@ -1,0 +1,21 @@
+route_id: qkv_best_no_c4
+status: IDEA
+dataset_version: train_v1
+split_id: route_component_split_v1
+seed: 42
+input_window_sec: 10
+preprocessing: [whitening_eps1e3, whitening_eps3e4]
+features: []
+model:
+  name: score_fusion
+  score_node: qkv_best_no_c4_score
+  components: [eps1e3_component, eps3e4_component, srf_long_component]
+adaptation: none
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: clean QKV-style ablation with C4/trial-prior removed
+

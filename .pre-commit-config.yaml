@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-repo-conventions
+        name: Check repository conventions
+        entry: python scripts/check_repo_conventions.py
+        language: system
+        pass_filenames: false
+
+      - id: validate-routes
+        name: Validate route configs
+        entry: python scripts/validate_route.py --all
+        language: system
+        pass_filenames: false
+

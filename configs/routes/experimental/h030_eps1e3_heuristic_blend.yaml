@@ -1,0 +1,20 @@
+route_id: h030_eps1e3_heuristic_blend
+status: IDEA
+dataset_version: train_v1
+split_id: route_component_split_v1
+seed: 42
+input_window_sec: 10
+preprocessing: [whitening_eps1e3]
+features: [bandpower, differential_entropy, hjorth]
+model:
+  name: score_fusion
+  score_node: h030_score
+  components: [conf_component, eps1e3_component, heuristic_component]
+adaptation: none
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+

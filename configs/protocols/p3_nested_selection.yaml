@@ -1,0 +1,6 @@
+protocol: p3_nested_selection
+subject_group_split: true
+outer_splits: 5
+inner_splits: 3
+primary_metric: exact_single_crop_expected_BA
+
