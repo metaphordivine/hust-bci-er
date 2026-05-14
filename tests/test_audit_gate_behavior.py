@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 
 from hust_bci_er.audit.manifest import sha256_file
-from scripts.audit_experiment import run_audit
+from scripts.audit_experiment import check_promotion_audit, dataset_checksum_errors, run_audit, split_leakage_errors
 
 
 ROUTE = Path("configs/routes/models/ea_deformer.yaml")
@@ -919,3 +919,78 @@ def test_top4_ranking_is_warn_when_score_is_absent(tmp_path):
     rules = {check["rule_id"]: check["status"] for check in report["checks"]}
     assert rules["PREDICTION_SCORE_NUMERIC"] == "WARN"
     assert rules["PREDICTION_TOP4_RANKING"] == "WARN"
+
+
+def test_trial_rows_also_enforce_subject_disjointness():
+    subject_errors, trial_errors = split_leakage_errors(
+        {
+            "trial_rows": [
+                {"subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+                {"subject_id": "s1", "original_trial_id": "t2", "split": "test"},
+            ]
+        }
+    )
+    assert subject_errors
+    assert not trial_errors
+
+
+def test_trial_rows_enforce_subject_disjointness_per_fold():
+    subject_errors, _ = split_leakage_errors(
+        {
+            "trial_rows": [
+                {"fold": 0, "subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+                {"fold": 0, "subject_id": "s1", "original_trial_id": "t2", "split": "test"},
+                {"fold": 1, "subject_id": "s1", "original_trial_id": "t3", "split": "train"},
+                {"fold": 1, "subject_id": "s2", "original_trial_id": "t4", "split": "test"},
+            ]
+        }
+    )
+    assert any("fold 0" in item for item in subject_errors)
+    assert not any("fold 1" in item for item in subject_errors)
+
+
+def test_dataset_checksum_extra_paths_are_reported():
+    schema_errors, coverage_errors, extra_errors = dataset_checksum_errors(
+        {
+            "data_sources": [{"path": "data/a.csv", "kind": "table"}],
+            "checksum_manifest": [
+                {"path": "data/a.csv", "sha256": "1" * 64},
+                {"path": "data/old.csv", "sha256": "2" * 64},
+            ],
+        }
+    )
+    assert not schema_errors
+    assert not coverage_errors
+    assert extra_errors
+
+
+def test_promotion_audit_rejects_minimal_candidate_report(monkeypatch, tmp_path):
+    monkeypatch.setattr("scripts.audit_experiment.ROOT", tmp_path)
+    audit = tmp_path / "reports" / "audits" / "candidate.json"
+    audit.parent.mkdir(parents=True)
+    audit.write_text(json.dumps({"route_id": "summary_route", "gate": "candidate", "overall": "PASS"}), encoding="utf-8")
+    promotion = tmp_path / "reports" / "promotion_audits" / "summary_route_promotion.md"
+    promotion.parent.mkdir(parents=True)
+    promotion.write_text(
+        "\n".join(
+            [
+                "route_id: summary_route",
+                "promoted_from_run: outputs/summary_route/run",
+                "candidate_audit_report: reports/audits/candidate.json",
+                "primary_metric: top4_BA",
+                "comparison_baseline: baseline",
+                "risk_review: reviewed",
+                "no_leakage_review: reviewed",
+                "decision: promote",
+                "reviewer: test",
+                "date: 2026-05-14",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    checks = []
+    check_promotion_audit("summary_route", promotion, checks)
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["PROMOTION_AUDIT_CANDIDATE_REPORT"] == "PASS"
+    assert rules["PROMOTION_AUDIT_CANDIDATE_RULES"] == "FAIL"

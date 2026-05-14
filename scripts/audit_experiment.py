@@ -41,6 +41,18 @@ PROMOTION_REQUIRED_FIELDS = {
     "reviewer",
     "date",
 }
+PROMOTION_REQUIRED_CANDIDATE_RULES = {
+    "MANIFEST_VALID",
+    "PRIMARY_METRIC_RECOMPUTE",
+    "PRIMARY_METRIC_REPORTED",
+    "RUN_DATASET_EVIDENCE_VALID",
+    "RUN_SPLIT_EVIDENCE_VALID",
+}
+PROMOTION_REQUIRED_TOP4_RULES = {
+    "PREDICTION_TOP4_RANKING",
+    "PREDICTION_TOP4_BINARY",
+    "PREDICTION_TRIAL_ID_UNIQUE",
+}
 
 
 def add_check(
@@ -339,6 +351,22 @@ def split_leakage_errors(split_data: dict[str, Any]) -> tuple[list[str], list[st
             assert_original_trial_not_cross_split(rows)
         except (KeyError, ValueError) as exc:
             trial_errors.append(str(exc))
+        rows_by_fold: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            rows_by_fold.setdefault(str(row.get("fold", "__single_fold__")), []).append(row)
+        for fold, fold_rows in rows_by_fold.items():
+            subjects_by_split = {"train": set(), "val": set(), "test": set()}
+            for row in fold_rows:
+                split = str(row.get("split"))
+                subject = row.get("subject_id")
+                if split in subjects_by_split and subject is not None:
+                    subjects_by_split[split].add(str(subject))
+            try:
+                assert_disjoint_subjects(subjects_by_split["train"], subjects_by_split["val"], subjects_by_split["test"])
+            except ValueError as exc:
+                subject_errors.append(f"trial_rows fold {fold}: {exc}")
 
     return subject_errors, trial_errors
 
@@ -384,9 +412,10 @@ def dataset_manifest_has_evidence(dataset_data: dict[str, Any]) -> bool:
     return has_data_sources and has_checksums
 
 
-def dataset_checksum_errors(dataset_data: dict[str, Any]) -> tuple[list[str], list[str]]:
+def dataset_checksum_errors(dataset_data: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
     schema_errors: list[str] = []
     coverage_errors: list[str] = []
+    extra_errors: list[str] = []
     data_sources = dataset_data.get("data_sources") or []
     checksum_manifest = dataset_data.get("checksum_manifest") or []
     source_paths: list[str] = []
@@ -433,11 +462,14 @@ def dataset_checksum_errors(dataset_data: dict[str, Any]) -> tuple[list[str], li
     missing_checksums = sorted(set(source_paths) - set(checksum_paths))
     if missing_checksums:
         coverage_errors.append("checksum_manifest does not cover data_sources: " + ", ".join(missing_checksums[:5]))
-    return schema_errors, coverage_errors
+    extra_checksums = sorted(set(checksum_paths) - set(source_paths))
+    if extra_checksums:
+        extra_errors.append("checksum_manifest has paths not declared in data_sources: " + ", ".join(extra_checksums[:5]))
+    return schema_errors, coverage_errors, extra_errors
 
 
 def add_dataset_checksum_checks(checks: list[AuditCheck], dataset_data: dict[str, Any], *, gate: str) -> None:
-    schema_errors, coverage_errors = dataset_checksum_errors(dataset_data)
+    schema_errors, coverage_errors, extra_errors = dataset_checksum_errors(dataset_data)
     if schema_errors:
         add_warn_or_fail(
             checks,
@@ -463,6 +495,19 @@ def add_dataset_checksum_checks(checks: list[AuditCheck], dataset_data: dict[str
         )
     else:
         add_check(checks, rule_id="RUN_DATASET_CHECKSUM_COVERAGE", severity="INFO", status="PASS", message="dataset checksums cover all data sources")
+
+    if extra_errors:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RUN_DATASET_CHECKSUM_EXTRA",
+            message="dataset checksum manifest has extra paths: " + "; ".join(extra_errors[:5]),
+            fix="Remove stale checksum entries or add matching data_sources entries.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="RUN_DATASET_CHECKSUM_EXTRA", severity="INFO", status="PASS", message="dataset checksum manifest has no extra paths")
 
 
 def check_run_dataset_split_evidence(
@@ -1228,6 +1273,36 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         )
     else:
         add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_REPORT", severity="INFO", status="PASS", message="promotion audit references a passing candidate audit report")
+
+    report_checks = report.get("checks")
+    if not isinstance(report_checks, list):
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_CANDIDATE_RULES",
+            severity="ERROR",
+            status="FAIL",
+            message="candidate_audit_report has no checks list",
+            fix="Reference a full experiment audit report, not a minimal status stub.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    statuses = {str(item.get("rule_id")): item.get("status") for item in report_checks if isinstance(item, dict)}
+    required = set(PROMOTION_REQUIRED_CANDIDATE_RULES)
+    if "PREDICTION_TOP4_RANKING" in statuses or "PREDICTION_TOP4_GROUPS" in statuses:
+        required.update(PROMOTION_REQUIRED_TOP4_RULES)
+    missing_or_failed = sorted(rule for rule in required if statuses.get(rule) != "PASS")
+    if missing_or_failed:
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_CANDIDATE_RULES",
+            severity="ERROR",
+            status="FAIL",
+            message="candidate audit report is missing passing critical rules: " + ", ".join(missing_or_failed),
+            fix="Use a full passing candidate audit report with all critical evidence checks.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_RULES", severity="INFO", status="PASS", message="candidate audit report contains passing critical evidence rules")
 
 
 def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str, Any]:

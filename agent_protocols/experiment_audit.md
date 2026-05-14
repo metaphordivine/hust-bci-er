@@ -80,6 +80,8 @@ Candidate and promoted gates must prove semantic correctness:
 - `PREDICTION_TRIAL_ID_UNIQUE`, `PREDICTION_TOP4_BINARY`, and `PREDICTION_TOP4_TRUTH_BALANCE` must pass when Top-4 labels are present.
 - `RUN_SPLIT_SUBJECT_DISJOINT` and `RUN_SPLIT_ORIGINAL_TRIAL_DISJOINT` verify run-specific split evidence does not leak subjects or original trials across splits.
 - `RUN_DATASET_CHECKSUM_SCHEMA` and `RUN_DATASET_CHECKSUM_COVERAGE` verify dataset checksum evidence uses unique paths, lowercase sha256 values, and covers all declared data sources.
+- If split evidence is provided only as `trial_rows`, the audit derives subject membership from those rows, including per-fold rows when a `fold` field is present.
+- `RUN_DATASET_CHECKSUM_EXTRA` reports checksum paths that are not declared in `data_sources`; candidate/promoted gates should not carry unresolved dataset checksum warnings.
 
 For `promoted` gate, add:
 
@@ -88,6 +90,7 @@ reports/promotion_audits/<route_id>_promotion.md
 ```
 
 The promotion audit must reference a passing candidate audit report and include the fields shown in `reports/promotion_audits/_template.md`.
+The referenced candidate audit report must include passing critical evidence rules such as `MANIFEST_VALID`, `PRIMARY_METRIC_RECOMPUTE`, `PRIMARY_METRIC_REPORTED`, `RUN_DATASET_EVIDENCE_VALID`, and `RUN_SPLIT_EVIDENCE_VALID`; Top-4 routes must also include passing Top-4 semantic rules.
 
 ## Gate Types
 
