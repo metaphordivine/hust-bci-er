@@ -1,4 +1,4 @@
-"""Named preprocessing variants migrated from historical route work."""
+"""Named preprocessing variants."""
 
 from __future__ import annotations
 
@@ -52,4 +52,3 @@ def get_preprocessing_variant(name: str) -> dict:
     if name not in variants:
         raise KeyError(f"unknown preprocessing variant: {name}")
     return deepcopy(variants[name])
-

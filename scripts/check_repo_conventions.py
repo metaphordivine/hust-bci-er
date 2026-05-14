@@ -29,8 +29,8 @@ def main() -> int:
     errors: list[str] = []
 
     routes_root = ROOT / "configs" / "routes"
-    forbidden_route_dirs = {"stable", "candidates", "deprecated", "experimental"}
-    for name in forbidden_route_dirs:
+    tier_route_dirs = {"stable", "candidates", "deprecated", "experimental"}
+    for name in tier_route_dirs:
         if (routes_root / name).exists():
             errors.append(f"route tier directory is not allowed: configs/routes/{name}")
 

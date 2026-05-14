@@ -1,12 +1,12 @@
 statuses:
   IDEA:
-    meaning: Initial migrated route or research idea. No claim of superiority.
+    meaning: Initial route or research idea.
     can_advance_to: [SMOKE_ONLY, DIAGNOSTIC_ONLY, CANDIDATE, REJECTED, ARCHIVED]
   SMOKE_ONLY:
     meaning: Minimal code path or tiny run passed; not enough evidence for model comparison.
     can_advance_to: [DIAGNOSTIC_ONLY, CANDIDATE, REJECTED, ARCHIVED]
   DIAGNOSTIC_ONLY:
-    meaning: Useful for analysis, ablation, or debugging, but not a candidate.
+    meaning: Useful for analysis, ablation, or debugging, but not for review.
     can_advance_to: [CANDIDATE, REJECTED, ARCHIVED]
   CANDIDATE:
     meaning: Passed required audit for comparison under the stated protocol.
@@ -18,6 +18,5 @@ statuses:
     meaning: Rejected by audit or violated a rule.
     can_advance_to: [ARCHIVED]
   ARCHIVED:
-    meaning: Historical record kept for traceability.
+    meaning: Record kept for traceability.
     can_advance_to: []
-

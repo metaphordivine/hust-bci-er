@@ -1,8 +1,4 @@
-"""Clean score-route DAG declarations.
-
-Routes that require trial-prior components are intentionally omitted from this
-clean repository. Keep trial-prior ablations outside the clean route registry.
-"""
+"""Clean score-route DAG declarations."""
 
 from __future__ import annotations
 
@@ -14,7 +10,7 @@ class ScoreRoute:
     route_id: str
     score_node: str
     components: tuple[str, ...]
-    candidate_allowed: bool
+    review_allowed: bool
     notes: str
 
 

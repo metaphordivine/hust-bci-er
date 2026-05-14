@@ -6,7 +6,7 @@ The protocol does not make scientific decisions by natural language judgment. It
 
 ## Trigger
 
-Run this when an experiment is said to be finished, when a route is proposed as a candidate, or before merging a PR that changes configs, evaluation, audit code, or route reports.
+Run this when an experiment is said to be finished, when a route is proposed for review, or before merging a PR that changes configs, evaluation, audit code, or route reports.
 
 ## Required Inputs
 
