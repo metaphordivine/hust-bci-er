@@ -75,10 +75,12 @@ Use `top4_group_keys` when a prediction table combines repeated folds or seeds.
 
 Candidate and promoted gates must prove semantic correctness:
 
+- `RUN_REPRODUCIBILITY_LOCKED` verifies environment, deterministic seed policy, dataloader worker seed policy, checkpoint selection, crop policy, and lock-file hashes are present.
+- `RUN_SPLIT_EVIDENCE_CONSISTENT` verifies subject lists or fold definitions match `trial_rows` subject membership.
 - `PRIMARY_METRIC_RECOMPUTE` recomputes the route's declared `evaluation.primary_metric`.
 - `PREDICTION_TOP4_RANKING` verifies `pred_top4` is derived from the score column by the repository Top-4 policy.
 - `PREDICTION_TRIAL_ID_UNIQUE`, `PREDICTION_TOP4_BINARY`, and `PREDICTION_TOP4_TRUTH_BALANCE` must pass when Top-4 labels are present.
-- `RUN_SPLIT_SUBJECT_DISJOINT` and `RUN_SPLIT_ORIGINAL_TRIAL_DISJOINT` verify run-specific split evidence does not leak subjects or original trials across splits.
+- `RUN_SPLIT_SUBJECT_DISJOINT` and `RUN_SPLIT_ORIGINAL_TRIAL_DISJOINT` verify run-specific split evidence does not leak subjects or original trials across splits. Candidate split evidence must include subject membership plus trial_rows; placeholder subject-only files are not enough.
 - `RUN_DATASET_CHECKSUM_SCHEMA` and `RUN_DATASET_CHECKSUM_COVERAGE` verify dataset checksum evidence uses unique paths, lowercase sha256 values, and covers all declared data sources.
 - If split evidence is provided only as `trial_rows`, the audit derives subject membership from those rows, including per-fold rows when a `fold` field is present.
 - `RUN_DATASET_CHECKSUM_EXTRA` reports checksum paths that are not declared in `data_sources`; candidate/promoted gates should not carry unresolved dataset checksum warnings.

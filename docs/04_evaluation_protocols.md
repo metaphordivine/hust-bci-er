@@ -6,9 +6,9 @@
 当前实现状态：
 
 ```text
-已实现：协议配置、协议 plan/dry-run、审计口径说明。
-未实现：完整训练 runner。
-原则：先生成计划和证据边界，再显式启动重训练。
+已实现：协议配置、协议 plan/dry-run、runner manifest、审计口径说明、component trainer。
+未实现：数据集专用 loader 和真实训练 job adapter。
+原则：先生成计划和证据边界，再显式启动重训练；不能用 runner manifest 伪装 candidate 结果。
 ```
 
 ## 总览
@@ -67,6 +67,17 @@ python scripts/plan_evaluation_protocol.py \
   --route-config configs/routes/models/ea_deformer.yaml
 ```
 
+materialize runner：
+
+```bash
+python scripts/run_evaluation_protocol.py \
+  --protocol p1 \
+  --route-config configs/routes/models/ea_deformer.yaml \
+  --run-dir outputs/protocol_runs/<run_id>
+```
+
+runner 会在 `outputs/protocol_runs/<run_id>/splits/` 里写每个 job 的 split contract，并在 `protocol_run_manifest.json` 中记录 `split_manifest_path` 和 `split_sha256`。这些 contract 只是 job-specific 占位锁；真实训练前必须把它们替换为包含 subject lists 和 `trial_rows` 的正式 evidence。
+
 ## P2：pseudo-public holdout
 
 做什么：
@@ -106,6 +117,14 @@ dry-run：
 python scripts/plan_evaluation_protocol.py \
   --protocol p2 \
   --route-config configs/routes/models/ea_deformer.yaml
+```
+
+P2 crop policy 固定规则：
+
+```text
+crop1-5 -> 固定 crop index 0-4
+random  -> 每个 trial 用 numpy.default_rng(train_seed) 选择 crop；调用时必须显式传 seed
+worst   -> label-aware stress test，选择使 metric 最低的 assignment；tie-break 为 lowest_assignment_index
 ```
 
 ## P3：nested selection
@@ -202,16 +221,16 @@ P3：
 
 ## 当前限制
 
-当前仓库还没有完整训练 runner。  
-`plan_evaluation_protocol.py` 只生成计划，不训练，不读取标签，不生成结果。
+当前仓库已有统一 runner manifest，但还没有数据集专用 loader 和真实训练 job adapter。  
+`plan_evaluation_protocol.py` 只生成计划，不训练，不读取标签，不生成结果。  
+`run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息，不会生成 prediction、score matrix 或 candidate 结果。
 
 后续要真正运行训练时，必须先补：
 
 ```text
 正式 dataset manifest
 正式 split manifest
-component trainer
-protocol runner
+job adapter / dataset loader
 run manifest
 candidate audit report
 ```

@@ -1,0 +1,11 @@
+# Auditable baseline environment for local experiment manifests.
+# This file records the runtime family used by the repository runner contract.
+python==3.13.11
+platform==Windows
+numpy==2.4.2
+PyYAML==6.0.3
+pytest==9.0.3
+torch==2.12.0.dev20260408+cu128
+cuda==12.8
+cudnn==92000
+nvidia-driver==582.05

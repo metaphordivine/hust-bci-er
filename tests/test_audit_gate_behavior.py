@@ -2,10 +2,51 @@ from pathlib import Path
 import json
 
 from hust_bci_er.audit.manifest import sha256_file
-from scripts.audit_experiment import check_promotion_audit, dataset_checksum_errors, run_audit, split_leakage_errors
+from scripts.audit_experiment import (
+    check_promotion_audit,
+    check_reproducibility_manifest,
+    dataset_checksum_errors,
+    run_audit,
+    split_evidence_consistency_errors,
+    split_leakage_errors,
+)
 
 
 ROUTE = Path("configs/routes/models/ea_deformer.yaml")
+
+
+def reproducibility_metadata():
+    return {
+        "environment": {
+            "python": {"version": "3.13.11"},
+            "packages": {"numpy": "2.4.2", "PyYAML": "6.0.3", "torch": "2.12.0.dev20260408+cu128"},
+            "torch": {"version": "2.12.0.dev20260408+cu128", "cuda": "12.8", "cudnn": 92000},
+        },
+        "determinism": {
+            "python_seed": 42,
+            "numpy_seed": 42,
+            "torch_seed": 42,
+            "deterministic_algorithms": True,
+            "cudnn_deterministic": True,
+            "cudnn_benchmark": False,
+            "dataloader_worker_seed_base": 42,
+            "batch_order": {"policy": "seeded_sampler_or_shuffle_false", "sampler_seed": 42},
+        },
+        "checkpoint_selection": {
+            "rule": "best_monitored_epoch",
+            "monitor": "val_loss",
+            "mode": "min",
+            "tie_break": "earliest_epoch",
+            "restore_best": True,
+        },
+        "crop_policy": {"name": "single", "selection": "route_default_single_crop", "crop_index": 0, "tie_break": "not_applicable"},
+        "environment_lock": {
+            "files": [
+                {"path": "environment.lock", "sha256": sha256_file(Path("environment.lock"))},
+                {"path": "requirements.lock", "sha256": sha256_file(Path("requirements.lock"))},
+            ]
+        },
+    }
 
 
 def test_candidate_gate_blocks_missing_run_artifacts():
@@ -56,6 +97,93 @@ def test_candidate_gate_blocks_placeholder_run_split_evidence(tmp_path):
     report = run_audit(ROUTE, run_dir, gate="candidate")
     rules = {check["rule_id"]: check["status"] for check in report["checks"]}
     assert rules["RUN_SPLIT_EVIDENCE_VALID"] == "FAIL"
+
+
+def test_candidate_gate_blocks_missing_reproducibility_metadata(tmp_path):
+    route = tmp_path / "repro_route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: repro_route",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: deformer_lite}",
+                "adaptation: none",
+                "inference: {top4: false, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: no_top4_BA}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    snapshot = run_dir / "config_snapshot.yaml"
+    snapshot.write_text(route.read_text(encoding="utf-8"), encoding="utf-8")
+    prediction = run_dir / "predictions.csv"
+    prediction.write_text("subject_id,trial_id,y_score,y_pred,y_true\ns1,t1,0.1,0,0\ns2,t2,0.9,1,1\n", encoding="utf-8")
+    dataset = run_dir / "dataset_manifest.yaml"
+    dataset.write_text(
+        "dataset_version: train_v1\nstatus: ready\ndata_sources:\n  - path: data/train.csv\n    kind: table\nchecksum_manifest:\n  - path: data/train.csv\n    sha256: '"
+        + "1" * 64
+        + "'\n",
+        encoding="utf-8",
+    )
+    split = run_dir / "split_manifest.yaml"
+    split.write_text(
+        "\n".join(
+            [
+                "split_id: p1_seed42_fold0",
+                "subject_group_split: true",
+                "status: ready",
+                "train_subjects: [s1]",
+                "val_subjects: [s2]",
+                "test_subjects: [s3]",
+                "trial_rows:",
+                "  - subject_id: s1",
+                "    original_trial_id: t1",
+                "    split: train",
+                "  - subject_id: s2",
+                "    original_trial_id: t2",
+                "    split: val",
+                "  - subject_id: s3",
+                "    original_trial_id: t3",
+                "    split: test",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "audit_schema_version": 1,
+        "route_id": "repro_route",
+        "git_commit": "test",
+        "config_path": str(route),
+        "config_snapshot_path": "config_snapshot.yaml",
+        "config_sha256": sha256_file(snapshot),
+        "dataset_manifest_path": "dataset_manifest.yaml",
+        "dataset_manifest_sha256": sha256_file(dataset),
+        "split_manifest_path": "split_manifest.yaml",
+        "split_id": "p1_seed42_fold0",
+        "split_sha256": sha256_file(split),
+        "seed": 42,
+        "command": "test",
+        "primary_metric": "no_top4_BA",
+        "metrics": {"no_top4_BA": 1.0},
+        "prediction_csv": "predictions.csv",
+        "prediction_sha256": sha256_file(prediction),
+        "prediction_record_level": "trial",
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = run_audit(route, run_dir, gate="candidate")
+    rules = {check["rule_id"]: check["status"] for check in report["checks"]}
+    assert rules["RUN_REPRODUCIBILITY_LOCKED"] == "FAIL"
 
 
 def test_no_top4_route_does_not_warn_when_top4_columns_are_absent(tmp_path):
@@ -530,7 +658,16 @@ def test_run_specific_dataset_and_split_evidence_can_override_repo_placeholders(
                 "train_subjects: [s1]",
                 "val_subjects: [s2]",
                 "test_subjects: [s3]",
-                "trial_rows: []",
+                "trial_rows:",
+                "  - subject_id: s1",
+                "    original_trial_id: t1",
+                "    split: train",
+                "  - subject_id: s2",
+                "    original_trial_id: t2",
+                "    split: val",
+                "  - subject_id: s3",
+                "    original_trial_id: t3",
+                "    split: test",
                 "",
             ]
         ),
@@ -555,6 +692,7 @@ def test_run_specific_dataset_and_split_evidence_can_override_repo_placeholders(
         "prediction_csv": "predictions.csv",
         "prediction_sha256": sha256_file(prediction),
         "prediction_record_level": "trial",
+        **reproducibility_metadata(),
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -947,6 +1085,190 @@ def test_trial_rows_enforce_subject_disjointness_per_fold():
     )
     assert any("fold 0" in item for item in subject_errors)
     assert not any("fold 1" in item for item in subject_errors)
+
+
+def test_folded_trial_rows_allow_cross_fold_original_trial_reuse():
+    subject_errors, trial_errors = split_leakage_errors(
+        {
+            "trial_rows": [
+                {"fold": 0, "subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+                {"fold": 0, "subject_id": "s2", "original_trial_id": "t2", "split": "test"},
+                {"fold": 1, "subject_id": "s1", "original_trial_id": "t1", "split": "test"},
+                {"fold": 1, "subject_id": "s2", "original_trial_id": "t2", "split": "train"},
+            ]
+        }
+    )
+    assert not subject_errors
+    assert not trial_errors
+
+
+def test_folded_trial_rows_still_reject_within_fold_original_trial_leakage():
+    _, trial_errors = split_leakage_errors(
+        {
+            "trial_rows": [
+                {"fold": 0, "subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+                {"fold": 0, "subject_id": "s1", "original_trial_id": "t1", "split": "test"},
+            ]
+        }
+    )
+    assert trial_errors
+
+
+def test_split_evidence_consistency_requires_subject_lists_to_match_trial_rows():
+    errors = split_evidence_consistency_errors(
+        {
+            "train_subjects": ["s1", "s2"],
+            "val_subjects": ["s3"],
+            "test_subjects": ["s4"],
+            "trial_rows": [
+                {"subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+                {"subject_id": "s3", "original_trial_id": "t2", "split": "val"},
+                {"subject_id": "s4", "original_trial_id": "t3", "split": "holdout"},
+            ],
+        }
+    )
+    assert any("train_subjects" in item for item in errors)
+    assert any("split must be train/val/test" in item for item in errors)
+
+
+def test_split_evidence_consistency_rejects_unconsumed_fold_rows():
+    errors = split_evidence_consistency_errors(
+        {
+            "folds": [
+                {"fold": 0, "train_subjects": ["s1"], "val_subjects": ["s2"], "test_subjects": ["s3"]},
+            ],
+            "trial_rows": [
+                {"fold": 0, "subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+                {"fold": 0, "subject_id": "s2", "original_trial_id": "t2", "split": "val"},
+                {"fold": 0, "subject_id": "s3", "original_trial_id": "t3", "split": "test"},
+                {"fold": 999, "subject_id": "s9", "original_trial_id": "t9", "split": "test"},
+            ],
+        }
+    )
+    assert any("fold is not declared" in item for item in errors)
+    assert any("not covered" in item for item in errors)
+
+
+def test_reproducibility_check_rejects_mismatched_seed_and_nondeterminism():
+    manifest = {
+        "seed": 42,
+        **reproducibility_metadata(),
+    }
+    manifest["determinism"] = dict(manifest["determinism"])
+    manifest["determinism"]["python_seed"] = 7
+    manifest["determinism"]["deterministic_algorithms"] = False
+    manifest["determinism"]["cudnn_benchmark"] = True
+    manifest["determinism"]["batch_order"] = {"policy": "unseeded_shuffle", "sampler_seed": 7}
+    manifest["checkpoint_selection"] = dict(manifest["checkpoint_selection"])
+    manifest["checkpoint_selection"]["tie_break"] = "latest_epoch"
+    manifest["crop_policy"] = {"name": "random", "selection": "per_trial_uniform_crop", "random_seed": 7, "rng": "numpy.default_rng", "tie_break": "stable_input_order"}
+
+    checks = []
+    check_reproducibility_manifest(manifest, checks, gate="candidate", root=Path.cwd())
+
+    check = checks[-1]
+    assert check["rule_id"] == "RUN_REPRODUCIBILITY_LOCKED"
+    assert check["status"] == "FAIL"
+    assert "python_seed" in check["message"]
+    assert "deterministic_algorithms" in check["message"]
+    assert "crop_policy.random_seed" in check["message"]
+
+
+def test_candidate_gate_rejects_unconsumed_fold_rows_end_to_end(tmp_path):
+    route = tmp_path / "bad_fold_rows_route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: bad_fold_rows_route",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: deformer_lite}",
+                "adaptation: none",
+                "inference: {top4: false, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: no_top4_BA}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    snapshot = run_dir / "config_snapshot.yaml"
+    snapshot.write_text(route.read_text(encoding="utf-8"), encoding="utf-8")
+    prediction = run_dir / "predictions.csv"
+    prediction.write_text("subject_id,trial_id,y_score,y_pred,y_true\ns1,t1,0.1,0,0\ns2,t2,0.9,1,1\n", encoding="utf-8")
+    dataset = run_dir / "dataset_manifest.yaml"
+    dataset.write_text(
+        "dataset_version: train_v1\nstatus: ready\ndata_sources:\n  - path: data/train.csv\n    kind: table\nchecksum_manifest:\n  - path: data/train.csv\n    sha256: '"
+        + "1" * 64
+        + "'\n",
+        encoding="utf-8",
+    )
+    split = run_dir / "split_manifest.yaml"
+    split.write_text(
+        "\n".join(
+            [
+                "split_id: p1_seed42_fold0",
+                "subject_group_split: true",
+                "status: ready",
+                "folds:",
+                "  - fold: 0",
+                "    train_subjects: [s1]",
+                "    val_subjects: [s2]",
+                "    test_subjects: [s3]",
+                "trial_rows:",
+                "  - fold: 0",
+                "    subject_id: s1",
+                "    original_trial_id: t1",
+                "    split: train",
+                "  - fold: 0",
+                "    subject_id: s2",
+                "    original_trial_id: t2",
+                "    split: val",
+                "  - fold: 0",
+                "    subject_id: s3",
+                "    original_trial_id: t3",
+                "    split: test",
+                "  - fold: 999",
+                "    subject_id: s9",
+                "    original_trial_id: t9",
+                "    split: test",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "audit_schema_version": 1,
+        "route_id": "bad_fold_rows_route",
+        "git_commit": "test",
+        "config_path": str(route),
+        "config_snapshot_path": "config_snapshot.yaml",
+        "config_sha256": sha256_file(snapshot),
+        "dataset_manifest_path": "dataset_manifest.yaml",
+        "dataset_manifest_sha256": sha256_file(dataset),
+        "split_manifest_path": "split_manifest.yaml",
+        "split_id": "p1_seed42_fold0",
+        "split_sha256": sha256_file(split),
+        "seed": 42,
+        "command": "test",
+        "primary_metric": "no_top4_BA",
+        "metrics": {"no_top4_BA": 1.0},
+        "prediction_csv": "predictions.csv",
+        "prediction_sha256": sha256_file(prediction),
+        "prediction_record_level": "trial",
+        **reproducibility_metadata(),
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = run_audit(route, run_dir, gate="candidate")
+    rules = {check["rule_id"]: check["status"] for check in report["checks"]}
+    assert rules["RUN_SPLIT_EVIDENCE_CONSISTENT"] == "FAIL"
 
 
 def test_dataset_checksum_extra_paths_are_reported():

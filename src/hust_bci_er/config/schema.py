@@ -87,6 +87,8 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
         if name not in registry.FEATURES:
             errors.append(f"unknown feature component: {name}")
 
+    validate_augmentation(data, errors)
+
     name = model_name(data.get("model"))
     if name not in registry.MODELS:
         errors.append(f"unknown model component: {name}")
@@ -101,6 +103,8 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
     adaptation = nested_name(data.get("adaptation")) or "none"
     if adaptation not in registry.ADAPTATION:
         errors.append(f"unknown adaptation component: {adaptation}")
+
+    validate_training(data, errors)
 
     evaluation = data.get("evaluation")
     protocol = None
@@ -160,6 +164,154 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
         errors.append("output_dir is derived from route_id/run_id and must not be set in route config")
 
     return errors
+
+
+def validate_positive_number(value: Any, field: str, errors: list[str]) -> float | None:
+    if not isinstance(value, (int, float)) or value <= 0:
+        errors.append(f"{field} must be positive")
+        return None
+    return float(value)
+
+
+def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
+    augmentation = data.get("augmentation")
+    if augmentation is None:
+        return
+    if not isinstance(augmentation, dict):
+        errors.append("augmentation must be a mapping")
+        return
+
+    name = nested_name(augmentation)
+    if name not in registry.AUGMENTATION:
+        errors.append(f"unknown augmentation component: {name}")
+        return
+
+    if name != "split_first_sliding_window":
+        return
+
+    if augmentation.get("split_first") is not True:
+        errors.append("split_first_sliding_window requires split_first: true")
+
+    source_trial_sec = validate_positive_number(augmentation.get("source_trial_sec"), "augmentation.source_trial_sec", errors)
+    window_sec = validate_positive_number(augmentation.get("window_sec"), "augmentation.window_sec", errors)
+    stride_sec = validate_positive_number(augmentation.get("stride_sec"), "augmentation.stride_sec", errors)
+
+    input_window_sec = data.get("input_window_sec")
+    if window_sec is not None and isinstance(input_window_sec, (int, float)) and abs(float(input_window_sec) - window_sec) > 1e-9:
+        errors.append("input_window_sec must match augmentation.window_sec")
+    if source_trial_sec is not None and window_sec is not None and window_sec > source_trial_sec:
+        errors.append("augmentation.window_sec must be <= augmentation.source_trial_sec")
+    if source_trial_sec is not None and stride_sec is not None and stride_sec > source_trial_sec:
+        errors.append("augmentation.stride_sec must be <= augmentation.source_trial_sec")
+
+    apply_to_splits = augmentation.get("apply_to_splits")
+    if apply_to_splits is not None:
+        valid_splits = {"train", "val", "test"}
+        if not isinstance(apply_to_splits, list) or not apply_to_splits or any(split not in valid_splits for split in apply_to_splits):
+            errors.append("augmentation.apply_to_splits must be a non-empty list drawn from train/val/test")
+
+    validate_augmentation_search_space(augmentation, errors)
+
+    aggregate = augmentation.get("aggregate_to_trial")
+    if not isinstance(aggregate, dict):
+        errors.append("augmentation.aggregate_to_trial must be a mapping")
+        return
+    if aggregate.get("method") != "majority_vote":
+        errors.append("augmentation.aggregate_to_trial.method must be majority_vote")
+    if aggregate.get("tie_break") not in {None, "mean_score", "lower", "higher"}:
+        errors.append("augmentation.aggregate_to_trial.tie_break must be mean_score, lower, or higher")
+
+
+def validate_augmentation_search_space(augmentation: dict[str, Any], errors: list[str]) -> None:
+    search_space = augmentation.get("search_space")
+    if search_space is None:
+        return
+    if not isinstance(search_space, dict):
+        errors.append("augmentation.search_space must be a mapping")
+        return
+
+    allowed = {"source_trial_sec", "window_sec", "stride_sec"}
+    for key, values in search_space.items():
+        if key not in allowed:
+            errors.append(f"augmentation.search_space has unsupported field: {key}")
+            continue
+        if not isinstance(values, list) or not values:
+            errors.append(f"augmentation.search_space.{key} must be a non-empty list")
+            continue
+        parsed = [validate_positive_number(value, f"augmentation.search_space.{key}", errors) for value in values]
+        parsed = [value for value in parsed if value is not None]
+        source_trial_sec = float(augmentation.get("source_trial_sec")) if isinstance(augmentation.get("source_trial_sec"), (int, float)) else None
+        if key in {"window_sec", "stride_sec"} and source_trial_sec is not None:
+            if any(value > source_trial_sec for value in parsed):
+                errors.append(f"augmentation.search_space.{key} values must be <= augmentation.source_trial_sec")
+
+
+def validate_non_negative_number(value: Any, field: str, errors: list[str]) -> float | None:
+    if not isinstance(value, (int, float)) or value < 0:
+        errors.append(f"{field} must be non-negative")
+        return None
+    return float(value)
+
+
+def validate_positive_int(value: Any, field: str, errors: list[str]) -> int | None:
+    if not isinstance(value, int) or value <= 0:
+        errors.append(f"{field} must be a positive integer")
+        return None
+    return value
+
+
+def validate_training(data: dict[str, Any], errors: list[str]) -> None:
+    training = data.get("training")
+    if training is None:
+        return
+    if not isinstance(training, dict):
+        errors.append("training must be a mapping")
+        return
+
+    trainer = training.get("trainer")
+    if trainer not in registry.TRAINERS:
+        errors.append(f"unknown trainer component: {trainer}")
+
+    validate_positive_int(training.get("epochs"), "training.epochs", errors)
+    validate_positive_int(training.get("batch_size"), "training.batch_size", errors)
+
+    loss = training.get("loss")
+    if loss not in registry.LOSSES:
+        errors.append(f"unknown loss component: {loss}")
+
+    grad_clip_norm = training.get("grad_clip_norm")
+    if grad_clip_norm is not None:
+        validate_positive_number(grad_clip_norm, "training.grad_clip_norm", errors)
+
+    optimizer = training.get("optimizer")
+    if not isinstance(optimizer, dict):
+        errors.append("training.optimizer must be a mapping")
+    else:
+        optimizer_name = optimizer.get("name")
+        if optimizer_name not in registry.OPTIMIZERS:
+            errors.append(f"unknown optimizer component: {optimizer_name}")
+        validate_positive_number(optimizer.get("lr"), "training.optimizer.lr", errors)
+        weight_decay = optimizer.get("weight_decay")
+        if weight_decay is not None:
+            validate_non_negative_number(weight_decay, "training.optimizer.weight_decay", errors)
+
+    early_stopping = training.get("early_stopping")
+    if early_stopping is not None:
+        if not isinstance(early_stopping, dict):
+            errors.append("training.early_stopping must be a mapping")
+        else:
+            monitor = early_stopping.get("monitor", "val_loss")
+            if monitor not in {"train_loss", "train_accuracy", "val_loss", "val_accuracy"}:
+                errors.append("training.early_stopping.monitor is not supported")
+            mode = early_stopping.get("mode", "min")
+            if mode not in {"min", "max"}:
+                errors.append("training.early_stopping.mode must be min or max")
+            patience = early_stopping.get("patience")
+            if not isinstance(patience, int) or patience < 0:
+                errors.append("training.early_stopping.patience must be a non-negative integer")
+            min_delta = early_stopping.get("min_delta")
+            if min_delta is not None:
+                validate_non_negative_number(min_delta, "training.early_stopping.min_delta", errors)
 
 
 def validate_score_fusion_model(data: dict[str, Any], model: Any, route_id: Any, errors: list[str]) -> None:

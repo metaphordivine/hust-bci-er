@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from hust_bci_er.audit.manifest import load_manifest, resolve_repo_or_run_path, validate_manifest  # noqa: E402
+from hust_bci_er.audit.manifest import load_manifest, resolve_repo_or_run_path, sha256_file, validate_manifest  # noqa: E402
 from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
@@ -47,6 +47,8 @@ PROMOTION_REQUIRED_CANDIDATE_RULES = {
     "PRIMARY_METRIC_REPORTED",
     "RUN_DATASET_EVIDENCE_VALID",
     "RUN_SPLIT_EVIDENCE_VALID",
+    "RUN_SPLIT_EVIDENCE_CONSISTENT",
+    "RUN_REPRODUCIBILITY_LOCKED",
 }
 PROMOTION_REQUIRED_TOP4_RULES = {
     "PREDICTION_TOP4_RANKING",
@@ -316,6 +318,105 @@ def split_manifest_has_evidence(split_data: dict[str, Any]) -> bool:
     return has_subject_lists or has_fold_definitions or has_trial_rows
 
 
+def split_manifest_has_formal_evidence(split_data: dict[str, Any]) -> bool:
+    """Formal candidate evidence needs both subject membership and trial rows."""
+    has_subject_membership = all(isinstance(split_data.get(key), list) and bool(split_data.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+    folds = split_data.get("folds") or split_data.get("fold_definitions") or []
+    has_fold_membership = isinstance(folds, list) and bool(folds) and all(
+        isinstance(fold, dict)
+        and all(isinstance(fold.get(key), list) and bool(fold.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+        for fold in folds
+    )
+    trial_rows = split_data.get("trial_rows") or []
+    has_trial_index = isinstance(trial_rows, list) and bool(trial_rows) and all(
+        isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
+    )
+    return (has_subject_membership or has_fold_membership) and has_trial_index
+
+
+def subjects_from_trial_rows(rows: list[dict[str, Any]]) -> dict[str, set[str]]:
+    subjects_by_split = {"train": set(), "val": set(), "test": set()}
+    for row in rows:
+        split = str(row.get("split"))
+        subject = row.get("subject_id")
+        if split in subjects_by_split and subject is not None:
+            subjects_by_split[split].add(str(subject))
+    return subjects_by_split
+
+
+def split_evidence_consistency_errors(split_data: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    rows = split_data.get("trial_rows") or []
+    if not isinstance(rows, list) or not rows:
+        return ["trial_rows must be a non-empty list"]
+    valid_splits = {"train", "val", "test"}
+    normalized_rows = [row for row in rows if isinstance(row, dict)]
+    if len(normalized_rows) != len(rows):
+        errors.append("trial_rows must contain only mappings")
+    for idx, row in enumerate(normalized_rows):
+        split = row.get("split")
+        subject = row.get("subject_id")
+        original_trial = row.get("original_trial_id")
+        if split not in valid_splits:
+            errors.append(f"trial_rows[{idx}].split must be train/val/test")
+        if subject in {None, ""}:
+            errors.append(f"trial_rows[{idx}].subject_id is required")
+        if original_trial in {None, ""}:
+            errors.append(f"trial_rows[{idx}].original_trial_id is required")
+
+    consumed: set[int] = set()
+    indexed_rows = list(enumerate(normalized_rows))
+    folds = split_data.get("folds") or split_data.get("fold_definitions") or []
+    has_declared_folds = isinstance(folds, list) and bool(folds)
+
+    if all(isinstance(split_data.get(key), list) and split_data.get(key) for key in ["train_subjects", "val_subjects", "test_subjects"]):
+        rows_without_fold = [(idx, row) for idx, row in indexed_rows if "fold" not in row]
+        if not rows_without_fold:
+            errors.append("top-level subject lists require trial_rows without fold")
+        else:
+            consumed.update(idx for idx, _ in rows_without_fold)
+            row_subjects = subjects_from_trial_rows([row for _, row in rows_without_fold])
+            for split in ["train", "val", "test"]:
+                expected = set(map(str, split_data.get(f"{split}_subjects") or []))
+                actual = row_subjects[split]
+                if expected != actual:
+                    missing = sorted(expected - actual)[:5]
+                    extra = sorted(actual - expected)[:5]
+                    errors.append(f"top-level {split}_subjects do not match trial_rows; missing={missing}, extra={extra}")
+
+    declared_fold_ids: set[str] = set()
+    if has_declared_folds:
+        for idx, fold in enumerate(folds):
+            if not isinstance(fold, dict):
+                errors.append(f"fold {idx} must be a mapping")
+                continue
+            fold_id = fold.get("fold", fold.get("fold_id", idx))
+            declared_fold_ids.add(str(fold_id))
+            fold_rows = [(row_idx, row) for row_idx, row in indexed_rows if str(row.get("fold")) == str(fold_id)]
+            if not fold_rows:
+                errors.append(f"fold {fold_id} has no trial_rows")
+                continue
+            consumed.update(row_idx for row_idx, _ in fold_rows)
+            row_subjects = subjects_from_trial_rows([row for _, row in fold_rows])
+            for split in ["train", "val", "test"]:
+                expected = set(map(str, fold.get(f"{split}_subjects") or []))
+                actual = row_subjects[split]
+                if expected != actual:
+                    missing = sorted(expected - actual)[:5]
+                    extra = sorted(actual - expected)[:5]
+                    errors.append(f"fold {fold_id} {split}_subjects do not match trial_rows; missing={missing}, extra={extra}")
+        for idx, row in indexed_rows:
+            if "fold" not in row:
+                errors.append(f"trial_rows[{idx}] must declare fold when fold definitions are present")
+            elif str(row.get("fold")) not in declared_fold_ids:
+                errors.append(f"trial_rows[{idx}].fold is not declared")
+
+    unconsumed = sorted(set(range(len(normalized_rows))) - consumed)
+    if unconsumed:
+        errors.append("trial_rows contain rows not covered by subject lists or fold definitions: " + ", ".join(map(str, unconsumed[:5])))
+    return errors
+
+
 def subject_sets_from_split(data: dict[str, Any]) -> tuple[set[str], set[str], set[str]]:
     return (
         set(map(str, data.get("train_subjects") or [])),
@@ -347,16 +448,23 @@ def split_leakage_errors(split_data: dict[str, Any]) -> tuple[list[str], list[st
 
     rows = split_data.get("trial_rows") or []
     if isinstance(rows, list) and rows:
-        try:
-            assert_original_trial_not_cross_split(rows)
-        except (KeyError, ValueError) as exc:
-            trial_errors.append(str(exc))
         rows_by_fold: dict[str, list[dict[str, Any]]] = {}
+        has_fold_rows = any(isinstance(row, dict) and "fold" in row for row in rows)
+        if not has_fold_rows:
+            try:
+                assert_original_trial_not_cross_split(rows)
+            except (KeyError, ValueError) as exc:
+                trial_errors.append(str(exc))
         for row in rows:
             if not isinstance(row, dict):
                 continue
             rows_by_fold.setdefault(str(row.get("fold", "__single_fold__")), []).append(row)
         for fold, fold_rows in rows_by_fold.items():
+            if has_fold_rows:
+                try:
+                    assert_original_trial_not_cross_split(fold_rows)
+                except (KeyError, ValueError) as exc:
+                    trial_errors.append(f"fold {fold}: {exc}")
             subjects_by_split = {"train": set(), "val": set(), "test": set()}
             for row in fold_rows:
                 split = str(row.get("split"))
@@ -622,20 +730,161 @@ def check_run_dataset_split_evidence(
                     fix="Use split evidence for the audited manifest split_id.",
                     decision_if_fail="BLOCKED",
                 )
-            elif split_data.get("status") == "declared_without_subject_list" or not split_manifest_has_evidence(split_data):
+            elif split_data.get("status") == "declared_without_subject_list" or not split_manifest_has_formal_evidence(split_data):
                 add_warn_or_fail(
                     checks,
                     gate=gate,
                     fail_gate=STRICT_GATES,
                     rule_id="RUN_SPLIT_EVIDENCE_VALID",
                     message="run split evidence is not verifiable",
-                    fix="Add complete subject lists, fold definitions, or trial rows before candidate/promoted review.",
+                    fix="Add complete subject lists or fold definitions plus trial_rows with subject_id, original_trial_id, and split before candidate/promoted review.",
                     decision_if_fail="BLOCKED",
                 )
             else:
                 add_check(checks, rule_id="RUN_SPLIT_EVIDENCE_VALID", severity="INFO", status="PASS", message="run split evidence is verifiable")
+                consistency_errors = split_evidence_consistency_errors(split_data)
+                if consistency_errors:
+                    add_check(
+                        checks,
+                        rule_id="RUN_SPLIT_EVIDENCE_CONSISTENT",
+                        severity="ERROR",
+                        status="FAIL",
+                        message="run split evidence is inconsistent: " + "; ".join(consistency_errors[:5]),
+                        fix="Make subject lists or fold definitions match trial_rows exactly, and use only train/val/test split values.",
+                        decision_if_fail="BLOCKED",
+                    )
+                else:
+                    add_check(checks, rule_id="RUN_SPLIT_EVIDENCE_CONSISTENT", severity="INFO", status="PASS", message="run split subject lists match trial_rows")
             if split_data is not None and split_data.get("status") != "declared_without_subject_list" and split_manifest_has_evidence(split_data):
                 add_split_leakage_checks(checks, split_data, gate=gate)
+
+
+def check_reproducibility_manifest(manifest: dict[str, Any], checks: list[AuditCheck], *, gate: str, root: Path = ROOT) -> None:
+    missing: list[str] = []
+    malformed: list[str] = []
+
+    environment = manifest.get("environment")
+    if not isinstance(environment, dict):
+        missing.append("environment")
+    else:
+        if not isinstance(environment.get("python"), dict) or not environment["python"].get("version"):
+            malformed.append("environment.python.version")
+        if not isinstance(environment.get("packages"), dict):
+            malformed.append("environment.packages")
+        if not isinstance(environment.get("torch"), dict):
+            malformed.append("environment.torch")
+
+    determinism = manifest.get("determinism")
+    required_determinism = {
+        "python_seed",
+        "numpy_seed",
+        "torch_seed",
+        "deterministic_algorithms",
+        "cudnn_deterministic",
+        "cudnn_benchmark",
+        "dataloader_worker_seed_base",
+        "batch_order",
+    }
+    if not isinstance(determinism, dict):
+        missing.append("determinism")
+    else:
+        absent = sorted(key for key in required_determinism if key not in determinism)
+        malformed.extend(f"determinism.{key}" for key in absent)
+        manifest_seed = manifest.get("seed")
+        for key in ["python_seed", "numpy_seed", "torch_seed", "dataloader_worker_seed_base"]:
+            if key in determinism and type(determinism[key]) is not int:
+                malformed.append(f"determinism.{key} must be int")
+            elif key in determinism and type(manifest_seed) is int and determinism[key] != manifest_seed:
+                malformed.append(f"determinism.{key} must match manifest seed")
+        if "seed" in determinism and type(manifest_seed) is int and determinism["seed"] != manifest_seed:
+            malformed.append("determinism.seed must match manifest seed")
+        if determinism.get("deterministic_algorithms") is not True:
+            malformed.append("determinism.deterministic_algorithms must be true")
+        if determinism.get("cudnn_deterministic") is not True:
+            malformed.append("determinism.cudnn_deterministic must be true")
+        if determinism.get("cudnn_benchmark") is not False:
+            malformed.append("determinism.cudnn_benchmark must be false")
+        batch_order = determinism.get("batch_order")
+        if not isinstance(batch_order, dict):
+            malformed.append("determinism.batch_order")
+        else:
+            if batch_order.get("policy") != "seeded_sampler_or_shuffle_false":
+                malformed.append("determinism.batch_order.policy")
+            if type(manifest_seed) is int and batch_order.get("sampler_seed") != manifest_seed:
+                malformed.append("determinism.batch_order.sampler_seed")
+
+    checkpoint_selection = manifest.get("checkpoint_selection")
+    if not isinstance(checkpoint_selection, dict):
+        missing.append("checkpoint_selection")
+    else:
+        if checkpoint_selection.get("rule") != "best_monitored_epoch":
+            malformed.append("checkpoint_selection.rule")
+        if checkpoint_selection.get("monitor") not in {"train_loss", "train_accuracy", "val_loss", "val_accuracy"}:
+            malformed.append("checkpoint_selection.monitor")
+        if checkpoint_selection.get("mode") not in {"min", "max"}:
+            malformed.append("checkpoint_selection.mode")
+        if checkpoint_selection.get("tie_break") != "earliest_epoch":
+            malformed.append("checkpoint_selection.tie_break")
+        if checkpoint_selection.get("restore_best") is not True:
+            malformed.append("checkpoint_selection.restore_best")
+
+    crop_policy = manifest.get("crop_policy")
+    if not isinstance(crop_policy, dict):
+        missing.append("crop_policy")
+    else:
+        for key in ["name", "selection", "tie_break"]:
+            if not crop_policy.get(key):
+                malformed.append(f"crop_policy.{key}")
+        if crop_policy.get("name") == "random":
+            if type(crop_policy.get("random_seed")) is not int:
+                malformed.append("crop_policy.random_seed")
+            elif type(manifest.get("seed")) is int and crop_policy.get("random_seed") != manifest["seed"]:
+                malformed.append("crop_policy.random_seed must match manifest seed")
+            if crop_policy.get("selection") != "per_trial_uniform_crop":
+                malformed.append("crop_policy.selection")
+        if crop_policy.get("name") == "worst":
+            if crop_policy.get("selection") != "label_aware_min_metric_stress_test":
+                malformed.append("crop_policy.selection")
+            if crop_policy.get("tie_break") != "lowest_assignment_index":
+                malformed.append("crop_policy.tie_break")
+
+    environment_lock = manifest.get("environment_lock")
+    if not isinstance(environment_lock, dict):
+        missing.append("environment_lock")
+    else:
+        files = environment_lock.get("files")
+        if not isinstance(files, list) or not files:
+            malformed.append("environment_lock.files")
+        else:
+            paths = {str(item.get("path")) for item in files if isinstance(item, dict)}
+            if "environment.lock" not in paths:
+                malformed.append("environment_lock.environment.lock")
+            if "requirements.lock" not in paths:
+                malformed.append("environment_lock.requirements.lock")
+            for item in files:
+                if not isinstance(item, dict) or not isinstance(item.get("path"), str) or SHA256_RE.fullmatch(str(item.get("sha256") or "")) is None:
+                    malformed.append("environment_lock.file")
+                    break
+                lock_path = (root / item["path"]).resolve()
+                if not is_under(lock_path, root):
+                    malformed.append(f"environment_lock.{item['path']} escapes repository")
+                elif not lock_path.exists():
+                    malformed.append(f"environment_lock.{item['path']} missing")
+                elif sha256_file(lock_path) != item["sha256"]:
+                    malformed.append(f"environment_lock.{item['path']} sha256")
+
+    if missing or malformed:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RUN_REPRODUCIBILITY_LOCKED",
+            message="run reproducibility metadata is incomplete: " + ", ".join(missing + malformed),
+            fix="Regenerate manifest.json with environment, determinism, checkpoint_selection, crop_policy, and environment_lock entries.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="RUN_REPRODUCIBILITY_LOCKED", severity="INFO", status="PASS", message="run reproducibility metadata is locked")
 
 
 def top4_group_columns(fields: set[str], schema: dict[str, str | None], manifest: dict[str, Any]) -> list[str] | None:
@@ -1374,6 +1623,7 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
             else:
                 add_check(checks, rule_id="MANIFEST_VALID", severity="INFO", status="PASS", message="manifest is valid")
                 manifest = load_manifest(manifest_path)
+                check_reproducibility_manifest(manifest, checks, gate=gate, root=ROOT)
                 check_run_dataset_split_evidence(manifest, route_data, run_dir, checks, gate=gate)
                 prediction_csv = manifest.get("prediction_csv")
                 if isinstance(prediction_csv, str) and prediction_csv:

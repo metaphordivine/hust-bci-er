@@ -57,3 +57,35 @@ def test_route_config_must_not_set_output_dir():
     data["output_dir"] = "outputs/manual"
     errors = validate_route_config(data, path=Path("ea_deformer.yaml"))
     assert any("output_dir is derived" in err for err in errors)
+
+
+def test_sliding_window_augmentation_requires_split_first_and_matching_window():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    assert validate_route_config(data, path=Path("sliding_window_eegnet.yaml")) == []
+
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["split_first"] = False
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+    assert any("split_first" in err for err in errors)
+
+    data["augmentation"]["split_first"] = True
+    data["input_window_sec"] = 10
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+    assert any("input_window_sec must match" in err for err in errors)
+
+
+def test_training_config_rejects_unknown_optimizer():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["training"] = dict(data["training"])
+    data["training"]["optimizer"] = dict(data["training"]["optimizer"])
+    data["training"]["optimizer"]["name"] = "rmsprop"
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+    assert any("unknown optimizer" in err for err in errors)
+
+
+def test_sliding_window_search_space_is_validated():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"window_sec": [4, 12]}
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+    assert any("search_space.window_sec" in err for err in errors)
