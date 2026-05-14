@@ -78,6 +78,16 @@ Candidate and promoted gates must prove semantic correctness:
 - `PRIMARY_METRIC_RECOMPUTE` recomputes the route's declared `evaluation.primary_metric`.
 - `PREDICTION_TOP4_RANKING` verifies `pred_top4` is derived from the score column by the repository Top-4 policy.
 - `PREDICTION_TRIAL_ID_UNIQUE`, `PREDICTION_TOP4_BINARY`, and `PREDICTION_TOP4_TRUTH_BALANCE` must pass when Top-4 labels are present.
+- `RUN_SPLIT_SUBJECT_DISJOINT` and `RUN_SPLIT_ORIGINAL_TRIAL_DISJOINT` verify run-specific split evidence does not leak subjects or original trials across splits.
+- `RUN_DATASET_CHECKSUM_SCHEMA` and `RUN_DATASET_CHECKSUM_COVERAGE` verify dataset checksum evidence uses unique paths, lowercase sha256 values, and covers all declared data sources.
+
+For `promoted` gate, add:
+
+```text
+reports/promotion_audits/<route_id>_promotion.md
+```
+
+The promotion audit must reference a passing candidate audit report and include the fields shown in `reports/promotion_audits/_template.md`.
 
 ## Gate Types
 

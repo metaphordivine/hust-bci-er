@@ -18,6 +18,12 @@ REQUIRED_SUMMARY_TOKENS = {
     "decision:",
     "reproduce:",
 }
+REQUIRED_EVIDENCE_FIELDS = {
+    "audit_report_path",
+    "manifest_path",
+    "manifest_sha256",
+    "primary_metric_value",
+}
 
 
 def route_files() -> list[Path]:
@@ -64,6 +70,10 @@ def main() -> int:
         if missing:
             errors.append(f"summary missing tokens {missing}: {summary.relative_to(ROOT)}")
         fields = summary_fields(text)
+        if routes[route_id].get("status") in SUMMARY_REQUIRED_STATUSES:
+            missing_fields = sorted(field for field in REQUIRED_EVIDENCE_FIELDS if not fields.get(field))
+            if missing_fields:
+                errors.append(f"summary missing evidence fields {missing_fields}: {summary.relative_to(ROOT)}")
         audit_report_path = fields.get("audit_report_path")
         if audit_report_path:
             report_path = (ROOT / audit_report_path).resolve()

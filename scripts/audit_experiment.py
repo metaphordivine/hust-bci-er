@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from hust_bci_er.audit.manifest import load_manifest, resolve_repo_or_run_path, 
 from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
+from hust_bci_er.data.splits import assert_disjoint_subjects, assert_original_trial_not_cross_split  # noqa: E402
 from hust_bci_er.evaluation.exact_single_crop import exact_all_correct_rate_from_matrix, exact_ba_from_matrix  # noqa: E402
 from hust_bci_er.evaluation.metrics import balanced_accuracy  # noqa: E402
 from hust_bci_er.inference.topk import topk_binary  # noqa: E402
@@ -26,6 +28,19 @@ from hust_bci_er.inference.topk import topk_binary  # noqa: E402
 AuditCheck = dict[str, Any]
 GATES = {"smoke", "diagnostic", "candidate", "promoted"}
 STRICT_GATES = {"candidate", "promoted"}
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+PROMOTION_REQUIRED_FIELDS = {
+    "route_id",
+    "promoted_from_run",
+    "candidate_audit_report",
+    "primary_metric",
+    "comparison_baseline",
+    "risk_review",
+    "no_leakage_review",
+    "decision",
+    "reviewer",
+    "date",
+}
 
 
 def add_check(
@@ -97,6 +112,17 @@ def parse_binary(value: Any, *, field: str, context: str) -> int:
     if parsed not in {0.0, 1.0}:
         raise ValueError(f"{field} is not binary in {context}")
     return int(parsed)
+
+
+def parse_key_fields(text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("-").strip()
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip()] = value.strip().strip("`")
+    return fields
 
 
 def route_primary_metric(route_data: dict[str, Any]) -> str | None:
@@ -278,6 +304,74 @@ def split_manifest_has_evidence(split_data: dict[str, Any]) -> bool:
     return has_subject_lists or has_fold_definitions or has_trial_rows
 
 
+def subject_sets_from_split(data: dict[str, Any]) -> tuple[set[str], set[str], set[str]]:
+    return (
+        set(map(str, data.get("train_subjects") or [])),
+        set(map(str, data.get("val_subjects") or [])),
+        set(map(str, data.get("test_subjects") or [])),
+    )
+
+
+def split_leakage_errors(split_data: dict[str, Any]) -> tuple[list[str], list[str]]:
+    subject_errors: list[str] = []
+    trial_errors: list[str] = []
+
+    train_subjects, val_subjects, test_subjects = subject_sets_from_split(split_data)
+    if train_subjects or val_subjects or test_subjects:
+        try:
+            assert_disjoint_subjects(train_subjects, val_subjects, test_subjects)
+        except ValueError as exc:
+            subject_errors.append(f"top-level: {exc}")
+
+    folds = split_data.get("folds") or split_data.get("fold_definitions") or []
+    if isinstance(folds, list):
+        for idx, fold in enumerate(folds):
+            if not isinstance(fold, dict):
+                continue
+            try:
+                assert_disjoint_subjects(*subject_sets_from_split(fold))
+            except ValueError as exc:
+                subject_errors.append(f"fold {idx}: {exc}")
+
+    rows = split_data.get("trial_rows") or []
+    if isinstance(rows, list) and rows:
+        try:
+            assert_original_trial_not_cross_split(rows)
+        except (KeyError, ValueError) as exc:
+            trial_errors.append(str(exc))
+
+    return subject_errors, trial_errors
+
+
+def add_split_leakage_checks(checks: list[AuditCheck], split_data: dict[str, Any], *, gate: str) -> None:
+    subject_errors, trial_errors = split_leakage_errors(split_data)
+    if subject_errors:
+        add_check(
+            checks,
+            rule_id="RUN_SPLIT_SUBJECT_DISJOINT",
+            severity="ERROR",
+            status="FAIL",
+            message="run split subject overlap detected: " + "; ".join(subject_errors[:3]),
+            fix="Regenerate split evidence so train/val/test subjects are disjoint in every split definition.",
+            decision_if_fail="REJECT",
+        )
+    else:
+        add_check(checks, rule_id="RUN_SPLIT_SUBJECT_DISJOINT", severity="INFO", status="PASS", message="run split subjects are disjoint")
+
+    if trial_errors:
+        add_check(
+            checks,
+            rule_id="RUN_SPLIT_ORIGINAL_TRIAL_DISJOINT",
+            severity="ERROR",
+            status="FAIL",
+            message="run split original-trial leakage detected: " + "; ".join(trial_errors[:3]),
+            fix="Regenerate split evidence so each original trial belongs to exactly one split.",
+            decision_if_fail="REJECT",
+        )
+    else:
+        add_check(checks, rule_id="RUN_SPLIT_ORIGINAL_TRIAL_DISJOINT", severity="INFO", status="PASS", message="run split original trials do not cross splits")
+
+
 def dataset_manifest_has_evidence(dataset_data: dict[str, Any]) -> bool:
     data_sources = dataset_data.get("data_sources") or []
     checksum_manifest = dataset_data.get("checksum_manifest") or []
@@ -288,6 +382,87 @@ def dataset_manifest_has_evidence(dataset_data: dict[str, Any]) -> bool:
         isinstance(item, dict) and item.get("path") and item.get("sha256") for item in checksum_manifest
     )
     return has_data_sources and has_checksums
+
+
+def dataset_checksum_errors(dataset_data: dict[str, Any]) -> tuple[list[str], list[str]]:
+    schema_errors: list[str] = []
+    coverage_errors: list[str] = []
+    data_sources = dataset_data.get("data_sources") or []
+    checksum_manifest = dataset_data.get("checksum_manifest") or []
+    source_paths: list[str] = []
+    checksum_paths: list[str] = []
+
+    if isinstance(data_sources, list) and data_sources:
+        for idx, item in enumerate(data_sources):
+            if not isinstance(item, dict):
+                schema_errors.append(f"data_sources[{idx}] must be a mapping")
+                continue
+            path = item.get("path")
+            if not isinstance(path, str) or not path:
+                schema_errors.append(f"data_sources[{idx}].path is required")
+            else:
+                source_paths.append(path)
+            if not item.get("kind"):
+                schema_errors.append(f"data_sources[{idx}].kind is required")
+    else:
+        schema_errors.append("data_sources must be a non-empty list")
+
+    if isinstance(checksum_manifest, list) and checksum_manifest:
+        for idx, item in enumerate(checksum_manifest):
+            if not isinstance(item, dict):
+                schema_errors.append(f"checksum_manifest[{idx}] must be a mapping")
+                continue
+            path = item.get("path")
+            checksum = item.get("sha256")
+            if not isinstance(path, str) or not path:
+                schema_errors.append(f"checksum_manifest[{idx}].path is required")
+            else:
+                checksum_paths.append(path)
+            if not isinstance(checksum, str) or SHA256_RE.fullmatch(checksum) is None:
+                schema_errors.append(f"checksum_manifest[{idx}].sha256 must be lowercase sha256")
+    else:
+        schema_errors.append("checksum_manifest must be a non-empty list")
+
+    duplicate_sources = sorted(path for path in set(source_paths) if source_paths.count(path) > 1)
+    duplicate_checksums = sorted(path for path in set(checksum_paths) if checksum_paths.count(path) > 1)
+    if duplicate_sources:
+        schema_errors.append("duplicate data_sources paths: " + ", ".join(duplicate_sources[:5]))
+    if duplicate_checksums:
+        schema_errors.append("duplicate checksum_manifest paths: " + ", ".join(duplicate_checksums[:5]))
+
+    missing_checksums = sorted(set(source_paths) - set(checksum_paths))
+    if missing_checksums:
+        coverage_errors.append("checksum_manifest does not cover data_sources: " + ", ".join(missing_checksums[:5]))
+    return schema_errors, coverage_errors
+
+
+def add_dataset_checksum_checks(checks: list[AuditCheck], dataset_data: dict[str, Any], *, gate: str) -> None:
+    schema_errors, coverage_errors = dataset_checksum_errors(dataset_data)
+    if schema_errors:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RUN_DATASET_CHECKSUM_SCHEMA",
+            message="dataset checksum schema is invalid: " + "; ".join(schema_errors[:5]),
+            fix="Use unique paths and lowercase 64-hex sha256 values in checksum_manifest.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="RUN_DATASET_CHECKSUM_SCHEMA", severity="INFO", status="PASS", message="dataset checksum schema is valid")
+
+    if coverage_errors:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RUN_DATASET_CHECKSUM_COVERAGE",
+            message="dataset checksum coverage is incomplete: " + "; ".join(coverage_errors[:5]),
+            fix="Add checksum_manifest entries for every data_sources path.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="RUN_DATASET_CHECKSUM_COVERAGE", severity="INFO", status="PASS", message="dataset checksums cover all data sources")
 
 
 def check_run_dataset_split_evidence(
@@ -356,6 +531,8 @@ def check_run_dataset_split_evidence(
                 )
             else:
                 add_check(checks, rule_id="RUN_DATASET_EVIDENCE_VALID", severity="INFO", status="PASS", message="run dataset evidence is verifiable")
+            if dataset_data is not None:
+                add_dataset_checksum_checks(checks, dataset_data, gate=gate)
 
     errors = []
     if isinstance(split_path_value, str):
@@ -412,6 +589,8 @@ def check_run_dataset_split_evidence(
                 )
             else:
                 add_check(checks, rule_id="RUN_SPLIT_EVIDENCE_VALID", severity="INFO", status="PASS", message="run split evidence is verifiable")
+            if split_data is not None and split_data.get("status") != "declared_without_subject_list" and split_manifest_has_evidence(split_data):
+                add_split_leakage_checks(checks, split_data, gate=gate)
 
 
 def top4_group_columns(fields: set[str], schema: dict[str, str | None], manifest: dict[str, Any]) -> list[str] | None:
@@ -497,13 +676,47 @@ def check_top4_group_semantics(
             if not np.array_equal(expected, np.array(observed, dtype=int)):
                 bad_ranking.append(group_id)
 
-    for rule_id, bad, message, fix in [
+    semantic_specs = [
         ("PREDICTION_TRIAL_ID_UNIQUE", bad_unique, "duplicate trial_id values inside Top-4 groups", "Ensure each Top-4 group has 8 unique trial_id values."),
         ("PREDICTION_TOP4_BINARY", bad_binary, "pred_top4 contains non-binary values", "Encode pred_top4 as 0 or 1 only."),
-        ("PREDICTION_TOP4_TRUTH_BALANCE", bad_truth, "y_true is not binary or not 4 positives per 8-trial group", "For labeled Top-4 audits, each 8-trial group should contain 4 positive labels."),
-        ("PREDICTION_SCORE_NUMERIC", bad_score, "score contains non-numeric or non-finite values", "Encode score columns as finite numeric values."),
-        ("PREDICTION_TOP4_RANKING", bad_ranking, "pred_top4 does not match score-derived top 4", "Regenerate pred_top4 from score using the repository Top-4 policy."),
-    ]:
+    ]
+    if truth_col is None:
+        add_check(
+            checks,
+            rule_id="PREDICTION_TOP4_TRUTH_BALANCE",
+            severity="INFO",
+            status="PASS",
+            message="truth balance was not checked because y_true is absent; primary metric gates require y_true when needed",
+        )
+    else:
+        semantic_specs.append(("PREDICTION_TOP4_TRUTH_BALANCE", bad_truth, "y_true is not binary or not 4 positives per 8-trial group", "For labeled Top-4 audits, each 8-trial group should contain 4 positive labels."))
+
+    if score_col is None:
+        add_check(
+            checks,
+            rule_id="PREDICTION_SCORE_NUMERIC",
+            severity="WARN",
+            status="WARN",
+            message="score numeric check was not run because no score column is present",
+            fix="Include score, y_score, probability, or logit so Top-4 ranking can be recomputed.",
+        )
+        add_check(
+            checks,
+            rule_id="PREDICTION_TOP4_RANKING",
+            severity="WARN",
+            status="WARN",
+            message="Top-4 ranking was not checked because no score column is present",
+            fix="Include score, y_score, probability, or logit so pred_top4 can be recomputed.",
+        )
+    else:
+        semantic_specs.extend(
+            [
+                ("PREDICTION_SCORE_NUMERIC", bad_score, "score contains non-numeric or non-finite values", "Encode score columns as finite numeric values."),
+                ("PREDICTION_TOP4_RANKING", bad_ranking, "pred_top4 does not match score-derived top 4", "Regenerate pred_top4 from score using the repository Top-4 policy."),
+            ]
+        )
+
+    for rule_id, bad, message, fix in semantic_specs:
         if bad:
             add_check(
                 checks,
@@ -651,6 +864,8 @@ def recompute_primary_metric_from_predictions(
             required = "y_true and pred_top4" if metric_name == "top4_BA" else "y_true and y_pred"
             raise ValueError(f"prediction CSV must include {required}")
         y_true = np.array([parse_binary(row[schema["y_true"]], field=schema["y_true"], context="primary metric") for row in rows], dtype=int)
+        if set(np.unique(y_true)) != {0, 1}:
+            raise ValueError("primary metric y_true must contain both binary classes")
         y_pred = np.array([parse_binary(row[pred_col], field=pred_col, context="primary metric") for row in rows], dtype=int)
         return balanced_accuracy(y_true, y_pred)
 
@@ -923,6 +1138,98 @@ def write_reports(run_dir: Path, report: dict[str, Any]) -> None:
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[AuditCheck]) -> None:
+    if not promotion_path.exists():
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_EXISTS",
+            severity="ERROR",
+            status="FAIL",
+            message=f"promotion audit is missing: {promotion_path.relative_to(ROOT)}",
+            fix="Write a promotion audit before using the promoted gate.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+
+    add_check(checks, rule_id="PROMOTION_AUDIT_EXISTS", severity="INFO", status="PASS", message=f"promotion audit found: {promotion_path.relative_to(ROOT)}")
+    text = promotion_path.read_text(encoding="utf-8", errors="ignore")
+    fields = parse_key_fields(text)
+    missing = sorted(field for field in PROMOTION_REQUIRED_FIELDS if not fields.get(field))
+    if missing:
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_FORMAT",
+            severity="ERROR",
+            status="FAIL",
+            message="promotion audit missing required fields: " + ", ".join(missing),
+            fix="Fill the promotion audit template with all required fields.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    if fields.get("route_id") != route_id:
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_FORMAT",
+            severity="ERROR",
+            status="FAIL",
+            message="promotion audit route_id does not match audited route",
+            fix="Use the promotion audit file for this route only.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+
+    report_path = (ROOT / fields["candidate_audit_report"]).resolve()
+    try:
+        report_path.relative_to(ROOT.resolve())
+    except ValueError:
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_CANDIDATE_REPORT",
+            severity="ERROR",
+            status="FAIL",
+            message="candidate_audit_report escapes repository",
+            fix="Point candidate_audit_report to an audit_report.json under the repository workspace.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    if not report_path.exists():
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_CANDIDATE_REPORT",
+            severity="ERROR",
+            status="FAIL",
+            message="candidate_audit_report does not exist",
+            fix="Reference the candidate gate audit_report.json for the promoted route.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_CANDIDATE_REPORT",
+            severity="ERROR",
+            status="FAIL",
+            message=f"candidate_audit_report is not valid JSON: {exc}",
+            fix="Reference a valid experiment audit JSON report.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    if report.get("route_id") != route_id or report.get("gate") != "candidate" or report.get("overall") != "PASS":
+        add_check(
+            checks,
+            rule_id="PROMOTION_AUDIT_CANDIDATE_REPORT",
+            severity="ERROR",
+            status="FAIL",
+            message="candidate_audit_report must be PASS for the same route under candidate gate",
+            fix="Run and pass candidate gate before promoted review.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_REPORT", severity="INFO", status="PASS", message="promotion audit references a passing candidate audit report")
+
+
 def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str, Any]:
     if gate not in GATES:
         raise ValueError(f"unknown gate: {gate}")
@@ -1023,18 +1330,7 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
 
             if gate == "promoted":
                 promotion_path = ROOT / "reports" / "promotion_audits" / f"{route_id}_promotion.md"
-                if promotion_path.exists():
-                    add_check(checks, rule_id="PROMOTION_AUDIT_EXISTS", severity="INFO", status="PASS", message=f"promotion audit found: {promotion_path.relative_to(ROOT)}")
-                else:
-                    add_check(
-                        checks,
-                        rule_id="PROMOTION_AUDIT_EXISTS",
-                        severity="ERROR",
-                        status="FAIL",
-                        message=f"promotion audit is missing: {promotion_path.relative_to(ROOT)}",
-                        fix="Write a promotion audit before using the promoted gate.",
-                        decision_if_fail="BLOCKED",
-                    )
+                check_promotion_audit(route_id, promotion_path, checks)
 
     decision = overall_decision(checks, gate=gate)
     if decision not in AUDIT_DECISIONS:
