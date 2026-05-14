@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 REQUIRED_MANIFEST_FIELDS = {
@@ -17,14 +20,45 @@ REQUIRED_MANIFEST_FIELDS = {
     "config_sha256",
     "dataset_manifest_path",
     "dataset_manifest_sha256",
+    "split_manifest_path",
     "split_id",
     "split_sha256",
     "seed",
     "command",
     "primary_metric",
+    "metrics",
     "prediction_csv",
     "prediction_sha256",
 }
+
+REQUIRED_TYPES = {
+    "audit_schema_version": int,
+    "route_id": str,
+    "git_commit": str,
+    "config_path": str,
+    "config_snapshot_path": str,
+    "config_sha256": str,
+    "dataset_manifest_path": str,
+    "dataset_manifest_sha256": str,
+    "split_manifest_path": str,
+    "split_id": str,
+    "split_sha256": str,
+    "seed": int,
+    "command": str,
+    "primary_metric": str,
+    "metrics": dict,
+    "prediction_csv": str,
+    "prediction_sha256": str,
+}
+
+HASH_FIELDS = {
+    "config_sha256",
+    "dataset_manifest_sha256",
+    "split_sha256",
+    "prediction_sha256",
+}
+
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def load_manifest(path: Path) -> dict:
@@ -37,6 +71,11 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def load_yaml_file(path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
 
 
 def is_under(path: Path, parent: Path) -> bool:
@@ -87,19 +126,18 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
     missing = sorted(REQUIRED_MANIFEST_FIELDS.difference(data))
     errors = [f"manifest missing fields: {', '.join(missing)}"] if missing else []
 
-    if route_data is not None:
-        for key in ["route_id", "split_id", "seed"]:
-            if key in data and key in route_data and data[key] != route_data[key]:
-                errors.append(f"manifest {key} does not match route config")
-        route_metric = None
-        evaluation = route_data.get("evaluation")
-        if isinstance(evaluation, dict):
-            route_metric = evaluation.get("primary_metric")
-        if data.get("primary_metric") and route_metric and data["primary_metric"] != route_metric:
-            errors.append("manifest primary_metric does not match route config")
+    for key, expected_type in REQUIRED_TYPES.items():
+        if key in data and not isinstance(data[key], expected_type):
+            errors.append(f"manifest {key} must be {expected_type.__name__}")
+
+    for key in HASH_FIELDS:
+        value = data.get(key)
+        if isinstance(value, str) and SHA256_RE.fullmatch(value) is None:
+            errors.append(f"manifest {key} must be a lowercase sha256 hex string")
 
     root = root or path.parent
     run_dir = path.parent
+    snapshot_data: dict[str, Any] = {}
     config_path = data.get("config_path")
     config_snapshot_path = data.get("config_snapshot_path")
     expected_hash = data.get("config_sha256")
@@ -113,12 +151,28 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
             actual_hash = sha256_file(resolved)
             if actual_hash != expected_hash:
                 errors.append("manifest config_sha256 does not match config snapshot")
+            else:
+                snapshot_data = load_yaml_file(resolved)
     elif isinstance(config_path, str) and isinstance(expected_hash, str):
         resolved = (root / config_path).resolve()
         if not resolved.exists():
             errors.append(f"manifest config_path not found: {config_path}")
         elif sha256_file(resolved) != expected_hash:
             errors.append("manifest config_sha256 does not match current config file")
+        else:
+            snapshot_data = load_yaml_file(resolved)
+
+    route_basis = snapshot_data or route_data or {}
+    if route_basis:
+        for key in ["route_id", "split_id", "seed"]:
+            if key in data and key in route_basis and data[key] != route_basis[key]:
+                errors.append(f"manifest {key} does not match config snapshot")
+        route_metric = None
+        evaluation = route_basis.get("evaluation")
+        if isinstance(evaluation, dict):
+            route_metric = evaluation.get("primary_metric")
+        if data.get("primary_metric") and route_metric and data["primary_metric"] != route_metric:
+            errors.append("manifest primary_metric does not match config snapshot")
 
     prediction_csv = data.get("prediction_csv")
     prediction_hash = data.get("prediction_sha256")
@@ -139,8 +193,13 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
             pass
         elif not resolved.exists():
             errors.append(f"manifest dataset_manifest_path not found: {dataset_path}")
-        elif sha256_file(resolved) != dataset_hash:
-            errors.append("manifest dataset_manifest_sha256 does not match dataset manifest")
+        else:
+            if sha256_file(resolved) != dataset_hash:
+                errors.append("manifest dataset_manifest_sha256 does not match dataset manifest")
+            dataset_data = load_yaml_file(resolved)
+            expected_dataset = route_basis.get("dataset_version") if route_basis else None
+            if expected_dataset and dataset_data.get("dataset_version") != expected_dataset:
+                errors.append("manifest dataset_manifest_path does not match route dataset_version")
 
     split_hash = data.get("split_sha256")
     split_manifest_path = data.get("split_manifest_path")
@@ -150,8 +209,13 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
             pass
         elif not resolved.exists():
             errors.append(f"manifest split_manifest_path not found: {split_manifest_path}")
-        elif sha256_file(resolved) != split_hash:
-            errors.append("manifest split_sha256 does not match split manifest")
+        else:
+            if sha256_file(resolved) != split_hash:
+                errors.append("manifest split_sha256 does not match split manifest")
+            split_data = load_yaml_file(resolved)
+            expected_split = data.get("split_id")
+            if expected_split and split_data.get("split_id") != expected_split:
+                errors.append("manifest split_manifest_path does not match manifest split_id")
     elif route_data is not None and isinstance(split_hash, str):
         split_id = route_data.get("split_id")
         if isinstance(split_id, str) and split_id:

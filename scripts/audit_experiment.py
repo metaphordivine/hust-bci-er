@@ -18,7 +18,9 @@ from hust_bci_er.audit.manifest import load_manifest, validate_manifest  # noqa:
 from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
+from hust_bci_er.evaluation.exact_single_crop import exact_all_correct_rate_from_matrix, exact_ba_from_matrix  # noqa: E402
 from hust_bci_er.evaluation.metrics import balanced_accuracy  # noqa: E402
+from hust_bci_er.inference.topk import topk_binary  # noqa: E402
 
 
 AuditCheck = dict[str, Any]
@@ -60,6 +62,51 @@ def resolve_from_root(value: str | Path, *, base: Path = ROOT) -> Path:
     return path if path.is_absolute() else base / path
 
 
+def route_primary_metric(route_data: dict[str, Any]) -> str | None:
+    evaluation = route_data.get("evaluation")
+    if isinstance(evaluation, dict):
+        metric = evaluation.get("primary_metric")
+        return str(metric) if metric is not None else None
+    return None
+
+
+def manifest_metric_value(manifest: dict[str, Any], metric_name: str) -> float | None:
+    metrics = manifest.get("metrics")
+    if not isinstance(metrics, dict) or metric_name not in metrics:
+        return None
+    try:
+        return float(metrics[metric_name])
+    except (TypeError, ValueError):
+        return None
+
+
+def compare_metric(checks: list[AuditCheck], *, metric_name: str, recomputed: float, manifest: dict[str, Any], tolerance: float = 1e-9) -> None:
+    reported = manifest_metric_value(manifest, metric_name)
+    if reported is None:
+        add_check(
+            checks,
+            rule_id="PRIMARY_METRIC_REPORTED",
+            severity="ERROR",
+            status="FAIL",
+            message=f"manifest.metrics has no numeric value for {metric_name}",
+            fix="Record the reported primary metric in manifest.metrics.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    if abs(recomputed - reported) > tolerance:
+        add_check(
+            checks,
+            rule_id="PRIMARY_METRIC_REPORTED",
+            severity="ERROR",
+            status="FAIL",
+            message=f"reported {metric_name}={reported:.12g} does not match recomputed {recomputed:.12g}",
+            fix="Regenerate the metric report from prediction artifacts.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="PRIMARY_METRIC_REPORTED", severity="INFO", status="PASS", message=f"reported {metric_name} matches recompute")
+
+
 def route_uses_top4(route_data: dict[str, Any]) -> bool:
     inference = route_data.get("inference")
     return isinstance(inference, dict) and inference.get("top4") is True
@@ -97,9 +144,17 @@ def check_split_manifest(route_data: dict[str, Any], checks: list[AuditCheck], *
         return
 
     is_placeholder = split_data.get("status") == "declared_without_subject_list"
-    has_subject_lists = any(split_data.get(key) for key in ["train_subjects", "val_subjects", "test_subjects"])
-    has_fold_definitions = bool(split_data.get("folds") or split_data.get("fold_definitions"))
-    has_trial_rows = bool(split_data.get("trial_rows"))
+    has_subject_lists = all(isinstance(split_data.get(key), list) and bool(split_data.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+    folds = split_data.get("folds") or split_data.get("fold_definitions") or []
+    has_fold_definitions = isinstance(folds, list) and bool(folds) and all(
+        isinstance(fold, dict)
+        and all(isinstance(fold.get(key), list) and bool(fold.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+        for fold in folds
+    )
+    trial_rows = split_data.get("trial_rows") or []
+    has_trial_rows = isinstance(trial_rows, list) and bool(trial_rows) and all(
+        isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
+    )
     has_verifiable_content = has_subject_lists or has_fold_definitions or has_trial_rows
     if is_placeholder or not has_verifiable_content:
         add_warn_or_fail(
@@ -108,7 +163,7 @@ def check_split_manifest(route_data: dict[str, Any], checks: list[AuditCheck], *
             fail_gate=STRICT_GATES,
             rule_id="SPLIT_MANIFEST_VERIFIABLE",
             message=f"split manifest is only a placeholder: {split_path.relative_to(ROOT)}",
-            fix="Add subject lists, fold definitions, or trial rows before candidate/promoted review.",
+            fix="Add complete train/val/test subject lists, fold definitions, or trial rows before candidate/promoted review.",
             decision_if_fail="BLOCKED",
         )
     else:
@@ -147,7 +202,15 @@ def check_dataset_manifest(route_data: dict[str, Any], checks: list[AuditCheck],
         return
 
     is_placeholder = dataset_data.get("status") == "declared_without_raw_data_index"
-    has_data_index = bool(dataset_data.get("data_sources") or dataset_data.get("checksum_manifest"))
+    data_sources = dataset_data.get("data_sources") or []
+    checksum_manifest = dataset_data.get("checksum_manifest") or []
+    has_data_sources = isinstance(data_sources, list) and bool(data_sources) and all(
+        isinstance(item, dict) and item.get("path") and item.get("kind") for item in data_sources
+    )
+    has_checksums = isinstance(checksum_manifest, list) and bool(checksum_manifest) and all(
+        isinstance(item, dict) and item.get("path") and item.get("sha256") for item in checksum_manifest
+    )
+    has_data_index = has_data_sources and has_checksums
     if is_placeholder or not has_data_index:
         add_warn_or_fail(
             checks,
@@ -155,7 +218,7 @@ def check_dataset_manifest(route_data: dict[str, Any], checks: list[AuditCheck],
             fail_gate=STRICT_GATES,
             rule_id="DATASET_MANIFEST_VERIFIABLE",
             message=f"dataset manifest is only a placeholder: {dataset_path.relative_to(ROOT)}",
-            fix="Add data source and checksum evidence before candidate/promoted review.",
+            fix="Add non-empty data_sources and checksum_manifest before candidate/promoted review.",
             decision_if_fail="BLOCKED",
         )
     else:
@@ -201,6 +264,214 @@ def top4_group_columns(fields: set[str], schema: dict[str, str | None], manifest
             return None
         columns.append(column)
     return columns
+
+
+def group_prediction_rows(rows: list[dict[str, str]], group_columns: list[str]) -> dict[str, list[dict[str, str]]]:
+    groups: dict[str, list[dict[str, str]]] = {}
+    for row in rows:
+        group_id = "|".join(str(row[col]) for col in group_columns)
+        groups.setdefault(group_id, []).append(row)
+    return groups
+
+
+def check_top4_group_semantics(
+    checks: list[AuditCheck],
+    *,
+    groups: dict[str, list[dict[str, str]]],
+    schema: dict[str, str | None],
+) -> None:
+    trial_col = schema["trial_id"]
+    top4_col = schema["pred_top4"]
+    score_col = schema["score"]
+    truth_col = schema["y_true"]
+    if trial_col is None or top4_col is None:
+        return
+
+    bad_unique: list[str] = []
+    bad_binary: list[str] = []
+    bad_truth: list[str] = []
+    bad_ranking: list[str] = []
+    for group_id, group in groups.items():
+        trial_ids = [str(row[trial_col]) for row in group]
+        if len(set(trial_ids)) != len(trial_ids):
+            bad_unique.append(group_id)
+
+        observed: list[int] = []
+        for row in group:
+            try:
+                value = float(row[top4_col])
+            except ValueError:
+                bad_binary.append(group_id)
+                value = float("nan")
+            if value not in {0.0, 1.0}:
+                bad_binary.append(group_id)
+            observed.append(int(value) if value in {0.0, 1.0} else -1)
+
+        if truth_col is not None:
+            truth_values: list[int] = []
+            for row in group:
+                try:
+                    value = float(row[truth_col])
+                except ValueError:
+                    bad_truth.append(group_id)
+                    value = float("nan")
+                if value not in {0.0, 1.0}:
+                    bad_truth.append(group_id)
+                truth_values.append(int(value) if value in {0.0, 1.0} else -1)
+            if len(group) == 8 and sum(truth_values) != 4:
+                bad_truth.append(group_id)
+
+        if score_col is not None and len(group) == 8 and all(value in {0, 1} for value in observed):
+            scores = np.array([float(row[score_col]) for row in group], dtype=float)
+            expected = topk_binary(scores, 4)
+            if not np.array_equal(expected, np.array(observed, dtype=int)):
+                bad_ranking.append(group_id)
+
+    for rule_id, bad, message, fix in [
+        ("PREDICTION_TRIAL_ID_UNIQUE", bad_unique, "duplicate trial_id values inside Top-4 groups", "Ensure each Top-4 group has 8 unique trial_id values."),
+        ("PREDICTION_TOP4_BINARY", bad_binary, "pred_top4 contains non-binary values", "Encode pred_top4 as 0 or 1 only."),
+        ("PREDICTION_TOP4_TRUTH_BALANCE", bad_truth, "y_true is not binary or not 4 positives per 8-trial group", "For labeled Top-4 audits, each 8-trial group should contain 4 positive labels."),
+        ("PREDICTION_TOP4_RANKING", bad_ranking, "pred_top4 does not match score-derived top 4", "Regenerate pred_top4 from score using the repository Top-4 policy."),
+    ]:
+        if bad:
+            add_check(
+                checks,
+                rule_id=rule_id,
+                severity="ERROR",
+                status="FAIL",
+                message=f"{message}: {', '.join(sorted(set(bad))[:5])}",
+                fix=fix,
+                decision_if_fail="DIAGNOSTIC_ONLY",
+            )
+        else:
+            add_check(checks, rule_id=rule_id, severity="INFO", status="PASS", message="Top-4 semantic check passed")
+
+
+def metric_group_columns(fields: set[str], schema: dict[str, str | None], manifest: dict[str, Any]) -> list[str] | None:
+    raw_keys = manifest.get("metric_group_keys") or manifest.get("top4_group_keys") or ["subject_id"]
+    if not isinstance(raw_keys, list) or not raw_keys:
+        return None
+    columns: list[str] = []
+    for key in raw_keys:
+        if not isinstance(key, str):
+            return None
+        column = canonical_prediction_column(key, schema) or (key if key in fields else None)
+        if column is None:
+            return None
+        columns.append(column)
+    return columns
+
+
+def crop_score_columns(fields: set[str]) -> list[str]:
+    candidates = [f"crop_{idx}" for idx in range(5)]
+    if all(col in fields for col in candidates):
+        return candidates
+    candidates = [f"crop{idx}" for idx in range(5)]
+    if all(col in fields for col in candidates):
+        return candidates
+    return []
+
+
+def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest: dict[str, Any]) -> float:
+    with path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        fields = set(reader.fieldnames or [])
+    schema = prediction_schema(fields)
+    group_cols = metric_group_columns(fields, schema, manifest)
+    score_cols = crop_score_columns(fields)
+    truth_col = schema["y_true"]
+    if group_cols is None or truth_col is None or len(score_cols) != 5:
+        raise ValueError("score matrix CSV must include group keys, y_true, and crop_0..crop_4 columns")
+    groups = group_prediction_rows(rows, group_cols)
+    values: list[float] = []
+    for group_id, group in groups.items():
+        if len(group) != 8:
+            raise ValueError(f"exact metric group must contain 8 trials: {group_id}")
+        mat = np.array([[float(row[col]) for col in score_cols] for row in group], dtype=float)
+        y_true = np.array([int(float(row[truth_col])) for row in group], dtype=int)
+        if metric_name == "exact_single_crop_expected_BA":
+            values.append(exact_ba_from_matrix(mat, y_true))
+        elif metric_name == "all_correct_rate":
+            values.append(exact_all_correct_rate_from_matrix(mat, y_true))
+        else:
+            raise ValueError(f"unsupported exact metric: {metric_name}")
+    if not values:
+        raise ValueError("score matrix CSV has no metric groups")
+    return float(np.mean(values))
+
+
+def recompute_primary_metric_from_predictions(
+    *,
+    metric_name: str,
+    rows: list[dict[str, str]],
+    fields: set[str],
+    schema: dict[str, str | None],
+    manifest: dict[str, Any],
+) -> float:
+    if metric_name in {"no_top4_BA", "top4_BA"}:
+        if schema["y_true"] is None or schema["y_pred"] is None:
+            raise ValueError("prediction CSV must include y_true and y_pred")
+        y_true = np.array([int(float(row[schema["y_true"]])) for row in rows], dtype=int)
+        y_pred = np.array([int(float(row[schema["y_pred"]])) for row in rows], dtype=int)
+        return balanced_accuracy(y_true, y_pred)
+
+    if metric_name == "all_correct_rate":
+        if schema["y_true"] is None or schema["y_pred"] is None:
+            raise ValueError("prediction CSV must include y_true and y_pred")
+        group_cols = metric_group_columns(fields, schema, manifest)
+        if group_cols is None:
+            raise ValueError("metric group keys are missing")
+        groups = group_prediction_rows(rows, group_cols)
+        y_true_matrix = []
+        y_pred_matrix = []
+        for group_id, group in groups.items():
+            if len(group) != 8:
+                raise ValueError(f"all-correct group must contain 8 trials: {group_id}")
+            y_true_matrix.append([int(float(row[schema["y_true"]])) for row in group])
+            y_pred_matrix.append([int(float(row[schema["y_pred"]])) for row in group])
+        from hust_bci_er.evaluation.metrics import all_correct_rate
+
+        return all_correct_rate(np.array(y_true_matrix), np.array(y_pred_matrix))
+
+    raise ValueError(f"primary metric requires metric_inputs: {metric_name}")
+
+
+def check_primary_metric(
+    checks: list[AuditCheck],
+    *,
+    manifest: dict[str, Any],
+    route_data: dict[str, Any],
+    rows: list[dict[str, str]],
+    fields: set[str],
+    schema: dict[str, str | None],
+    run_dir: Path,
+    gate: str,
+) -> None:
+    metric_name = route_primary_metric(route_data)
+    if metric_name is None:
+        return
+    try:
+        metric_inputs = manifest.get("metric_inputs")
+        if isinstance(metric_inputs, dict) and isinstance(metric_inputs.get("score_matrix_csv"), str):
+            score_matrix_path = resolve_from_root(metric_inputs["score_matrix_csv"], base=run_dir)
+            recomputed = recompute_exact_metric_from_matrix(score_matrix_path, metric_name=metric_name, manifest=manifest)
+        else:
+            recomputed = recompute_primary_metric_from_predictions(metric_name=metric_name, rows=rows, fields=fields, schema=schema, manifest=manifest)
+    except Exception as exc:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="PRIMARY_METRIC_RECOMPUTE",
+            message=f"primary metric could not be recomputed: {exc}",
+            fix="Provide the prediction or metric_inputs artifacts required by the route primary metric.",
+            decision_if_fail="DIAGNOSTIC_ONLY",
+        )
+        return
+
+    add_check(checks, rule_id="PRIMARY_METRIC_RECOMPUTE", severity="INFO", status="PASS", message=f"recomputed {metric_name}: {recomputed:.6f}")
+    compare_metric(checks, metric_name=metric_name, recomputed=recomputed, manifest=manifest)
 
 
 def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: dict[str, Any], gate: str, manifest: dict[str, Any]) -> None:
@@ -295,6 +566,7 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             )
         else:
             add_check(checks, rule_id="PREDICTION_TOP4_GROUPS", severity="INFO", status="PASS", message="Top-4 groups are valid")
+        check_top4_group_semantics(checks, groups=groups, schema=schema)
     else:
         if not top4_required:
             add_check(
@@ -333,6 +605,8 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             fix="For labeled validation runs, include y_true and y_pred in the prediction CSV.",
             decision_if_fail="DIAGNOSTIC_ONLY",
         )
+
+    check_primary_metric(checks, manifest=manifest, route_data=route_data, rows=rows, fields=fields, schema=schema, run_dir=path.parent, gate=gate)
 
 
 def enforce_gate_strictness(checks: list[AuditCheck], *, gate: str) -> None:

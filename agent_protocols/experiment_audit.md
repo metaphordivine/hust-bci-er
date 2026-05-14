@@ -73,6 +73,12 @@ Prediction manifests may set:
 
 Use `top4_group_keys` when a prediction table combines repeated folds or seeds.
 
+Candidate and promoted gates must prove semantic correctness:
+
+- `PRIMARY_METRIC_RECOMPUTE` recomputes the route's declared `evaluation.primary_metric`.
+- `PREDICTION_TOP4_RANKING` verifies `pred_top4` is derived from the score column by the repository Top-4 policy.
+- `PREDICTION_TRIAL_ID_UNIQUE`, `PREDICTION_TOP4_BINARY`, and `PREDICTION_TOP4_TRUTH_BALANCE` must pass when Top-4 labels are present.
+
 ## Gate Types
 
 | Gate | When | Contents |

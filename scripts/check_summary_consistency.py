@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SUMMARY_REQUIRED_STATUSES = {"CANDIDATE", "PROMOTED", "REJECTED", "ARCHIVED"}
+REQUIRED_SUMMARY_TOKENS = {
+    "route_id:",
+    "route_status:",
+    "audit_decision:",
+    "gate:",
+    "primary_metric:",
+    "decision:",
+    "reproduce:",
+}
+
+
+def route_files() -> list[Path]:
+    return sorted((ROOT / "configs" / "routes" / "models").glob("*.yaml"))
+
+
+def load_yaml(path: Path) -> dict:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def main() -> int:
+    errors: list[str] = []
+    summary_root = ROOT / "reports" / "route_summaries"
+    routes = {load_yaml(path).get("route_id"): load_yaml(path) for path in route_files()}
+
+    for route_id, data in routes.items():
+        if not isinstance(route_id, str):
+            continue
+        summary = summary_root / f"{route_id}_summary.md"
+        if data.get("status") in SUMMARY_REQUIRED_STATUSES and not summary.exists():
+            errors.append(f"summary required for {route_id}: {summary.relative_to(ROOT)}")
+
+    for summary in summary_root.glob("*_summary.md"):
+        route_id = summary.name.removesuffix("_summary.md")
+        text = summary.read_text(encoding="utf-8", errors="ignore")
+        if route_id not in routes:
+            errors.append(f"summary has no matching route config: {summary.relative_to(ROOT)}")
+            continue
+        if f"route_id: {route_id}" not in text:
+            errors.append(f"summary route_id does not match file name: {summary.relative_to(ROOT)}")
+        missing = sorted(token for token in REQUIRED_SUMMARY_TOKENS if token not in text)
+        if missing:
+            errors.append(f"summary missing tokens {missing}: {summary.relative_to(ROOT)}")
+
+    if errors:
+        print("Summary consistency check failed:")
+        for err in errors:
+            print(f"  - {err}")
+        return 1
+    print("Summary consistency check passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

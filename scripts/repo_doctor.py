@@ -19,7 +19,9 @@ def fast() -> int:
         [sys.executable, "scripts/check_repo_conventions.py"],
         [sys.executable, "scripts/validate_route.py", "--all"],
         [sys.executable, "scripts/update_route_board.py", "--check"],
-        [sys.executable, "-m", "pytest", "tests", "-q"],
+        [sys.executable, "scripts/check_summary_consistency.py"],
+        [sys.executable, "-m", "compileall", "-q", "src", "scripts"],
+        [sys.executable, "-m", "pytest", "tests", "-q", "--basetemp=.pytest_tmp"],
     ]
     for cmd in commands:
         code = run_step(cmd)
