@@ -1,4 +1,4 @@
-route_id: eps3e4_conf_zavg
+route_id: conformer_srfnet_whitening_eps3e4_average
 status: IDEA
 dataset_version: train_v1
 split_id: route_component_split_v1
@@ -8,8 +8,8 @@ preprocessing: [whitening_eps3e4]
 features: []
 model:
   name: score_fusion
-  score_node: eps3e4_score
-  components: [conf_component, eps3e4_component]
+  score_node: conformer_srfnet_whitening_eps3e4_average
+  components: [conformer_component, srfnet_whitening_eps3e4_component]
 adaptation: none
 inference:
   top4: true

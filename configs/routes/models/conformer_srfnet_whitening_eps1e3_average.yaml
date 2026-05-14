@@ -1,15 +1,15 @@
-route_id: s9_z_avg
+route_id: conformer_srfnet_whitening_eps1e3_average
 status: IDEA
 dataset_version: train_v1
 split_id: route_component_split_v1
 seed: 42
 input_window_sec: 10
-preprocessing: [zscore]
+preprocessing: [whitening_eps1e3]
 features: []
 model:
   name: score_fusion
-  score_node: s9_score
-  components: [conf_component, srf_long_component]
+  score_node: conformer_srfnet_whitening_eps1e3_average
+  components: [conformer_component, srfnet_whitening_eps1e3_component]
 adaptation: none
 inference:
   top4: true

@@ -1,4 +1,4 @@
-route_id: h030_eps1e3_heuristic_blend
+route_id: conformer_srfnet_whitening_eps1e3_handcrafted_weight40_average
 status: IDEA
 dataset_version: train_v1
 split_id: route_component_split_v1
@@ -8,8 +8,8 @@ preprocessing: [whitening_eps1e3]
 features: [bandpower, differential_entropy, hjorth]
 model:
   name: score_fusion
-  score_node: h030_score
-  components: [conf_component, eps1e3_component, heuristic_component]
+  score_node: conformer_srfnet_whitening_eps1e3_handcrafted_weight40_average
+  components: [conformer_component, srfnet_whitening_eps1e3_component, handcrafted_feature_component]
 adaptation: none
 inference:
   top4: true

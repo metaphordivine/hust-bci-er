@@ -1,4 +1,4 @@
-route_id: old_whitening_clean
+route_id: whitening_eps1e3_with_conformer_srfnet_reference_average
 status: IDEA
 dataset_version: train_v1
 split_id: route_component_split_v1
@@ -8,8 +8,8 @@ preprocessing: [whitening_eps1e3]
 features: []
 model:
   name: score_fusion
-  score_node: old_whitening_clean_score
-  components: [conf_component, srf_long_component, eps1e3_component]
+  score_node: whitening_eps1e3_with_conformer_srfnet_reference_average
+  components: [conformer_component, srfnet_long_component, srfnet_whitening_eps1e3_component]
 adaptation: none
 inference:
   top4: true
@@ -17,5 +17,5 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: clean old+whitening score-fusion ablation without trial-prior components
+notes: score-fusion ablation combining whitening eps1e3 scores with conformer and srfnet reference scores
 
