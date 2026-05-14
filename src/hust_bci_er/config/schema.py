@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import registry
+from hust_bci_er.inference.clean_score_routes import score_route_by_id
 
 
 REQUIRED_TOP_LEVEL = {
@@ -89,6 +90,13 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
     name = model_name(data.get("model"))
     if name not in registry.MODELS:
         errors.append(f"unknown model component: {name}")
+    model = data.get("model")
+    if name == "score_fusion":
+        validate_score_fusion_model(data, model, route_id, errors)
+    elif isinstance(model, dict):
+        for field in ["score_node", "components"]:
+            if field in model:
+                errors.append(f"model.{field} is only allowed for score_fusion routes")
 
     adaptation = nested_name(data.get("adaptation")) or "none"
     if adaptation not in registry.ADAPTATION:
@@ -113,13 +121,22 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
         errors.append(f"unknown primary metric: {metric}")
 
     inference = data.get("inference")
+    top4 = None
     if not isinstance(inference, dict):
         errors.append("inference must be a mapping")
     else:
+        top4 = inference.get("top4")
         if "top4" not in inference:
             errors.append("inference.top4 is required")
         if "crop_policy" not in inference:
             errors.append("inference.crop_policy is required")
+
+    if metric == "top4_BA" and top4 is not True:
+        errors.append("top4_BA requires inference.top4: true")
+    if metric == "no_top4_BA" and top4 is not False:
+        errors.append("no_top4_BA requires inference.top4: false")
+    if metric in {"exact_single_crop_expected_BA", "all_correct_rate"} and top4 is not True:
+        errors.append(f"{metric} requires inference.top4: true")
 
     for required in ["dataset_version", "split_id"]:
         if not data.get(required):
@@ -139,5 +156,33 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
 
     if "tier" in data:
         errors.append("tier is not allowed; all routes are peers before audit")
+    if "output_dir" in data:
+        errors.append("output_dir is derived from route_id/run_id and must not be set in route config")
 
     return errors
+
+
+def validate_score_fusion_model(data: dict[str, Any], model: Any, route_id: Any, errors: list[str]) -> None:
+    if not isinstance(model, dict):
+        errors.append("score_fusion model must be a mapping with score_node and components")
+        return
+
+    score_node = model.get("score_node")
+    if not isinstance(score_node, str) or not score_node:
+        errors.append("score_fusion model.score_node is required")
+
+    components = model.get("components")
+    if not isinstance(components, list) or not components or not all(isinstance(item, str) and item for item in components):
+        errors.append("score_fusion model.components must be a non-empty list of strings")
+        return
+
+    if not isinstance(route_id, str) or not route_id:
+        return
+    route = score_route_by_id(route_id)
+    if route is None:
+        errors.append(f"score_fusion route is not registered in CLEAN_SCORE_ROUTES: {route_id}")
+        return
+    if score_node != route.score_node:
+        errors.append(f"score_fusion score_node must match registered node: {route.score_node}")
+    if tuple(components) != route.components:
+        errors.append(f"score_fusion components must match registered components: {list(route.components)}")

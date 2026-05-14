@@ -30,6 +30,29 @@ python scripts/repo_doctor.py fast
 - 不使用 public/private labels、leaderboard feedback 或 ID-derived shortcut。
 - 不静默修改 split、评估协议或 route 生命周期状态。
 
+## 当前实现边界
+
+已实现并由 fast gate 覆盖：
+
+- route schema、registry、route board、summary consistency。
+- manifest / prediction / Top-4 / primary metric 的审计逻辑。
+- 基础预处理、手工特征、Top-4、score route 组装函数。
+- score route 从 component score CSV 到 `score/pred_top4` prediction table 的最小执行入口。
+
+仍属于预留或后续实现：
+
+- 完整训练 loop。
+- 完整 P1/P2/P3 protocol runner。
+- 图模型、heads、复杂训练 callback。
+- candidate 级真实实验结果。
+
+Torch 模型 forward smoke 不在默认 fast gate 中运行；改动模型路径时由 `.github/workflows/model_smoke.yml` 触发，也可以手动运行：
+
+```bash
+pip install -e ".[dev,models]"
+python scripts/model_smoke.py
+```
+
 ## 实验审计
 
 route-only smoke 可以不提供 run directory：
@@ -47,6 +70,16 @@ python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir> 
 candidate gate 会检查 manifest、prediction CSV、Top-4 语义、主指标复算、split/dataset 证据、summary 绑定证据。
 
 promoted gate 还需要 `reports/promotion_audits/<route_id>_promotion.md`，并引用一个通过的 candidate audit report。
+
+score route 可用这个入口从 component score CSV 组装 prediction table：
+
+```bash
+python scripts/assemble_score_route.py \
+  --route configs/routes/models/conformer_srfnet_score_average.yaml \
+  --component-score conformer_component=<conformer_scores.csv> \
+  --component-score srfnet_long_component=<srfnet_scores.csv> \
+  --output outputs/<route_id>/<run_id>/predictions.csv
+```
 
 ## 结果记录
 

@@ -1,0 +1,32 @@
+name: model-smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/hust_bci_er/models/**"
+      - "src/hust_bci_er/adaptation/**"
+      - "src/hust_bci_er/config/registry.py"
+      - "scripts/model_smoke.py"
+      - "pyproject.toml"
+      - ".github/workflows/model_smoke.yml"
+
+jobs:
+  model-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install model dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,models]"
+
+      - name: Run model smoke
+        run: python scripts/model_smoke.py
