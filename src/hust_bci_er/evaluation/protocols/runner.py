@@ -235,17 +235,25 @@ def split_contract_payload(jobs: Sequence[ProtocolJob]) -> dict[str, Any]:
         "route_id": job.route_id,
         "job_ids": [item.job_id for item in jobs],
         "stages": sorted({item.stage for item in jobs}),
-        "seed": job.seed,
         "subject_group_split": True,
         "train_subjects": [],
         "val_subjects": [],
         "test_subjects": [],
         "trial_rows": [],
     }
-    for key in ["fold", "outer_fold", "inner_fold", "param_index"]:
-        value = getattr(job, key)
-        if value is not None:
-            payload[key] = value
+    scalar_or_list_fields = {
+        "seed": "seeds",
+        "fold": "folds",
+        "outer_fold": "outer_folds",
+        "inner_fold": "inner_folds",
+        "param_index": "param_indices",
+    }
+    for key, plural_key in scalar_or_list_fields.items():
+        values = sorted({getattr(item, key) for item in jobs if getattr(item, key) is not None})
+        if len(values) == 1:
+            payload[key] = values[0]
+        elif len(values) > 1:
+            payload[plural_key] = values
     crop_policies = [dict(item.crop_policy) for item in jobs if isinstance(item.crop_policy, Mapping)]
     if crop_policies:
         payload["crop_policies"] = crop_policies

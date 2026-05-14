@@ -22,19 +22,21 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
 
 
 def prediction_column_for_metric(primary_metric: str, fields: set[str]) -> str:
+    schema = prediction_schema(fields)
     if primary_metric == "no_top4_BA":
-        if "y_pred" not in fields:
-            raise ValueError("no_top4_BA requires y_pred")
-        return "y_pred"
+        column = canonical_prediction_column("y_pred", schema)
+        if column is None:
+            raise ValueError("no_top4_BA requires y_pred or pred")
+        return column
     if primary_metric == "top4_BA":
-        if "pred_top4" not in fields:
-            raise ValueError("top4_BA requires pred_top4")
-        return "pred_top4"
-    if "pred_top4" in fields:
-        return "pred_top4"
-    if "y_pred" in fields:
-        return "y_pred"
-    raise ValueError(f"{primary_metric} requires pred_top4 or y_pred")
+        column = canonical_prediction_column("pred_top4", schema)
+        if column is None:
+            raise ValueError("top4_BA requires pred_top4 or y_pred_top4")
+        return column
+    column = canonical_prediction_column("pred_top4", schema) or canonical_prediction_column("y_pred", schema)
+    if column is not None:
+        return column
+    raise ValueError(f"{primary_metric} requires pred_top4/y_pred_top4 or y_pred/pred")
 
 
 def subject_ba_rows(

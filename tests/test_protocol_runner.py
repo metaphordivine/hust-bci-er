@@ -84,6 +84,25 @@ def test_protocol_runner_counts_p1_and_p3_jobs():
     assert all(job.split_id != job.source_split_id for job in p3_jobs)
 
 
+def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_path):
+    manifest = materialize_protocol_run(
+        "p3",
+        [ROUTE],
+        run_dir=tmp_path / "p3_run",
+        outer_folds=2,
+        inner_folds=2,
+        grid_sizes={"ea_deformer": 3},
+    )
+    inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
+
+    split_payload = yaml.safe_load((tmp_path / "p3_run" / inner_job["split_manifest_path"]).read_text(encoding="utf-8"))
+
+    assert "param_index" not in split_payload
+    assert split_payload["param_indices"] == [0, 1, 2]
+    assert "seed" not in split_payload
+    assert split_payload["seeds"] == [123, 124, 125]
+
+
 def test_write_run_manifest_locks_artifact_hashes(monkeypatch, tmp_path):
     lock_pythonhashseed(monkeypatch, 42)
     run_dir = tmp_path / "run"

@@ -96,6 +96,32 @@ def test_metric_report_builder_uses_y_pred_for_no_top4_metric(tmp_path):
     assert report["metrics"]["no_top4_BA"] == 1.0
 
 
+def test_metric_report_builder_accepts_prediction_alias_columns(tmp_path):
+    no_top4_csv = tmp_path / "no_top4_alias.csv"
+    no_top4_csv.write_text(
+        "user_id,trial_id,score,pred,y_true\n"
+        "s1,t0,0.1,0,0\n"
+        "s1,t1,0.8,1,1\n",
+        encoding="utf-8",
+    )
+
+    no_top4_report = build_metric_report(route_id="r1", prediction_csv=no_top4_csv, primary_metric="no_top4_BA")
+
+    assert no_top4_report["metrics"]["no_top4_BA"] == 1.0
+
+    top4_csv = tmp_path / "top4_alias.csv"
+    top4_csv.write_text(
+        "subject_id,trial_id,score,y_pred_top4,y_true\n"
+        + "\n".join(f"s1,t{idx},{1.0 - idx * 0.01},{1 if idx < 4 else 0},{1 if idx < 4 else 0}" for idx in range(8))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    top4_report = build_metric_report(route_id="r1", prediction_csv=top4_csv, primary_metric="top4_BA")
+
+    assert top4_report["metrics"]["top4_BA"] == 1.0
+
+
 def test_metric_report_builder_supports_score_matrix_exact_metric(tmp_path):
     score_matrix = tmp_path / "score_matrix.csv"
     lines = ["subject_id,trial_id,y_true,crop_0,crop_1,crop_2,crop_3,crop_4"]

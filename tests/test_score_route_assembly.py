@@ -71,6 +71,37 @@ def test_assemble_score_route_rows_uses_seed_fold_alignment_keys(tmp_path):
     assert sum(int(row["pred_top4"]) for row in rows if row["seed"] == "2") == 4
 
 
+def test_assemble_score_route_rows_uses_crop_id_alignment_key(tmp_path):
+    route_config = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
+    conformer = tmp_path / "conformer.csv"
+    srfnet = tmp_path / "srfnet.csv"
+    header = "component_id,subject_id,trial_id,crop_id,score\n"
+    conformer_lines = []
+    srfnet_lines = []
+    for crop_id in (0, 1):
+        for idx in range(8):
+            conformer_lines.append(f"conformer_component,s1,t{idx},{crop_id},{8 - idx + crop_id * 0.01}")
+            srfnet_lines.append(f"srfnet_long_component,s1,t{idx},{crop_id},{7 - idx + crop_id * 0.01}")
+    conformer.write_text(header + "\n".join(conformer_lines) + "\n", encoding="utf-8")
+    srfnet.write_text(header + "\n".join(srfnet_lines) + "\n", encoding="utf-8")
+
+    rows = assemble_score_route_rows(
+        route_config,
+        {
+            "conformer_component": conformer,
+            "srfnet_long_component": srfnet,
+        },
+    )
+    out = tmp_path / "predictions.csv"
+    write_score_route_rows(rows, out)
+
+    assert len(rows) == 16
+    assert {row["crop_id"] for row in rows} == {"0", "1"}
+    assert sum(int(row["pred_top4"]) for row in rows if row["crop_id"] == "0") == 4
+    assert sum(int(row["pred_top4"]) for row in rows if row["crop_id"] == "1") == 4
+    assert "crop_id" in out.read_text(encoding="utf-8").splitlines()[0]
+
+
 def test_assemble_score_route_rows_preserves_consistent_y_true_and_component_id(tmp_path):
     route_config = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
     conformer = tmp_path / "conformer.csv"

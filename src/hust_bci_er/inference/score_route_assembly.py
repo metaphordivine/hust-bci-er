@@ -48,7 +48,7 @@ def read_component_score_table(path: Path, *, component_id: str | None = None) -
                 raise ValueError(f"component score table component_id does not match {component_id}: {path} ({actual})")
 
     optional_key_cols: list[str] = []
-    for col in ("seed", "fold"):
+    for col in ("seed", "fold", "crop_id"):
         if col not in rows[0]:
             continue
         present = [row.get(col) not in {None, ""} for row in rows]
@@ -189,8 +189,9 @@ def assemble_score_route_rows(route_config_path: Path, component_score_paths: Ma
 def write_score_route_rows(rows: list[dict[str, str]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_fields = [field for field in ("seed", "fold") if any(field in row for row in rows)]
+    crop_fields = ["crop_id"] if any("crop_id" in row for row in rows) else []
     truth_fields = ["y_true"] if any("y_true" in row for row in rows) else []
-    fieldnames = ["route_id", *metadata_fields, "subject_id", "trial_id", "score", "pred_top4", *truth_fields]
+    fieldnames = ["route_id", *metadata_fields, "subject_id", "trial_id", *crop_fields, "score", "pred_top4", *truth_fields]
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
