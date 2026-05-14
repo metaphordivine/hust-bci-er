@@ -16,12 +16,15 @@
 2. `docs/04_evaluation_protocols.md`
 3. `AGENTS.md`
 4. `agent_protocols/experiment_audit.md`
+5. `agent_protocols/skill_router.md`
 
 然后运行仓库 fast gate：
 
 ```bash
 python scripts/repo_doctor.py fast
 ```
+
+人类不需要记住具体 skill 名。直接描述任务场景即可，agent 必须按 `agent_protocols/skill_router.md` 自动选择对应 skill、运行命令并用中文汇报结果。
 
 ## 基本原则
 

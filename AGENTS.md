@@ -8,8 +8,24 @@ Before code, experiment, or report changes:
 
 1. Read `README.md`.
 2. Read `docs/目录怎么用.md`.
-3. Read `agent_protocols/experiment_audit.md`.
-4. Read this file.
+3. Read `docs/04_evaluation_protocols.md`.
+4. Read `agent_protocols/experiment_audit.md`.
+5. Read `agent_protocols/skill_router.md`.
+6. Read this file.
+
+## Skill Routing
+
+Humans do not need to name the exact repository skill. If a request describes a scenario, the agent must choose the matching skill from `agent_protocols/skill_router.md`, state the selected skill briefly, and follow its required commands and completion gate.
+
+If multiple skills are required, state the order before editing. Use the narrowest skill that satisfies the task and do not touch unrelated files.
+
+Examples:
+
+- "run repo health check" -> Repository Fast Gate.
+- "can this run become candidate?" -> Experiment Audit Skill.
+- "compare P1/P2/P3 workload" -> Evaluation Protocol Planning Skill.
+- "assemble component scores" -> Score Route Assembly Skill.
+- "review this PR" -> Chinese Code Review Skill.
 
 ## Allowed
 
