@@ -29,6 +29,8 @@ If a run directory exists:
 python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir> --gate candidate
 ```
 
+For `smoke` or `diagnostic` route-only checks, `--run` may be omitted. For `candidate` or `promoted`, missing run artifacts are blocking.
+
 The experiment gate writes:
 
 ```text
@@ -59,6 +61,17 @@ Gate behavior:
 | all required checks pass | route may advance to its requested lifecycle status |
 
 `WARN` is allowed to keep diagnostic evidence, but it never supports promotion to `CANDIDATE` or `PROMOTED`.
+
+Prediction manifests may set:
+
+```json
+{
+  "prediction_record_level": "trial",
+  "top4_group_keys": ["seed", "fold", "subject_id"]
+}
+```
+
+Use `top4_group_keys` when a prediction table combines repeated folds or seeds.
 
 ## Gate Types
 

@@ -17,7 +17,7 @@ sys.path.insert(0, str(SRC))
 from hust_bci_er.audit.manifest import load_manifest, validate_manifest  # noqa: E402
 from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
-from hust_bci_er.contracts.prediction import prediction_schema  # noqa: E402
+from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
 from hust_bci_er.evaluation.metrics import balanced_accuracy  # noqa: E402
 
 
@@ -65,6 +65,103 @@ def route_uses_top4(route_data: dict[str, Any]) -> bool:
     return isinstance(inference, dict) and inference.get("top4") is True
 
 
+def check_split_manifest(route_data: dict[str, Any], checks: list[AuditCheck], *, gate: str) -> None:
+    split_id = route_data.get("split_id")
+    if not isinstance(split_id, str) or not split_id:
+        return
+
+    split_path = ROOT / "configs" / "splits" / f"{split_id}.yaml"
+    if not split_path.exists():
+        add_check(
+            checks,
+            rule_id="SPLIT_MANIFEST_EXISTS",
+            severity="CRITICAL",
+            status="FAIL",
+            message=f"split manifest is missing: {split_path.relative_to(ROOT)}",
+            fix="Add configs/splits/<split_id>.yaml before auditing this route.",
+            decision_if_fail="REJECT",
+        )
+        return
+
+    split_data = load_yaml(split_path)
+    if split_data.get("split_id") != split_id:
+        add_check(
+            checks,
+            rule_id="SPLIT_MANIFEST_ID_MATCH",
+            severity="CRITICAL",
+            status="FAIL",
+            message=f"split manifest id does not match route split_id: {split_id}",
+            fix="Make split_id match the split manifest file name and contents.",
+            decision_if_fail="REJECT",
+        )
+        return
+
+    is_placeholder = split_data.get("status") == "declared_without_subject_list"
+    has_subject_lists = any(split_data.get(key) for key in ["train_subjects", "val_subjects", "test_subjects"])
+    has_fold_definitions = bool(split_data.get("folds") or split_data.get("fold_definitions"))
+    has_trial_rows = bool(split_data.get("trial_rows"))
+    has_verifiable_content = has_subject_lists or has_fold_definitions or has_trial_rows
+    if is_placeholder or not has_verifiable_content:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="SPLIT_MANIFEST_VERIFIABLE",
+            message=f"split manifest is only a placeholder: {split_path.relative_to(ROOT)}",
+            fix="Add subject lists, fold definitions, or trial rows before candidate/promoted review.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="SPLIT_MANIFEST_VERIFIABLE", severity="INFO", status="PASS", message="split manifest has verifiable split content")
+
+
+def check_dataset_manifest(route_data: dict[str, Any], checks: list[AuditCheck], *, gate: str) -> None:
+    dataset_version = route_data.get("dataset_version")
+    if not isinstance(dataset_version, str) or not dataset_version:
+        return
+
+    dataset_path = ROOT / "configs" / "datasets" / f"{dataset_version}.yaml"
+    if not dataset_path.exists():
+        add_check(
+            checks,
+            rule_id="DATASET_MANIFEST_EXISTS",
+            severity="CRITICAL",
+            status="FAIL",
+            message=f"dataset manifest is missing: {dataset_path.relative_to(ROOT)}",
+            fix="Add configs/datasets/<dataset_version>.yaml before auditing this route.",
+            decision_if_fail="REJECT",
+        )
+        return
+
+    dataset_data = load_yaml(dataset_path)
+    if dataset_data.get("dataset_version") != dataset_version:
+        add_check(
+            checks,
+            rule_id="DATASET_MANIFEST_ID_MATCH",
+            severity="CRITICAL",
+            status="FAIL",
+            message=f"dataset manifest id does not match route dataset_version: {dataset_version}",
+            fix="Make dataset_version match the dataset manifest file name and contents.",
+            decision_if_fail="REJECT",
+        )
+        return
+
+    is_placeholder = dataset_data.get("status") == "declared_without_raw_data_index"
+    has_data_index = bool(dataset_data.get("data_sources") or dataset_data.get("checksum_manifest"))
+    if is_placeholder or not has_data_index:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="DATASET_MANIFEST_VERIFIABLE",
+            message=f"dataset manifest is only a placeholder: {dataset_path.relative_to(ROOT)}",
+            fix="Add data source and checksum evidence before candidate/promoted review.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="DATASET_MANIFEST_VERIFIABLE", severity="INFO", status="PASS", message="dataset manifest has verifiable data evidence")
+
+
 def add_warn_or_fail(
     checks: list[AuditCheck],
     *,
@@ -89,7 +186,24 @@ def add_warn_or_fail(
         add_check(checks, rule_id=rule_id, severity="WARN", status="WARN", message=message, fix=fix)
 
 
-def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: dict[str, Any], gate: str) -> None:
+def top4_group_columns(fields: set[str], schema: dict[str, str | None], manifest: dict[str, Any]) -> list[str] | None:
+    raw_keys = manifest.get("top4_group_keys") or ["subject_id"]
+    if not isinstance(raw_keys, list) or not raw_keys:
+        return None
+    columns: list[str] = []
+    for key in raw_keys:
+        if not isinstance(key, str):
+            return None
+        column = canonical_prediction_column(key, schema)
+        if column is None:
+            column = key if key in fields else None
+        if column is None:
+            return None
+        columns.append(column)
+    return columns
+
+
+def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: dict[str, Any], gate: str, manifest: dict[str, Any]) -> None:
     if not path.exists():
         add_check(
             checks,
@@ -134,15 +248,41 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
         add_check(checks, rule_id="PREDICTION_SCORE_COLUMN", severity="INFO", status="PASS", message="score column found")
 
     top4_required = route_uses_top4(route_data)
+    record_level = str(manifest.get("prediction_record_level") or "trial")
+    if top4_required and record_level != "trial":
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate={"diagnostic", "candidate", "promoted"},
+            rule_id="PREDICTION_RECORD_LEVEL",
+            message=f"Top-4 audit expects trial-level predictions, got: {record_level}",
+            fix="Aggregate predictions to trial level before Top-4 audit, or set the correct route inference policy.",
+            decision_if_fail="BLOCKED",
+        )
+
     if schema["subject_id"] and schema["trial_id"] and schema["pred_top4"]:
+        group_columns = top4_group_columns(fields, schema, manifest)
+        if group_columns is None:
+            add_warn_or_fail(
+                checks,
+                gate=gate,
+                fail_gate={"diagnostic", "candidate", "promoted"} if top4_required else {"promoted"},
+                rule_id="PREDICTION_TOP4_GROUP_KEYS",
+                message="Top-4 group keys are not available in prediction CSV",
+                fix="Set manifest top4_group_keys to columns such as subject_id, or include those columns.",
+                decision_if_fail="BLOCKED",
+            )
+            group_columns = [schema["subject_id"]]
+
         bad_groups: list[str] = []
         groups: dict[str, list[dict[str, str]]] = {}
         for row in rows:
-            groups.setdefault(str(row[schema["subject_id"]]), []).append(row)
-        for subject_id, group in groups.items():
+            group_id = "|".join(str(row[col]) for col in group_columns)
+            groups.setdefault(group_id, []).append(row)
+        for group_id, group in groups.items():
             n_pred = sum(int(float(row[schema["pred_top4"]])) for row in group)
             if len(group) != 8 or n_pred != 4:
-                bad_groups.append(f"{subject_id}: rows={len(group)}, pred_top4={n_pred}")
+                bad_groups.append(f"{group_id}: rows={len(group)}, pred_top4={n_pred}")
         if bad_groups:
             add_check(
                 checks,
@@ -156,15 +296,24 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
         else:
             add_check(checks, rule_id="PREDICTION_TOP4_GROUPS", severity="INFO", status="PASS", message="Top-4 groups are valid")
     else:
-        add_warn_or_fail(
-            checks,
-            gate=gate,
-            fail_gate={"diagnostic", "candidate", "promoted"} if top4_required else {"promoted"},
-            rule_id="PREDICTION_TOP4_GROUPS",
-            message="Top-4 group columns are not present",
-            fix="For Top-4 audits, include subject_id or user_id, trial_id, and pred_top4.",
-            decision_if_fail="BLOCKED",
-        )
+        if not top4_required:
+            add_check(
+                checks,
+                rule_id="PREDICTION_TOP4_GROUPS",
+                severity="INFO",
+                status="PASS",
+                message="Top-4 audit is not required for this route",
+            )
+        else:
+            add_warn_or_fail(
+                checks,
+                gate=gate,
+                fail_gate={"diagnostic", "candidate", "promoted"},
+                rule_id="PREDICTION_TOP4_GROUPS",
+                message="Top-4 group columns are not present",
+                fix="For Top-4 audits, include subject_id or user_id, trial_id, and pred_top4.",
+                decision_if_fail="BLOCKED",
+            )
 
     if schema["y_true"] and schema["y_pred"]:
         y_true = []
@@ -258,6 +407,8 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
         )
     else:
         add_check(checks, rule_id="ROUTE_SCHEMA", severity="INFO", status="PASS", message="route config is valid")
+        check_dataset_manifest(route_data, checks, gate=gate)
+        check_split_manifest(route_data, checks, gate=gate)
 
     if run_dir is None:
         add_warn_or_fail(
@@ -301,7 +452,7 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
                 manifest = load_manifest(manifest_path)
                 prediction_csv = manifest.get("prediction_csv")
                 if isinstance(prediction_csv, str) and prediction_csv:
-                    check_prediction_csv(resolve_from_root(prediction_csv, base=run_dir), checks, route_data=route_data, gate=gate)
+                    check_prediction_csv(resolve_from_root(prediction_csv, base=run_dir), checks, route_data=route_data, gate=gate, manifest=manifest)
                 else:
                     add_warn_or_fail(
                         checks,

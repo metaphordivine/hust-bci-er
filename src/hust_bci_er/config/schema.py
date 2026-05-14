@@ -121,6 +121,12 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
         if not data.get(required):
             errors.append(f"{required} must be set")
 
+    dataset_version = data.get("dataset_version")
+    if isinstance(dataset_version, str) and dataset_version:
+        dataset_path = registry.ROOT / "configs" / "datasets" / f"{dataset_version}.yaml"
+        if not dataset_path.exists():
+            errors.append(f"dataset_version has no manifest: {dataset_version}")
+
     split_id = data.get("split_id")
     if isinstance(split_id, str) and split_id:
         split_path = registry.ROOT / "configs" / "splits" / f"{split_id}.yaml"

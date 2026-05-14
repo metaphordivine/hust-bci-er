@@ -15,6 +15,7 @@ REQUIRED_MANIFEST_FIELDS = {
     "config_path",
     "config_snapshot_path",
     "config_sha256",
+    "dataset_manifest_path",
     "dataset_manifest_sha256",
     "split_id",
     "split_sha256",
@@ -36,6 +37,44 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def is_under(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def resolve_run_path(run_dir: Path, value: str, *, field: str, errors: list[str]) -> Path | None:
+    resolved = (run_dir / value).resolve()
+    if not is_under(resolved, run_dir):
+        errors.append(f"manifest {field} must stay under the run directory")
+        return None
+    return resolved
+
+
+def resolve_repo_or_run_path(run_dir: Path, root: Path, value: str, *, field: str, repo_subdir: str, errors: list[str]) -> Path | None:
+    run_candidate = (run_dir / value).resolve()
+    repo_root = (root / repo_subdir).resolve()
+    repo_candidate = (root / value).resolve()
+    if run_candidate.exists():
+        if is_under(run_candidate, run_dir):
+            return run_candidate
+        errors.append(f"manifest {field} run path escapes the run directory")
+        return None
+    if repo_candidate.exists():
+        if is_under(repo_candidate, repo_root):
+            return repo_candidate
+        errors.append(f"manifest {field} repo path must stay under {repo_subdir}")
+        return None
+    if is_under(run_candidate, run_dir):
+        return run_candidate
+    if is_under(repo_candidate, repo_root):
+        return repo_candidate
+    errors.append(f"manifest {field} must stay under the run directory or {repo_subdir}")
+    return None
 
 
 def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[str, Any] | None = None) -> list[str]:
@@ -65,8 +104,10 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
     config_snapshot_path = data.get("config_snapshot_path")
     expected_hash = data.get("config_sha256")
     if isinstance(config_snapshot_path, str) and isinstance(expected_hash, str):
-        resolved = (run_dir / config_snapshot_path).resolve()
-        if not resolved.exists():
+        resolved = resolve_run_path(run_dir, config_snapshot_path, field="config_snapshot_path", errors=errors)
+        if resolved is None:
+            pass
+        elif not resolved.exists():
             errors.append(f"manifest config_snapshot_path not found: {config_snapshot_path}")
         else:
             actual_hash = sha256_file(resolved)
@@ -82,19 +123,32 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
     prediction_csv = data.get("prediction_csv")
     prediction_hash = data.get("prediction_sha256")
     if isinstance(prediction_csv, str) and isinstance(prediction_hash, str):
-        resolved = (run_dir / prediction_csv).resolve()
-        if not resolved.exists():
+        resolved = resolve_run_path(run_dir, prediction_csv, field="prediction_csv", errors=errors)
+        if resolved is None:
+            pass
+        elif not resolved.exists():
             errors.append(f"manifest prediction_csv not found: {prediction_csv}")
         elif sha256_file(resolved) != prediction_hash:
             errors.append("manifest prediction_sha256 does not match prediction CSV")
 
+    dataset_path = data.get("dataset_manifest_path")
+    dataset_hash = data.get("dataset_manifest_sha256")
+    if isinstance(dataset_path, str) and isinstance(dataset_hash, str):
+        resolved = resolve_repo_or_run_path(run_dir, root, dataset_path, field="dataset_manifest_path", repo_subdir="configs/datasets", errors=errors)
+        if resolved is None:
+            pass
+        elif not resolved.exists():
+            errors.append(f"manifest dataset_manifest_path not found: {dataset_path}")
+        elif sha256_file(resolved) != dataset_hash:
+            errors.append("manifest dataset_manifest_sha256 does not match dataset manifest")
+
     split_hash = data.get("split_sha256")
     split_manifest_path = data.get("split_manifest_path")
     if isinstance(split_manifest_path, str) and isinstance(split_hash, str):
-        resolved = (run_dir / split_manifest_path).resolve()
-        if not resolved.exists():
-            resolved = (root / split_manifest_path).resolve()
-        if not resolved.exists():
+        resolved = resolve_repo_or_run_path(run_dir, root, split_manifest_path, field="split_manifest_path", repo_subdir="configs/splits", errors=errors)
+        if resolved is None:
+            pass
+        elif not resolved.exists():
             errors.append(f"manifest split_manifest_path not found: {split_manifest_path}")
         elif sha256_file(resolved) != split_hash:
             errors.append("manifest split_sha256 does not match split manifest")

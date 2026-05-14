@@ -41,4 +41,10 @@ For a finished experiment run:
 python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir> --gate candidate
 ```
 
+For a route-only smoke audit, `--run` may be omitted:
+
+```bash
+python scripts/repo_doctor.py experiment --route <route_config> --gate smoke
+```
+
 If any command fails, report the failure and keep the route status unchanged unless the audit report explicitly supports a status change.

@@ -41,6 +41,8 @@ def main() -> int:
             errors.append(f"required governance file is missing: {rel}")
     if not (ROOT / "configs" / "splits").is_dir():
         errors.append("required split manifest directory is missing: configs/splits")
+    if not (ROOT / "configs" / "datasets").is_dir():
+        errors.append("required dataset manifest directory is missing: configs/datasets")
 
     routes_root = ROOT / "configs" / "routes"
     tier_route_dirs = {"stable", "candidates", "deprecated", "experimental"}

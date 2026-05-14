@@ -28,11 +28,14 @@ def fast() -> int:
     return 0
 
 
-def experiment(route: Path, run_dir: Path, gate: str) -> int:
+def experiment(route: Path, run_dir: Path | None, gate: str) -> int:
     code = run_step([sys.executable, "scripts/validate_route.py", str(route)])
     if code != 0:
         return code
-    return run_step([sys.executable, "scripts/audit_experiment.py", "--route", str(route), "--run", str(run_dir), "--gate", gate])
+    cmd = [sys.executable, "scripts/audit_experiment.py", "--route", str(route), "--gate", gate]
+    if run_dir is not None:
+        cmd.extend(["--run", str(run_dir)])
+    return run_step(cmd)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
 
     experiment_parser = sub.add_parser("experiment")
     experiment_parser.add_argument("--route", type=Path, required=True)
-    experiment_parser.add_argument("--run", type=Path, required=True)
+    experiment_parser.add_argument("--run", type=Path)
     experiment_parser.add_argument("--gate", choices=["smoke", "diagnostic", "candidate", "promoted"], default="candidate")
 
     args = parser.parse_args(argv)

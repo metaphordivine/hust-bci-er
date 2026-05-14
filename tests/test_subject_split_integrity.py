@@ -36,3 +36,13 @@ def test_route_split_ids_have_manifests():
         with path.open(encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         assert data.get("split_id") in split_ids
+
+
+def test_route_dataset_versions_have_manifests():
+    dataset_root = Path("configs/datasets")
+    assert dataset_root.exists()
+    dataset_versions = {path.stem for path in dataset_root.glob("*.yaml")}
+    for path in Path("configs/routes/models").glob("*.yaml"):
+        with path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        assert data.get("dataset_version") in dataset_versions
