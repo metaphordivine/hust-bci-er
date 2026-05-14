@@ -1,3 +1,4 @@
+import csv
 import json
 from pathlib import Path
 
@@ -48,6 +49,18 @@ def test_component_artifact_and_prediction_writer_contracts(tmp_path):
 
     with pytest.raises(ValueError, match="must contain 8 rows"):
         write_predictions(records[:3], tmp_path / "bad_predictions.csv")
+
+    no_top4_records = [
+        PredictionRecord("r1", "s1", "t0", None, 0.2, y_pred=0, y_true=0),
+        PredictionRecord("r1", "s1", "t1", None, 0.8, y_pred=1, y_true=1),
+        PredictionRecord("r1", "s1", "t2", None, 0.4, y_pred=0, y_true=0),
+    ]
+    no_top4_csv = tmp_path / "no_top4_predictions.csv"
+    no_top4_meta = write_predictions(no_top4_records, no_top4_csv, include_top4=False)
+    no_top4_rows = list(csv.DictReader(no_top4_csv.open(newline="", encoding="utf-8")))
+    assert no_top4_meta["rows"] == 3
+    assert [row["y_pred"] for row in no_top4_rows] == ["0", "1", "0"]
+    assert [row["pred_top4"] for row in no_top4_rows] == ["", "", ""]
 
 
 def test_metric_report_builder_outputs_board_subject_and_audit(tmp_path):

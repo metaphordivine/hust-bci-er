@@ -16,12 +16,26 @@ def load_dataset_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def subject_ids_from_dataset(dataset: Mapping[str, Any]) -> list[str]:
+def trial_rows_from_dataset(dataset: Mapping[str, Any]) -> Sequence[Any]:
     rows = dataset.get("trial_index") or dataset.get("trial_rows") or []
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        return []
+    return rows
+
+
+def subject_ids_from_dataset(dataset: Mapping[str, Any]) -> list[str]:
+    rows = trial_rows_from_dataset(dataset)
     subjects = sorted({str(row["subject_id"]) for row in rows if isinstance(row, Mapping) and row.get("subject_id")})
     if not subjects:
         raise ValueError("dataset manifest has no subject_id values")
     return subjects
+
+
+def original_trial_id_from_row(row: Mapping[str, Any], *, index: int) -> str:
+    original_trial_id = row.get("original_trial_id", row.get("trial_id"))
+    if original_trial_id is None or str(original_trial_id) == "":
+        raise ValueError(f"dataset row {index} has no original_trial_id or trial_id")
+    return str(original_trial_id)
 
 
 def split_subjects(subjects: Sequence[str], *, seed: int, val_count: int, test_count: int) -> tuple[list[str], list[str], list[str]]:
@@ -63,14 +77,17 @@ def build_split_manifest(
     train_subjects, val_subjects, test_subjects = split_subjects(subjects, seed=seed, val_count=val_count, test_count=test_count)
     sets = (set(train_subjects), set(val_subjects), set(test_subjects))
     trial_rows: list[dict[str, Any]] = []
-    for row in dataset.get("trial_index") or []:
+    for idx, row in enumerate(trial_rows_from_dataset(dataset)):
         if not isinstance(row, Mapping):
             continue
-        subject = str(row["subject_id"])
+        subject_value = row.get("subject_id")
+        if subject_value is None or str(subject_value) == "":
+            raise ValueError(f"dataset row {idx} has no subject_id")
+        subject = str(subject_value)
         trial_rows.append(
             {
                 "subject_id": subject,
-                "original_trial_id": str(row.get("trial_id")),
+                "original_trial_id": original_trial_id_from_row(row, index=idx),
                 "split": split_for_subject(subject, train_subjects=sets[0], val_subjects=sets[1], test_subjects=sets[2]),
             }
         )

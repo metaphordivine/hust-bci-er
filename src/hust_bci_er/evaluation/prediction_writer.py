@@ -44,8 +44,12 @@ def write_predictions(
     group_keys: tuple[str, ...] = ("subject_id",),
     group_size: int = 8,
     top_k: int = 4,
+    include_top4: bool = True,
 ) -> dict:
-    rows = rows_with_top4(records, group_keys=group_keys, group_size=group_size, top_k=top_k)
+    if include_top4:
+        rows = rows_with_top4(records, group_keys=group_keys, group_size=group_size, top_k=top_k)
+    else:
+        rows = [asdict(record) for record in records]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=PREDICTION_FIELDNAMES, extrasaction="ignore")

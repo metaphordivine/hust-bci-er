@@ -90,6 +90,23 @@ def test_split_manifest_builder_is_seeded_and_subject_level(tmp_path):
     assert yaml.safe_load(output.read_text(encoding="utf-8"))["split_id"] == "toy_split"
 
 
+def test_split_manifest_builder_accepts_dataset_trial_rows_without_trial_index():
+    manifest = {
+        "dataset_version": "toy_v1",
+        "trial_rows": [
+            {"subject_id": "s1", "original_trial_id": "orig1"},
+            {"subject_id": "s2", "original_trial_id": "orig2"},
+            {"subject_id": "s3", "original_trial_id": "orig3"},
+        ],
+    }
+
+    split = build_split_manifest(split_id="toy_split", dataset=manifest, seed=11, val_count=0, test_count=1)
+
+    assert len(split["trial_rows"]) == 3
+    assert {row["original_trial_id"] for row in split["trial_rows"]} == {"orig1", "orig2", "orig3"}
+    assert {row["split"] for row in split["trial_rows"]} == {"train", "test"}
+
+
 def test_dataset_qa_reports_counts_and_checksum_gaps():
     manifest = {
         "dataset_version": "toy_v1",
