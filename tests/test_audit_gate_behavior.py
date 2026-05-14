@@ -8,6 +8,7 @@ from scripts.audit_experiment import (
     dataset_checksum_errors,
     run_audit,
     split_evidence_consistency_errors,
+    split_manifest_has_formal_evidence,
     split_leakage_errors,
 )
 
@@ -186,7 +187,7 @@ def test_candidate_gate_blocks_missing_reproducibility_metadata(tmp_path):
     assert rules["RUN_REPRODUCIBILITY_LOCKED"] == "FAIL"
 
 
-def test_no_top4_route_does_not_warn_when_top4_columns_are_absent(tmp_path):
+def test_no_top4_route_skips_top4_semantics_even_when_empty_top4_column_exists(tmp_path):
     route = tmp_path / "no_top4_route.yaml"
     route.write_text(
         "\n".join(
@@ -215,9 +216,9 @@ def test_no_top4_route_does_not_warn_when_top4_columns_are_absent(tmp_path):
     snapshot.write_text(route.read_text(encoding="utf-8"), encoding="utf-8")
     prediction = run_dir / "predictions.csv"
     prediction.write_text(
-        "subject_id,trial_id,y_score,y_pred,y_true\n"
-        "s1,t1,0.1,0,0\n"
-        "s1,t2,0.9,1,1\n",
+        "subject_id,trial_id,y_score,y_pred,y_true,pred_top4\n"
+        "s1,t1,0.1,0,0,\n"
+        "s1,t2,0.9,1,1,\n",
         encoding="utf-8",
     )
 
@@ -1316,3 +1317,22 @@ def test_promotion_audit_rejects_minimal_candidate_report(monkeypatch, tmp_path)
     rules = {check["rule_id"]: check["status"] for check in checks}
     assert rules["PROMOTION_AUDIT_CANDIDATE_REPORT"] == "PASS"
     assert rules["PROMOTION_AUDIT_CANDIDATE_RULES"] == "FAIL"
+
+
+def test_split_evidence_allows_empty_validation_holdout():
+    split = {
+        "split_id": "holdout",
+        "subject_group_split": True,
+        "status": "ready",
+        "train_subjects": ["s1", "s2"],
+        "val_subjects": [],
+        "test_subjects": ["s3"],
+        "trial_rows": [
+            {"subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+            {"subject_id": "s2", "original_trial_id": "t2", "split": "train"},
+            {"subject_id": "s3", "original_trial_id": "t3", "split": "test"},
+        ],
+    }
+
+    assert split_manifest_has_formal_evidence(split)
+    assert split_evidence_consistency_errors(split) == []

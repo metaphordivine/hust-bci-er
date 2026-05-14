@@ -67,7 +67,7 @@ def check_candidate_audit(path: Path, *, route_id: str) -> list[str]:
         return errors
     statuses = {str(item.get("rule_id")): item.get("status") for item in checks if isinstance(item, Mapping)}
     required = set(REQUIRED_CANDIDATE_RULES)
-    if "PREDICTION_TOP4_RANKING" in statuses or "PREDICTION_TOP4_GROUPS" in statuses:
+    if "PREDICTION_TOP4_RANKING" in statuses:
         required.update(REQUIRED_TOP4_RULES)
     missing_or_failed = sorted(rule for rule in required if statuses.get(rule) != "PASS")
     if missing_or_failed:

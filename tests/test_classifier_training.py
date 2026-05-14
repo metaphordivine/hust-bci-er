@@ -82,6 +82,21 @@ def test_fit_classifier_accepts_mapping_batches_and_dict_model_output():
     assert tuple(logits_from_output(model(torch.randn(3, 2, 2))).shape) == (3, 2)
 
 
+def test_fit_classifier_seed_resets_prebuilt_model_parameters():
+    loader = make_easy_loader()
+    torch.manual_seed(123)
+    model_a = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+    torch.manual_seed(999)
+    model_b = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+
+    config = ClassifierTrainConfig(epochs=1, seed=7, optimizer=OptimizerConfig(name="sgd", lr=0.01, momentum=0.0))
+    fit_classifier(model_a, loader, config=config)
+    fit_classifier(model_b, loader, config=config)
+
+    for left, right in zip(model_a.parameters(), model_b.parameters()):
+        assert torch.allclose(left, right)
+
+
 def test_build_optimizer_rejects_unknown_name():
     model = nn.Linear(2, 2)
     with pytest.raises(ValueError, match="unsupported optimizer"):

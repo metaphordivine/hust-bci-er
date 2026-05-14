@@ -21,14 +21,33 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
-def subject_ba_rows(prediction_rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def prediction_column_for_metric(primary_metric: str, fields: set[str]) -> str:
+    if primary_metric == "no_top4_BA":
+        if "y_pred" not in fields:
+            raise ValueError("no_top4_BA requires y_pred")
+        return "y_pred"
+    if primary_metric == "top4_BA":
+        if "pred_top4" not in fields:
+            raise ValueError("top4_BA requires pred_top4")
+        return "pred_top4"
+    if "pred_top4" in fields:
+        return "pred_top4"
+    if "y_pred" in fields:
+        return "y_pred"
+    raise ValueError(f"{primary_metric} requires pred_top4 or y_pred")
+
+
+def subject_ba_rows(prediction_rows: list[Mapping[str, Any]], *, primary_metric: str = "top4_BA") -> list[dict[str, Any]]:
+    if not prediction_rows:
+        return []
+    pred_col = prediction_column_for_metric(primary_metric, set(prediction_rows[0]))
     groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in prediction_rows:
         groups[str(row["subject_id"])].append(row)
     out = []
     for subject_id, rows in sorted(groups.items()):
         y_true = np.array([int(row["y_true"]) for row in rows], dtype=int)
-        y_pred = np.array([int(row.get("pred_top4", row.get("y_pred"))) for row in rows], dtype=int)
+        y_pred = np.array([int(row[pred_col]) for row in rows], dtype=int)
         out.append({"subject_id": subject_id, "balanced_accuracy": balanced_accuracy(y_true, y_pred), "n_rows": len(rows)})
     return out
 
@@ -110,7 +129,9 @@ def score_matrix_metric_rows(
             value = exact_all_correct_rate_from_matrix(mat, y_true)
         else:
             raise ValueError(f"unsupported score matrix metric: {metric_name}")
-        out.append({"subject_id": group_key[0], "group_key": context, "balanced_accuracy": value, "metric_value": value, "n_rows": len(rows)})
+        subject_col = schema["subject_id"]
+        subject_id = str(rows[0][subject_col]) if subject_col is not None else group_key[0]
+        out.append({"subject_id": subject_id, "group_key": context, "balanced_accuracy": value, "metric_value": value, "n_rows": len(rows)})
     return out
 
 
@@ -140,7 +161,7 @@ def build_metric_report(
     if prediction_csv is None:
         raise ValueError("prediction_csv or score_matrix_csv is required")
     rows = read_csv_rows(prediction_csv)
-    subject_rows = subject_ba_rows(rows)
+    subject_rows = subject_ba_rows(rows, primary_metric=primary_metric)
     mean_ba = float(np.mean([row["balanced_accuracy"] for row in subject_rows])) if subject_rows else float("nan")
     return {
         "route_id": route_id,

@@ -66,6 +66,22 @@ def test_metric_report_builder_outputs_board_subject_and_audit(tmp_path):
     assert json.loads(Path(paths["audit_json"]).read_text(encoding="utf-8"))["route_id"] == "r1"
 
 
+def test_metric_report_builder_uses_y_pred_for_no_top4_metric(tmp_path):
+    prediction_csv = tmp_path / "predictions.csv"
+    prediction_csv.write_text(
+        "subject_id,trial_id,y_score,y_pred,y_true,pred_top4\n"
+        "s1,t0,0.1,0,0,1\n"
+        "s1,t1,0.2,1,1,0\n"
+        "s1,t2,0.3,0,0,1\n"
+        "s1,t3,0.4,1,1,0\n",
+        encoding="utf-8",
+    )
+
+    report = build_metric_report(route_id="r1", prediction_csv=prediction_csv, primary_metric="no_top4_BA")
+
+    assert report["metrics"]["no_top4_BA"] == 1.0
+
+
 def test_metric_report_builder_supports_score_matrix_exact_metric(tmp_path):
     score_matrix = tmp_path / "score_matrix.csv"
     lines = ["subject_id,trial_id,y_true,crop_0,crop_1,crop_2,crop_3,crop_4"]
@@ -81,6 +97,21 @@ def test_metric_report_builder_supports_score_matrix_exact_metric(tmp_path):
     assert report["metrics"]["exact_single_crop_expected_BA"] == 1.0
     assert report["score_matrix_sha256"]
     assert "metric_value" in Path(paths["subject_ba"]).read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_score_matrix_report_preserves_subject_with_composite_group_keys(tmp_path):
+    score_matrix = tmp_path / "score_matrix.csv"
+    lines = ["seed,fold,subject_id,trial_id,y_true,crop_0,crop_1,crop_2,crop_3,crop_4"]
+    for idx in range(8):
+        label = 1 if idx < 4 else 0
+        score = 1.0 - idx * 0.01
+        lines.append(f"42,0,s1,t{idx},{label},{score},{score},{score},{score},{score}")
+    score_matrix.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    report = build_metric_report(route_id="r1", score_matrix_csv=score_matrix, primary_metric="exact_single_crop_expected_BA", metric_group_keys=("seed", "fold", "subject_id"))
+
+    assert report["subjects"][0]["subject_id"] == "s1"
+    assert report["subjects"][0]["group_key"] == "42|0|s1"
 
 
 def test_source_scanner_finds_leakage_pattern(tmp_path):
@@ -157,6 +188,13 @@ def test_summary_and_promotion_helpers(tmp_path):
         encoding="utf-8",
     )
     assert check_candidate_audit(candidate, route_id="r1") == []
+
+    no_top4_candidate = tmp_path / "no_top4_candidate.json"
+    no_top4_candidate.write_text(
+        json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS", "checks": [{"rule_id": rule, "status": "PASS"} for rule in critical_rules + ["PREDICTION_TOP4_GROUPS"]]}),
+        encoding="utf-8",
+    )
+    assert check_candidate_audit(no_top4_candidate, route_id="r1") == []
 
     top4_missing_truth_balance = tmp_path / "top4_missing_truth_balance.json"
     top4_checks = [{"rule_id": rule, "status": "PASS"} for rule in critical_rules + ["PREDICTION_TOP4_RANKING", "PREDICTION_TOP4_BINARY", "PREDICTION_TRIAL_ID_UNIQUE"]]

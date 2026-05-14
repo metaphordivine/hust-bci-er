@@ -38,6 +38,7 @@ class ClassifierTrainConfig:
     early_stopping: EarlyStoppingConfig | None = None
     grad_clip_norm: float | None = None
     restore_best: bool = True
+    reset_parameters_after_seed: bool = True
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,13 @@ def set_torch_seed(seed: int | None) -> None:
     if seed is None:
         return
     apply_reproducibility(ReproducibilityConfig(seed=int(seed)))
+
+
+def reset_model_parameters(model: nn.Module) -> None:
+    for module in model.modules():
+        reset = getattr(module, "reset_parameters", None)
+        if callable(reset):
+            reset()
 
 
 def logits_from_output(output: Any) -> torch.Tensor:
@@ -229,6 +237,8 @@ def fit_classifier(
         raise ValueError("grad_clip_norm must be positive")
 
     set_torch_seed(config.seed)
+    if config.seed is not None and config.reset_parameters_after_seed:
+        reset_model_parameters(model)
     device = torch.device(config.device)
     model.to(device)
     criterion = criterion or nn.CrossEntropyLoss()

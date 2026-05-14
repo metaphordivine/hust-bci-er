@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
+import yaml
 
 from hust_bci_er.contracts.records import EEGTrial
 from hust_bci_er.data.windowing import (
@@ -14,6 +17,8 @@ from hust_bci_er.data.windowing import (
 def test_sliding_window_counts_match_common_eeg_setup():
     assert len(window_start_times(SlidingWindowSpec(source_trial_sec=50, window_sec=10, stride_sec=5))) == 9
     assert window_start_times(SlidingWindowSpec(source_trial_sec=10, window_sec=4, stride_sec=2)) == (0, 2, 4, 6)
+    route = yaml.safe_load(Path("configs/routes/models/sliding_window_eegnet.yaml").read_text(encoding="utf-8"))
+    assert len(window_start_times(SlidingWindowSpec(**{key: route["augmentation"][key] for key in ["source_trial_sec", "window_sec", "stride_sec"]}))) == 5
 
 
 def test_sliding_windows_keep_original_trial_inside_one_split():

@@ -285,6 +285,8 @@ def materialize_protocol_run(
     run_dir.mkdir(parents=True, exist_ok=True)
     plan, jobs = build_protocol_jobs(protocol, route_config_paths, **kwargs)
     jobs = materialize_job_splits(jobs, run_dir=run_dir)
+    experiment_gate_job_ids = [job.job_id for job in jobs if "predictions.csv" in job.expected_artifacts]
+    artifact_only_job_ids = [job.job_id for job in jobs if job.job_id not in set(experiment_gate_job_ids)]
     manifest = {
         "runner_schema_version": 1,
         "status": "MATERIALIZED",
@@ -295,7 +297,9 @@ def materialize_protocol_run(
         "environment_lock": environment_lock_payload(root),
         "route_locks": route_locks(route_config_paths, run_dir=run_dir, root=root),
         "jobs": [job.as_dict() for job in jobs],
-        "completion_rule": "every job must write its own manifest.json and pass the requested experiment gate",
+        "experiment_gate_job_ids": experiment_gate_job_ids,
+        "artifact_only_job_ids": artifact_only_job_ids,
+        "completion_rule": "jobs with predictions.csv must write manifest.json and pass the requested experiment gate; artifact-only train/selection jobs must write their expected artifacts without requiring prediction CSV",
     }
     (run_dir / "protocol_run_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return manifest

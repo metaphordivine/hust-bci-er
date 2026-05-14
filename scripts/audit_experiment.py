@@ -304,12 +304,17 @@ def add_warn_or_fail(
         add_check(checks, rule_id=rule_id, severity="WARN", status="WARN", message=message, fix=fix)
 
 
+def has_subject_membership(data: dict[str, Any]) -> bool:
+    if not all(isinstance(data.get(f"{split}_subjects"), list) for split in ["train", "val", "test"]):
+        return False
+    return bool(data.get("train_subjects")) and bool(data.get("test_subjects"))
+
+
 def split_manifest_has_evidence(split_data: dict[str, Any]) -> bool:
-    has_subject_lists = all(isinstance(split_data.get(key), list) and bool(split_data.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+    has_subject_lists = has_subject_membership(split_data)
     folds = split_data.get("folds") or split_data.get("fold_definitions") or []
     has_fold_definitions = isinstance(folds, list) and bool(folds) and all(
-        isinstance(fold, dict)
-        and all(isinstance(fold.get(key), list) and bool(fold.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+        isinstance(fold, dict) and has_subject_membership(fold)
         for fold in folds
     )
     trial_rows = split_data.get("trial_rows") or []
@@ -321,18 +326,17 @@ def split_manifest_has_evidence(split_data: dict[str, Any]) -> bool:
 
 def split_manifest_has_formal_evidence(split_data: dict[str, Any]) -> bool:
     """Formal candidate evidence needs both subject membership and trial rows."""
-    has_subject_membership = all(isinstance(split_data.get(key), list) and bool(split_data.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+    has_top_level_membership = has_subject_membership(split_data)
     folds = split_data.get("folds") or split_data.get("fold_definitions") or []
     has_fold_membership = isinstance(folds, list) and bool(folds) and all(
-        isinstance(fold, dict)
-        and all(isinstance(fold.get(key), list) and bool(fold.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+        isinstance(fold, dict) and has_subject_membership(fold)
         for fold in folds
     )
     trial_rows = split_data.get("trial_rows") or []
     has_trial_index = isinstance(trial_rows, list) and bool(trial_rows) and all(
         isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
     )
-    return (has_subject_membership or has_fold_membership) and has_trial_index
+    return (has_top_level_membership or has_fold_membership) and has_trial_index
 
 
 def subjects_from_trial_rows(rows: list[dict[str, Any]]) -> dict[str, set[str]]:
@@ -370,7 +374,7 @@ def split_evidence_consistency_errors(split_data: dict[str, Any]) -> list[str]:
     folds = split_data.get("folds") or split_data.get("fold_definitions") or []
     has_declared_folds = isinstance(folds, list) and bool(folds)
 
-    if all(isinstance(split_data.get(key), list) and split_data.get(key) for key in ["train_subjects", "val_subjects", "test_subjects"]):
+    if has_subject_membership(split_data):
         rows_without_fold = [(idx, row) for idx, row in indexed_rows if "fold" not in row]
         if not rows_without_fold:
             errors.append("top-level subject lists require trial_rows without fold")
@@ -1291,7 +1295,15 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             decision_if_fail="BLOCKED",
         )
 
-    if schema["subject_id"] and schema["trial_id"] and schema["pred_top4"]:
+    if not top4_required:
+        add_check(
+            checks,
+            rule_id="PREDICTION_TOP4_GROUPS",
+            severity="INFO",
+            status="PASS",
+            message="Top-4 audit is not required for this route",
+        )
+    elif schema["subject_id"] and schema["trial_id"] and schema["pred_top4"]:
         group_columns = top4_group_columns(fields, schema, manifest)
         if group_columns is None:
             add_warn_or_fail(
@@ -1334,24 +1346,15 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             add_check(checks, rule_id="PREDICTION_TOP4_GROUPS", severity="INFO", status="PASS", message="Top-4 groups are valid")
         check_top4_group_semantics(checks, groups=groups, schema=schema)
     else:
-        if not top4_required:
-            add_check(
-                checks,
-                rule_id="PREDICTION_TOP4_GROUPS",
-                severity="INFO",
-                status="PASS",
-                message="Top-4 audit is not required for this route",
-            )
-        else:
-            add_warn_or_fail(
-                checks,
-                gate=gate,
-                fail_gate={"diagnostic", "candidate", "promoted"},
-                rule_id="PREDICTION_TOP4_GROUPS",
-                message="Top-4 group columns are not present",
-                fix="For Top-4 audits, include subject_id or user_id, trial_id, and pred_top4.",
-                decision_if_fail="BLOCKED",
-            )
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate={"diagnostic", "candidate", "promoted"},
+            rule_id="PREDICTION_TOP4_GROUPS",
+            message="Top-4 group columns are not present",
+            fix="For Top-4 audits, include subject_id or user_id, trial_id, and pred_top4.",
+            decision_if_fail="BLOCKED",
+        )
 
     if schema["y_true"] and schema["y_pred"]:
         try:
@@ -1538,7 +1541,7 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         return
     statuses = {str(item.get("rule_id")): item.get("status") for item in report_checks if isinstance(item, dict)}
     required = set(PROMOTION_REQUIRED_CANDIDATE_RULES)
-    if "PREDICTION_TOP4_RANKING" in statuses or "PREDICTION_TOP4_GROUPS" in statuses:
+    if "PREDICTION_TOP4_RANKING" in statuses:
         required.update(PROMOTION_REQUIRED_TOP4_RULES)
     missing_or_failed = sorted(rule for rule in required if statuses.get(rule) != "PASS")
     if missing_or_failed:

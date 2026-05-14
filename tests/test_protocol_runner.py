@@ -30,6 +30,9 @@ def test_protocol_runner_materializes_p2_crop_jobs(tmp_path):
     assert random_job["split_manifest_path"] == "splits/p1_seed42_fold0__p2_holdout999_train42.yaml"
     assert len(random_job["split_sha256"]) == 64
     assert manifest["route_locks"][0]["source_split_manifest_path"] == "configs/splits/p1_seed42_fold0.yaml"
+    assert len(manifest["experiment_gate_job_ids"]) == 7
+    assert manifest["artifact_only_job_ids"] == ["p2__ea_deformer__train_seed42"]
+    assert "artifact-only" in manifest["completion_rule"]
     assert (tmp_path / "p2_run" / "protocol_run_manifest.json").exists()
     split_path = tmp_path / "p2_run" / random_job["split_manifest_path"]
     assert split_path.exists()
