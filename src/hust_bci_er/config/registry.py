@@ -18,7 +18,15 @@ def route_statuses() -> set[str]:
     return set((data.get("statuses") or {}).keys())
 
 
+@lru_cache(maxsize=1)
+def audit_decisions() -> set[str]:
+    path = ROOT / "configs" / "audit_decisions.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return set((data.get("decisions") or {}).keys())
+
+
 ROUTE_STATUSES = route_statuses()
+AUDIT_DECISIONS = audit_decisions()
 
 PREPROCESSING = {
     "zscore",

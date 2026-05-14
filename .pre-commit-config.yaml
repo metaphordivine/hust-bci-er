@@ -1,15 +1,8 @@
 repos:
   - repo: local
     hooks:
-      - id: check-repo-conventions
-        name: Check repository conventions
-        entry: python scripts/check_repo_conventions.py
+      - id: repo-doctor-fast
+        name: Run fast repository doctor
+        entry: python scripts/repo_doctor.py fast
         language: system
         pass_filenames: false
-
-      - id: validate-routes
-        name: Validate route configs
-        entry: python scripts/validate_route.py --all
-        language: system
-        pass_filenames: false
-

@@ -24,13 +24,12 @@ def z_average(*arrays: np.ndarray, weights: list[float] | None = None) -> np.nda
     return out
 
 
-def qkv_source_fusion(query: np.ndarray, key_values: list[np.ndarray], *, alpha: float, temperature: float) -> np.ndarray:
+def query_context_fusion(query: np.ndarray, context_scores: list[np.ndarray], *, alpha: float, temperature: float) -> np.ndarray:
     q = zscore_rows(query)
-    kv = [zscore_rows(v) for v in key_values]
-    sims = np.stack([(q * v).mean(axis=1) for v in kv], axis=1) / float(temperature)
+    context_items = [zscore_rows(v) for v in context_scores]
+    sims = np.stack([(q * v).mean(axis=1) for v in context_items], axis=1) / float(temperature)
     sims = sims - sims.max(axis=1, keepdims=True)
     weights = np.exp(sims)
     weights = weights / weights.sum(axis=1, keepdims=True)
-    context = sum(weights[:, i : i + 1] * kv[i] for i in range(len(kv)))
+    context = sum(weights[:, i : i + 1] * context_items[i] for i in range(len(context_items)))
     return (1.0 - float(alpha)) * q + float(alpha) * context
-

@@ -28,6 +28,18 @@ def tracked_files() -> list[Path] | None:
 def main() -> int:
     errors: list[str] = []
 
+    required_files = [
+        "README.md",
+        "AGENTS.md",
+        "docs/目录怎么用.md",
+        "agent_protocols/experiment_audit.md",
+        "configs/statuses.yaml",
+        "configs/audit_decisions.yaml",
+    ]
+    for rel in required_files:
+        if not (ROOT / rel).exists():
+            errors.append(f"required governance file is missing: {rel}")
+
     routes_root = ROOT / "configs" / "routes"
     tier_route_dirs = {"stable", "candidates", "deprecated", "experimental"}
     for name in tier_route_dirs:
@@ -41,6 +53,9 @@ def main() -> int:
     for path in (ROOT / "reports" / "route_summaries").glob("*.md"):
         if not SUMMARY_NAME.match(path.name):
             errors.append(f"route summary file must be <route_id>_summary.md: {path.relative_to(ROOT)}")
+        route_id = path.name.removesuffix("_summary.md")
+        if f"route_id: {route_id}" not in path.read_text(encoding="utf-8", errors="ignore"):
+            errors.append(f"route summary must include matching route_id: {path.relative_to(ROOT)}")
 
     for path in (ROOT / "scripts").glob("*.py"):
         if BAD_SCRIPT.search(path.name):
@@ -50,6 +65,8 @@ def main() -> int:
     if files is not None:
         for path in files:
             rel = path.relative_to(ROOT).as_posix()
+            if " " in rel:
+                errors.append(f"tracked path must not contain spaces: {rel}")
             if rel.startswith(("outputs/", "scratch/")):
                 errors.append(f"local artifact path is tracked: {rel}")
             if any(part in rel.lower() for part in ["checkpoint", ".ckpt", ".pth", ".pt"]):

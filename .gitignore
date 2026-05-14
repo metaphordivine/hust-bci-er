@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+.claude/
 
 outputs/
 scratch/
@@ -16,4 +17,3 @@ checkpoints/
 
 *.log
 *.tmp
-

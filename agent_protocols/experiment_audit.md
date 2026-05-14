@@ -15,19 +15,28 @@ Run this when an experiment is said to be finished, when a route is proposed for
 - Expected evaluation protocol.
 - Intended route status: one of the statuses declared in `configs/statuses.yaml`.
 
+`route_status` is the lifecycle state stored in a route config. `audit_decision` is the result of one audit run and is declared in `configs/audit_decisions.yaml`. `BLOCKED` is an audit decision, not a route status.
+
 ## Required Commands
 
 ```bash
-python scripts/check_repo_conventions.py
-python scripts/validate_route.py --all
-python -m pytest tests -q
+python scripts/repo_doctor.py fast
 ```
 
 If a run directory exists:
 
 ```bash
-python scripts/audit_experiment.py --route <route_config> --run <run_dir>
+python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir>
 ```
+
+The experiment gate writes:
+
+```text
+<run_dir>/audit_report.json
+<run_dir>/audit_report.md
+```
+
+Each failed check must include a rule id, severity, reason, and suggested fix.
 
 ## Decision Rules
 
@@ -37,8 +46,8 @@ python scripts/audit_experiment.py --route <route_config> --run <run_dir>
 | metrics cannot be recomputed | `DIAGNOSTIC_ONLY` |
 | manifest is missing | `DIAGNOSTIC_ONLY` |
 | route summary is missing | `BLOCKED` |
-| only smoke was run | `SMOKE_ONLY` |
-| all required checks pass | route may advance to its requested status |
+| only smoke was run | keep route status as `SMOKE_ONLY`; audit decision is `WARN` unless a stricter check fails |
+| all required checks pass | route may advance to its requested lifecycle status |
 
 ## Gate Types
 

@@ -11,9 +11,7 @@ Start here:
 3. Validate the skeleton:
 
 ```bash
-python scripts/check_repo_conventions.py
-python scripts/validate_route.py --all
-python -m pytest tests -q
+python scripts/repo_doctor.py fast
 ```
 
 No trained parameters, checkpoints, raw outputs, public/private labels, or leaderboard feedback should be committed.

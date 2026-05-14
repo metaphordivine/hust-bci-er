@@ -32,15 +32,13 @@ Before code, experiment, or report changes:
 Run:
 
 ```bash
-python scripts/check_repo_conventions.py
-python scripts/validate_route.py --all
-python -m pytest tests -q
+python scripts/repo_doctor.py fast
 ```
 
 For a finished experiment run:
 
 ```bash
-python scripts/audit_experiment.py --route <route_config> --run <run_dir>
+python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir>
 ```
 
-If any command fails, report the failure and keep the route blocked or diagnostic-only.
+If any command fails, report the failure and keep the route status unchanged unless the audit report explicitly supports a status change.

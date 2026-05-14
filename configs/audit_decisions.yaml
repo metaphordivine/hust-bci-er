@@ -1,0 +1,11 @@
+decisions:
+  PASS:
+    meaning: The audit checks selected for this gate passed.
+  WARN:
+    meaning: The audit found non-blocking evidence gaps that must be reported.
+  BLOCKED:
+    meaning: Required audit evidence is missing; keep the route status unchanged.
+  REJECT:
+    meaning: A red-line rule failed, such as leakage, split, or schema integrity.
+  DIAGNOSTIC_ONLY:
+    meaning: Evidence can be kept for analysis but cannot support route advancement.

@@ -1,3 +1,5 @@
+route_statuses_only: true
+note: BLOCKED is an audit decision in configs/audit_decisions.yaml, not a route status.
 statuses:
   IDEA:
     meaning: Initial route or research idea.
