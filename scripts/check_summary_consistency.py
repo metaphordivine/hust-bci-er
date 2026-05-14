@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
 
 import yaml
@@ -28,6 +29,17 @@ def load_yaml(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def summary_fields(text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("-").strip()
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip()] = value.strip().strip("`")
+    return fields
+
+
 def main() -> int:
     errors: list[str] = []
     summary_root = ROOT / "reports" / "route_summaries"
@@ -51,6 +63,29 @@ def main() -> int:
         missing = sorted(token for token in REQUIRED_SUMMARY_TOKENS if token not in text)
         if missing:
             errors.append(f"summary missing tokens {missing}: {summary.relative_to(ROOT)}")
+        fields = summary_fields(text)
+        audit_report_path = fields.get("audit_report_path")
+        if audit_report_path:
+            report_path = (ROOT / audit_report_path).resolve()
+            try:
+                report_path.relative_to(ROOT.resolve())
+            except ValueError:
+                errors.append(f"summary audit_report_path escapes repository: {summary.relative_to(ROOT)}")
+                continue
+            if not report_path.exists():
+                errors.append(f"summary audit_report_path does not exist: {summary.relative_to(ROOT)}")
+                continue
+            try:
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                errors.append(f"summary audit_report_path is not valid JSON: {summary.relative_to(ROOT)} ({exc})")
+                continue
+            if report.get("route_id") != route_id:
+                errors.append(f"summary audit_report route_id mismatch: {summary.relative_to(ROOT)}")
+            if fields.get("gate") and report.get("gate") != fields["gate"]:
+                errors.append(f"summary audit_report gate mismatch: {summary.relative_to(ROOT)}")
+            if fields.get("audit_decision") and report.get("overall") != fields["audit_decision"]:
+                errors.append(f"summary audit_report decision mismatch: {summary.relative_to(ROOT)}")
 
     if errors:
         print("Summary consistency check failed:")

@@ -100,9 +100,13 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
     if isinstance(evaluation, dict):
         protocol = evaluation.get("protocol")
         metric = evaluation.get("primary_metric")
-    elif isinstance(evaluation, str):
-        protocol = evaluation
+    else:
+        errors.append("evaluation must be a mapping")
 
+    if not protocol:
+        errors.append("evaluation.protocol is required")
+    if not metric:
+        errors.append("evaluation.primary_metric is required")
     if protocol not in registry.EVALUATION_PROTOCOLS:
         errors.append(f"unknown evaluation protocol: {protocol}")
     if metric is not None and metric not in registry.PRIMARY_METRICS:

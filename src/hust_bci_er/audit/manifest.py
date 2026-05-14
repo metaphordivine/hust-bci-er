@@ -74,8 +74,11 @@ def sha256_file(path: Path) -> str:
 
 
 def load_yaml_file(path: Path) -> dict[str, Any]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return data if isinstance(data, dict) else {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        return {"__parse_error__": str(exc)}
+    return data if isinstance(data, dict) else {"__parse_error__": "YAML document must be a mapping"}
 
 
 def is_under(path: Path, parent: Path) -> bool:
@@ -119,7 +122,10 @@ def resolve_repo_or_run_path(run_dir: Path, root: Path, value: str, *, field: st
 def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[str, Any] | None = None) -> list[str]:
     if not path.exists():
         return [f"manifest not found: {path}"]
-    data = load_manifest(path)
+    try:
+        data = load_manifest(path)
+    except json.JSONDecodeError as exc:
+        return [f"manifest parse failed: {exc}"]
     if not isinstance(data, dict):
         return [f"manifest must be a JSON object: {path}"]
 
@@ -127,8 +133,12 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
     errors = [f"manifest missing fields: {', '.join(missing)}"] if missing else []
 
     for key, expected_type in REQUIRED_TYPES.items():
-        if key in data and not isinstance(data[key], expected_type):
-            errors.append(f"manifest {key} must be {expected_type.__name__}")
+        if key in data:
+            if expected_type is int:
+                if type(data[key]) is not int:
+                    errors.append(f"manifest {key} must be int")
+            elif not isinstance(data[key], expected_type):
+                errors.append(f"manifest {key} must be {expected_type.__name__}")
 
     for key in HASH_FIELDS:
         value = data.get(key)
@@ -153,6 +163,8 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
                 errors.append("manifest config_sha256 does not match config snapshot")
             else:
                 snapshot_data = load_yaml_file(resolved)
+                if "__parse_error__" in snapshot_data:
+                    errors.append(f"manifest config snapshot parse failed: {snapshot_data['__parse_error__']}")
     elif isinstance(config_path, str) and isinstance(expected_hash, str):
         resolved = (root / config_path).resolve()
         if not resolved.exists():
@@ -185,6 +197,23 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
         elif sha256_file(resolved) != prediction_hash:
             errors.append("manifest prediction_sha256 does not match prediction CSV")
 
+    metric_inputs = data.get("metric_inputs")
+    if isinstance(metric_inputs, dict):
+        score_matrix_csv = metric_inputs.get("score_matrix_csv")
+        score_matrix_hash = metric_inputs.get("score_matrix_sha256")
+        if isinstance(score_matrix_csv, str):
+            if not isinstance(score_matrix_hash, str):
+                errors.append("manifest metric_inputs.score_matrix_sha256 is required when score_matrix_csv is set")
+            elif SHA256_RE.fullmatch(score_matrix_hash) is None:
+                errors.append("manifest metric_inputs.score_matrix_sha256 must be a lowercase sha256 hex string")
+            resolved = resolve_run_path(run_dir, score_matrix_csv, field="metric_inputs.score_matrix_csv", errors=errors)
+            if resolved is not None:
+                if not resolved.exists():
+                    errors.append(f"manifest metric_inputs.score_matrix_csv not found: {score_matrix_csv}")
+                elif isinstance(score_matrix_hash, str) and SHA256_RE.fullmatch(score_matrix_hash):
+                    if sha256_file(resolved) != score_matrix_hash:
+                        errors.append("manifest metric_inputs.score_matrix_sha256 does not match score matrix CSV")
+
     dataset_path = data.get("dataset_manifest_path")
     dataset_hash = data.get("dataset_manifest_sha256")
     if isinstance(dataset_path, str) and isinstance(dataset_hash, str):
@@ -200,6 +229,8 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
             expected_dataset = route_basis.get("dataset_version") if route_basis else None
             if expected_dataset and dataset_data.get("dataset_version") != expected_dataset:
                 errors.append("manifest dataset_manifest_path does not match route dataset_version")
+            if "__parse_error__" in dataset_data:
+                errors.append(f"manifest dataset manifest parse failed: {dataset_data['__parse_error__']}")
 
     split_hash = data.get("split_sha256")
     split_manifest_path = data.get("split_manifest_path")
@@ -216,6 +247,8 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
             expected_split = data.get("split_id")
             if expected_split and split_data.get("split_id") != expected_split:
                 errors.append("manifest split_manifest_path does not match manifest split_id")
+            if "__parse_error__" in split_data:
+                errors.append(f"manifest split manifest parse failed: {split_data['__parse_error__']}")
     elif route_data is not None and isinstance(split_hash, str):
         split_id = route_data.get("split_id")
         if isinstance(split_id, str) and split_id:

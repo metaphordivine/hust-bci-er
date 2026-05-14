@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from hust_bci_er.audit.manifest import load_manifest, validate_manifest  # noqa: E402
+from hust_bci_er.audit.manifest import load_manifest, resolve_repo_or_run_path, validate_manifest  # noqa: E402
 from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
@@ -57,9 +57,46 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def resolve_from_root(value: str | Path, *, base: Path = ROOT) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else base / path
+def load_yaml_for_audit(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        return None, str(exc)
+    if not isinstance(data, dict):
+        return None, "YAML document must be a mapping"
+    return data, None
+
+
+def is_under(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def resolve_run_artifact(value: str, *, run_dir: Path, field: str) -> Path:
+    resolved = (run_dir / value).resolve()
+    if not is_under(resolved, run_dir):
+        raise ValueError(f"{field} must stay under the run directory")
+    return resolved
+
+
+def parse_finite_float(value: Any, *, field: str, context: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} is not numeric in {context}") from exc
+    if not np.isfinite(parsed):
+        raise ValueError(f"{field} is not finite in {context}")
+    return parsed
+
+
+def parse_binary(value: Any, *, field: str, context: str) -> int:
+    parsed = parse_finite_float(value, field=field, context=context)
+    if parsed not in {0.0, 1.0}:
+        raise ValueError(f"{field} is not binary in {context}")
+    return int(parsed)
 
 
 def route_primary_metric(route_data: dict[str, Any]) -> str | None:
@@ -130,7 +167,18 @@ def check_split_manifest(route_data: dict[str, Any], checks: list[AuditCheck], *
         )
         return
 
-    split_data = load_yaml(split_path)
+    split_data, parse_error = load_yaml_for_audit(split_path)
+    if parse_error is not None or split_data is None:
+        add_check(
+            checks,
+            rule_id="SPLIT_MANIFEST_PARSE",
+            severity="CRITICAL",
+            status="FAIL",
+            message=f"split manifest could not be parsed: {parse_error}",
+            fix="Fix the split manifest YAML.",
+            decision_if_fail="REJECT",
+        )
+        return
     if split_data.get("split_id") != split_id:
         add_check(
             checks,
@@ -143,31 +191,7 @@ def check_split_manifest(route_data: dict[str, Any], checks: list[AuditCheck], *
         )
         return
 
-    is_placeholder = split_data.get("status") == "declared_without_subject_list"
-    has_subject_lists = all(isinstance(split_data.get(key), list) and bool(split_data.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
-    folds = split_data.get("folds") or split_data.get("fold_definitions") or []
-    has_fold_definitions = isinstance(folds, list) and bool(folds) and all(
-        isinstance(fold, dict)
-        and all(isinstance(fold.get(key), list) and bool(fold.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
-        for fold in folds
-    )
-    trial_rows = split_data.get("trial_rows") or []
-    has_trial_rows = isinstance(trial_rows, list) and bool(trial_rows) and all(
-        isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
-    )
-    has_verifiable_content = has_subject_lists or has_fold_definitions or has_trial_rows
-    if is_placeholder or not has_verifiable_content:
-        add_warn_or_fail(
-            checks,
-            gate=gate,
-            fail_gate=STRICT_GATES,
-            rule_id="SPLIT_MANIFEST_VERIFIABLE",
-            message=f"split manifest is only a placeholder: {split_path.relative_to(ROOT)}",
-            fix="Add complete train/val/test subject lists, fold definitions, or trial rows before candidate/promoted review.",
-            decision_if_fail="BLOCKED",
-        )
-    else:
-        add_check(checks, rule_id="SPLIT_MANIFEST_VERIFIABLE", severity="INFO", status="PASS", message="split manifest has verifiable split content")
+    add_check(checks, rule_id="SPLIT_MANIFEST_DECLARED", severity="INFO", status="PASS", message="route split manifest is declared")
 
 
 def check_dataset_manifest(route_data: dict[str, Any], checks: list[AuditCheck], *, gate: str) -> None:
@@ -188,7 +212,18 @@ def check_dataset_manifest(route_data: dict[str, Any], checks: list[AuditCheck],
         )
         return
 
-    dataset_data = load_yaml(dataset_path)
+    dataset_data, parse_error = load_yaml_for_audit(dataset_path)
+    if parse_error is not None or dataset_data is None:
+        add_check(
+            checks,
+            rule_id="DATASET_MANIFEST_PARSE",
+            severity="CRITICAL",
+            status="FAIL",
+            message=f"dataset manifest could not be parsed: {parse_error}",
+            fix="Fix the dataset manifest YAML.",
+            decision_if_fail="REJECT",
+        )
+        return
     if dataset_data.get("dataset_version") != dataset_version:
         add_check(
             checks,
@@ -201,28 +236,7 @@ def check_dataset_manifest(route_data: dict[str, Any], checks: list[AuditCheck],
         )
         return
 
-    is_placeholder = dataset_data.get("status") == "declared_without_raw_data_index"
-    data_sources = dataset_data.get("data_sources") or []
-    checksum_manifest = dataset_data.get("checksum_manifest") or []
-    has_data_sources = isinstance(data_sources, list) and bool(data_sources) and all(
-        isinstance(item, dict) and item.get("path") and item.get("kind") for item in data_sources
-    )
-    has_checksums = isinstance(checksum_manifest, list) and bool(checksum_manifest) and all(
-        isinstance(item, dict) and item.get("path") and item.get("sha256") for item in checksum_manifest
-    )
-    has_data_index = has_data_sources and has_checksums
-    if is_placeholder or not has_data_index:
-        add_warn_or_fail(
-            checks,
-            gate=gate,
-            fail_gate=STRICT_GATES,
-            rule_id="DATASET_MANIFEST_VERIFIABLE",
-            message=f"dataset manifest is only a placeholder: {dataset_path.relative_to(ROOT)}",
-            fix="Add non-empty data_sources and checksum_manifest before candidate/promoted review.",
-            decision_if_fail="BLOCKED",
-        )
-    else:
-        add_check(checks, rule_id="DATASET_MANIFEST_VERIFIABLE", severity="INFO", status="PASS", message="dataset manifest has verifiable data evidence")
+    add_check(checks, rule_id="DATASET_MANIFEST_DECLARED", severity="INFO", status="PASS", message="route dataset manifest is declared")
 
 
 def add_warn_or_fail(
@@ -247,6 +261,157 @@ def add_warn_or_fail(
         )
     else:
         add_check(checks, rule_id=rule_id, severity="WARN", status="WARN", message=message, fix=fix)
+
+
+def split_manifest_has_evidence(split_data: dict[str, Any]) -> bool:
+    has_subject_lists = all(isinstance(split_data.get(key), list) and bool(split_data.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+    folds = split_data.get("folds") or split_data.get("fold_definitions") or []
+    has_fold_definitions = isinstance(folds, list) and bool(folds) and all(
+        isinstance(fold, dict)
+        and all(isinstance(fold.get(key), list) and bool(fold.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+        for fold in folds
+    )
+    trial_rows = split_data.get("trial_rows") or []
+    has_trial_rows = isinstance(trial_rows, list) and bool(trial_rows) and all(
+        isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
+    )
+    return has_subject_lists or has_fold_definitions or has_trial_rows
+
+
+def dataset_manifest_has_evidence(dataset_data: dict[str, Any]) -> bool:
+    data_sources = dataset_data.get("data_sources") or []
+    checksum_manifest = dataset_data.get("checksum_manifest") or []
+    has_data_sources = isinstance(data_sources, list) and bool(data_sources) and all(
+        isinstance(item, dict) and item.get("path") and item.get("kind") for item in data_sources
+    )
+    has_checksums = isinstance(checksum_manifest, list) and bool(checksum_manifest) and all(
+        isinstance(item, dict) and item.get("path") and item.get("sha256") for item in checksum_manifest
+    )
+    return has_data_sources and has_checksums
+
+
+def check_run_dataset_split_evidence(
+    manifest: dict[str, Any],
+    route_data: dict[str, Any],
+    run_dir: Path,
+    checks: list[AuditCheck],
+    *,
+    gate: str,
+) -> None:
+    errors: list[str] = []
+    dataset_path_value = manifest.get("dataset_manifest_path")
+    split_path_value = manifest.get("split_manifest_path")
+
+    if isinstance(dataset_path_value, str):
+        dataset_path = resolve_repo_or_run_path(
+            run_dir,
+            ROOT,
+            dataset_path_value,
+            field="dataset_manifest_path",
+            repo_subdir="configs/datasets",
+            errors=errors,
+        )
+        if dataset_path is None or not dataset_path.exists():
+            add_check(
+                checks,
+                rule_id="RUN_DATASET_EVIDENCE_VALID",
+                severity="ERROR",
+                status="FAIL",
+                message="dataset evidence path is invalid: " + "; ".join(errors),
+                fix="Point manifest.dataset_manifest_path to a run-local or configs/datasets evidence file.",
+                decision_if_fail="BLOCKED",
+            )
+        else:
+            dataset_data, parse_error = load_yaml_for_audit(dataset_path)
+            expected_dataset = route_data.get("dataset_version")
+            if parse_error is not None or dataset_data is None:
+                add_check(
+                    checks,
+                    rule_id="RUN_DATASET_EVIDENCE_PARSE",
+                    severity="ERROR",
+                    status="FAIL",
+                    message=f"run dataset evidence could not be parsed: {parse_error}",
+                    fix="Fix the dataset evidence YAML.",
+                    decision_if_fail="BLOCKED",
+                )
+            elif expected_dataset and dataset_data.get("dataset_version") != expected_dataset:
+                add_check(
+                    checks,
+                    rule_id="RUN_DATASET_EVIDENCE_VALID",
+                    severity="ERROR",
+                    status="FAIL",
+                    message="run dataset evidence dataset_version does not match route",
+                    fix="Use dataset evidence for the audited route dataset_version.",
+                    decision_if_fail="BLOCKED",
+                )
+            elif dataset_data.get("status") == "declared_without_raw_data_index" or not dataset_manifest_has_evidence(dataset_data):
+                add_warn_or_fail(
+                    checks,
+                    gate=gate,
+                    fail_gate=STRICT_GATES,
+                    rule_id="RUN_DATASET_EVIDENCE_VALID",
+                    message="run dataset evidence is not verifiable",
+                    fix="Add non-empty data_sources and checksum_manifest evidence before candidate/promoted review.",
+                    decision_if_fail="BLOCKED",
+                )
+            else:
+                add_check(checks, rule_id="RUN_DATASET_EVIDENCE_VALID", severity="INFO", status="PASS", message="run dataset evidence is verifiable")
+
+    errors = []
+    if isinstance(split_path_value, str):
+        split_path = resolve_repo_or_run_path(
+            run_dir,
+            ROOT,
+            split_path_value,
+            field="split_manifest_path",
+            repo_subdir="configs/splits",
+            errors=errors,
+        )
+        if split_path is None or not split_path.exists():
+            add_check(
+                checks,
+                rule_id="RUN_SPLIT_EVIDENCE_VALID",
+                severity="ERROR",
+                status="FAIL",
+                message="split evidence path is invalid: " + "; ".join(errors),
+                fix="Point manifest.split_manifest_path to a run-local or configs/splits evidence file.",
+                decision_if_fail="BLOCKED",
+            )
+        else:
+            split_data, parse_error = load_yaml_for_audit(split_path)
+            expected_split = manifest.get("split_id") or route_data.get("split_id")
+            if parse_error is not None or split_data is None:
+                add_check(
+                    checks,
+                    rule_id="RUN_SPLIT_EVIDENCE_PARSE",
+                    severity="ERROR",
+                    status="FAIL",
+                    message=f"run split evidence could not be parsed: {parse_error}",
+                    fix="Fix the split evidence YAML.",
+                    decision_if_fail="BLOCKED",
+                )
+            elif expected_split and split_data.get("split_id") != expected_split:
+                add_check(
+                    checks,
+                    rule_id="RUN_SPLIT_EVIDENCE_VALID",
+                    severity="ERROR",
+                    status="FAIL",
+                    message="run split evidence split_id does not match manifest",
+                    fix="Use split evidence for the audited manifest split_id.",
+                    decision_if_fail="BLOCKED",
+                )
+            elif split_data.get("status") == "declared_without_subject_list" or not split_manifest_has_evidence(split_data):
+                add_warn_or_fail(
+                    checks,
+                    gate=gate,
+                    fail_gate=STRICT_GATES,
+                    rule_id="RUN_SPLIT_EVIDENCE_VALID",
+                    message="run split evidence is not verifiable",
+                    fix="Add complete subject lists, fold definitions, or trial rows before candidate/promoted review.",
+                    decision_if_fail="BLOCKED",
+                )
+            else:
+                add_check(checks, rule_id="RUN_SPLIT_EVIDENCE_VALID", severity="INFO", status="PASS", message="run split evidence is verifiable")
 
 
 def top4_group_columns(fields: set[str], schema: dict[str, str | None], manifest: dict[str, Any]) -> list[str] | None:
@@ -290,6 +455,7 @@ def check_top4_group_semantics(
     bad_unique: list[str] = []
     bad_binary: list[str] = []
     bad_truth: list[str] = []
+    bad_score: list[str] = []
     bad_ranking: list[str] = []
     for group_id, group in groups.items():
         trial_ids = [str(row[trial_col]) for row in group]
@@ -299,30 +465,34 @@ def check_top4_group_semantics(
         observed: list[int] = []
         for row in group:
             try:
-                value = float(row[top4_col])
+                observed.append(parse_binary(row[top4_col], field=top4_col, context=group_id))
             except ValueError:
                 bad_binary.append(group_id)
-                value = float("nan")
-            if value not in {0.0, 1.0}:
-                bad_binary.append(group_id)
-            observed.append(int(value) if value in {0.0, 1.0} else -1)
+                observed.append(-1)
 
         if truth_col is not None:
             truth_values: list[int] = []
             for row in group:
                 try:
-                    value = float(row[truth_col])
+                    truth_values.append(parse_binary(row[truth_col], field=truth_col, context=group_id))
                 except ValueError:
                     bad_truth.append(group_id)
-                    value = float("nan")
-                if value not in {0.0, 1.0}:
-                    bad_truth.append(group_id)
-                truth_values.append(int(value) if value in {0.0, 1.0} else -1)
+                    truth_values.append(-1)
             if len(group) == 8 and sum(truth_values) != 4:
                 bad_truth.append(group_id)
 
         if score_col is not None and len(group) == 8 and all(value in {0, 1} for value in observed):
-            scores = np.array([float(row[score_col]) for row in group], dtype=float)
+            parsed_scores: list[float] = []
+            for row in group:
+                try:
+                    parsed_scores.append(parse_finite_float(row[score_col], field=score_col, context=group_id))
+                except ValueError:
+                    bad_score.append(group_id)
+                    parsed_scores = []
+                    break
+            if not parsed_scores:
+                continue
+            scores = np.array(parsed_scores, dtype=float)
             expected = topk_binary(scores, 4)
             if not np.array_equal(expected, np.array(observed, dtype=int)):
                 bad_ranking.append(group_id)
@@ -331,6 +501,7 @@ def check_top4_group_semantics(
         ("PREDICTION_TRIAL_ID_UNIQUE", bad_unique, "duplicate trial_id values inside Top-4 groups", "Ensure each Top-4 group has 8 unique trial_id values."),
         ("PREDICTION_TOP4_BINARY", bad_binary, "pred_top4 contains non-binary values", "Encode pred_top4 as 0 or 1 only."),
         ("PREDICTION_TOP4_TRUTH_BALANCE", bad_truth, "y_true is not binary or not 4 positives per 8-trial group", "For labeled Top-4 audits, each 8-trial group should contain 4 positive labels."),
+        ("PREDICTION_SCORE_NUMERIC", bad_score, "score contains non-numeric or non-finite values", "Encode score columns as finite numeric values."),
         ("PREDICTION_TOP4_RANKING", bad_ranking, "pred_top4 does not match score-derived top 4", "Regenerate pred_top4 from score using the repository Top-4 policy."),
     ]:
         if bad:
@@ -372,30 +543,95 @@ def crop_score_columns(fields: set[str]) -> list[str]:
     return []
 
 
-def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest: dict[str, Any]) -> float:
-    with path.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-        fields = set(reader.fieldnames or [])
+def add_group_check(checks: list[AuditCheck], *, rule_id: str, bad: list[str], message: str, fix: str) -> None:
+    if bad:
+        add_check(
+            checks,
+            rule_id=rule_id,
+            severity="ERROR",
+            status="FAIL",
+            message=f"{message}: {', '.join(sorted(set(bad))[:5])}",
+            fix=fix,
+            decision_if_fail="DIAGNOSTIC_ONLY",
+        )
+    else:
+        add_check(checks, rule_id=rule_id, severity="INFO", status="PASS", message=f"{rule_id} passed")
+
+
+def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest: dict[str, Any], checks: list[AuditCheck]) -> float:
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            fields = set(reader.fieldnames or [])
+    except Exception as exc:
+        raise ValueError(f"score matrix CSV could not be parsed: {exc}") from exc
     schema = prediction_schema(fields)
     group_cols = metric_group_columns(fields, schema, manifest)
     score_cols = crop_score_columns(fields)
     truth_col = schema["y_true"]
-    if group_cols is None or truth_col is None or len(score_cols) != 5:
-        raise ValueError("score matrix CSV must include group keys, y_true, and crop_0..crop_4 columns")
+    trial_col = schema["trial_id"]
+    if group_cols is None or truth_col is None or trial_col is None or len(score_cols) != 5:
+        raise ValueError("score matrix CSV must include group keys, trial_id, y_true, and crop_0..crop_4 columns")
     groups = group_prediction_rows(rows, group_cols)
     values: list[float] = []
+    bad_group_size: list[str] = []
+    bad_trial_unique: list[str] = []
+    bad_label_binary: list[str] = []
+    bad_truth_balance: list[str] = []
+    bad_score_numeric: list[str] = []
     for group_id, group in groups.items():
         if len(group) != 8:
-            raise ValueError(f"exact metric group must contain 8 trials: {group_id}")
-        mat = np.array([[float(row[col]) for col in score_cols] for row in group], dtype=float)
-        y_true = np.array([int(float(row[truth_col])) for row in group], dtype=int)
+            bad_group_size.append(group_id)
+            continue
+        trial_ids = [str(row[trial_col]) for row in group]
+        if len(set(trial_ids)) != len(trial_ids):
+            bad_trial_unique.append(group_id)
+
+        score_rows: list[list[float]] = []
+        for row in group:
+            parsed_row: list[float] = []
+            for col in score_cols:
+                try:
+                    parsed_row.append(parse_finite_float(row[col], field=col, context=group_id))
+                except ValueError:
+                    bad_score_numeric.append(group_id)
+                    parsed_row = []
+                    break
+            if not parsed_row:
+                break
+            score_rows.append(parsed_row)
+        if len(score_rows) != len(group):
+            continue
+
+        labels: list[int] = []
+        for row in group:
+            try:
+                labels.append(parse_binary(row[truth_col], field=truth_col, context=group_id))
+            except ValueError:
+                bad_label_binary.append(group_id)
+                labels.append(-1)
+        if any(label not in {0, 1} for label in labels):
+            continue
+        if sum(labels) != 4:
+            bad_truth_balance.append(group_id)
+            continue
+
+        mat = np.array(score_rows, dtype=float)
+        y_true = np.array(labels, dtype=int)
         if metric_name == "exact_single_crop_expected_BA":
             values.append(exact_ba_from_matrix(mat, y_true))
         elif metric_name == "all_correct_rate":
             values.append(exact_all_correct_rate_from_matrix(mat, y_true))
         else:
             raise ValueError(f"unsupported exact metric: {metric_name}")
+    add_group_check(checks, rule_id="SCORE_MATRIX_GROUP_SIZE", bad=bad_group_size, message="score matrix groups must contain 8 trials", fix="Write one row per trial for each metric group.")
+    add_group_check(checks, rule_id="SCORE_MATRIX_TRIAL_ID_UNIQUE", bad=bad_trial_unique, message="score matrix groups contain duplicate trial_id values", fix="Ensure each score matrix group has 8 unique trial IDs.")
+    add_group_check(checks, rule_id="SCORE_MATRIX_LABEL_BINARY", bad=bad_label_binary, message="score matrix y_true contains non-binary values", fix="Encode score matrix y_true as 0 or 1.")
+    add_group_check(checks, rule_id="SCORE_MATRIX_TRUTH_BALANCE", bad=bad_truth_balance, message="score matrix groups do not contain 4 positive labels", fix="Ensure every 8-trial score matrix group has exactly 4 positives.")
+    add_group_check(checks, rule_id="SCORE_MATRIX_SCORE_NUMERIC", bad=bad_score_numeric, message="score matrix contains non-numeric or non-finite crop scores", fix="Encode crop scores as finite numeric values.")
+    if bad_group_size or bad_trial_unique or bad_label_binary or bad_truth_balance or bad_score_numeric:
+        raise ValueError("score matrix semantic checks failed")
     if not values:
         raise ValueError("score matrix CSV has no metric groups")
     return float(np.mean(values))
@@ -410,10 +646,12 @@ def recompute_primary_metric_from_predictions(
     manifest: dict[str, Any],
 ) -> float:
     if metric_name in {"no_top4_BA", "top4_BA"}:
-        if schema["y_true"] is None or schema["y_pred"] is None:
-            raise ValueError("prediction CSV must include y_true and y_pred")
-        y_true = np.array([int(float(row[schema["y_true"]])) for row in rows], dtype=int)
-        y_pred = np.array([int(float(row[schema["y_pred"]])) for row in rows], dtype=int)
+        pred_col = schema["pred_top4"] if metric_name == "top4_BA" else schema["y_pred"]
+        if schema["y_true"] is None or pred_col is None:
+            required = "y_true and pred_top4" if metric_name == "top4_BA" else "y_true and y_pred"
+            raise ValueError(f"prediction CSV must include {required}")
+        y_true = np.array([parse_binary(row[schema["y_true"]], field=schema["y_true"], context="primary metric") for row in rows], dtype=int)
+        y_pred = np.array([parse_binary(row[pred_col], field=pred_col, context="primary metric") for row in rows], dtype=int)
         return balanced_accuracy(y_true, y_pred)
 
     if metric_name == "all_correct_rate":
@@ -428,8 +666,8 @@ def recompute_primary_metric_from_predictions(
         for group_id, group in groups.items():
             if len(group) != 8:
                 raise ValueError(f"all-correct group must contain 8 trials: {group_id}")
-            y_true_matrix.append([int(float(row[schema["y_true"]])) for row in group])
-            y_pred_matrix.append([int(float(row[schema["y_pred"]])) for row in group])
+            y_true_matrix.append([parse_binary(row[schema["y_true"]], field=schema["y_true"], context=group_id) for row in group])
+            y_pred_matrix.append([parse_binary(row[schema["y_pred"]], field=schema["y_pred"], context=group_id) for row in group])
         from hust_bci_er.evaluation.metrics import all_correct_rate
 
         return all_correct_rate(np.array(y_true_matrix), np.array(y_pred_matrix))
@@ -454,8 +692,8 @@ def check_primary_metric(
     try:
         metric_inputs = manifest.get("metric_inputs")
         if isinstance(metric_inputs, dict) and isinstance(metric_inputs.get("score_matrix_csv"), str):
-            score_matrix_path = resolve_from_root(metric_inputs["score_matrix_csv"], base=run_dir)
-            recomputed = recompute_exact_metric_from_matrix(score_matrix_path, metric_name=metric_name, manifest=manifest)
+            score_matrix_path = resolve_run_artifact(metric_inputs["score_matrix_csv"], run_dir=run_dir, field="metric_inputs.score_matrix_csv")
+            recomputed = recompute_exact_metric_from_matrix(score_matrix_path, metric_name=metric_name, manifest=manifest, checks=checks)
         else:
             recomputed = recompute_primary_metric_from_predictions(metric_name=metric_name, rows=rows, fields=fields, schema=schema, manifest=manifest)
     except Exception as exc:
@@ -487,10 +725,22 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
         )
         return
 
-    with path.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-        fields = set(reader.fieldnames or [])
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            fields = set(reader.fieldnames or [])
+    except Exception as exc:
+        add_check(
+            checks,
+            rule_id="PREDICTION_CSV_PARSE",
+            severity="ERROR",
+            status="FAIL",
+            message=f"prediction CSV could not be parsed: {exc}",
+            fix="Fix the prediction CSV encoding or structure.",
+            decision_if_fail="DIAGNOSTIC_ONLY",
+        )
+        return
 
     if not rows:
         add_check(
@@ -551,7 +801,13 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             group_id = "|".join(str(row[col]) for col in group_columns)
             groups.setdefault(group_id, []).append(row)
         for group_id, group in groups.items():
-            n_pred = sum(int(float(row[schema["pred_top4"]])) for row in group)
+            n_pred = 0
+            for row in group:
+                try:
+                    n_pred += parse_binary(row[schema["pred_top4"]], field=schema["pred_top4"], context=group_id)
+                except ValueError:
+                    n_pred = -1
+                    break
             if len(group) != 8 or n_pred != 4:
                 bad_groups.append(f"{group_id}: rows={len(group)}, pred_top4={n_pred}")
         if bad_groups:
@@ -588,13 +844,25 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             )
 
     if schema["y_true"] and schema["y_pred"]:
-        y_true = []
-        y_pred = []
-        for row in rows:
-            y_true.append(int(float(row[schema["y_true"]])))
-            y_pred.append(int(float(row[schema["y_pred"]])))
-        score = balanced_accuracy(np.array(y_true), np.array(y_pred))
-        add_check(checks, rule_id="METRIC_RECOMPUTE_BA", severity="INFO", status="PASS", message=f"recomputed BA: {score:.6f}")
+        try:
+            y_true = []
+            y_pred = []
+            for row in rows:
+                y_true.append(parse_binary(row[schema["y_true"]], field=schema["y_true"], context="BA recompute"))
+                y_pred.append(parse_binary(row[schema["y_pred"]], field=schema["y_pred"], context="BA recompute"))
+            score = balanced_accuracy(np.array(y_true), np.array(y_pred))
+        except ValueError as exc:
+            add_warn_or_fail(
+                checks,
+                gate=gate,
+                fail_gate=STRICT_GATES,
+                rule_id="METRIC_RECOMPUTE_BA",
+                message=f"BA recompute failed: {exc}",
+                fix="Use binary y_true/y_pred values for labeled validation predictions.",
+                decision_if_fail="DIAGNOSTIC_ONLY",
+            )
+        else:
+            add_check(checks, rule_id="METRIC_RECOMPUTE_BA", severity="INFO", status="PASS", message=f"recomputed BA: {score:.6f}")
     else:
         add_warn_or_fail(
             checks,
@@ -724,9 +992,10 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
             else:
                 add_check(checks, rule_id="MANIFEST_VALID", severity="INFO", status="PASS", message="manifest is valid")
                 manifest = load_manifest(manifest_path)
+                check_run_dataset_split_evidence(manifest, route_data, run_dir, checks, gate=gate)
                 prediction_csv = manifest.get("prediction_csv")
                 if isinstance(prediction_csv, str) and prediction_csv:
-                    check_prediction_csv(resolve_from_root(prediction_csv, base=run_dir), checks, route_data=route_data, gate=gate, manifest=manifest)
+                    check_prediction_csv(resolve_run_artifact(prediction_csv, run_dir=run_dir, field="prediction_csv"), checks, route_data=route_data, gate=gate, manifest=manifest)
                 else:
                     add_warn_or_fail(
                         checks,
@@ -751,6 +1020,21 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
                     fix="Write one concise route summary before treating this as a finished experiment.",
                     decision_if_fail="BLOCKED",
                 )
+
+            if gate == "promoted":
+                promotion_path = ROOT / "reports" / "promotion_audits" / f"{route_id}_promotion.md"
+                if promotion_path.exists():
+                    add_check(checks, rule_id="PROMOTION_AUDIT_EXISTS", severity="INFO", status="PASS", message=f"promotion audit found: {promotion_path.relative_to(ROOT)}")
+                else:
+                    add_check(
+                        checks,
+                        rule_id="PROMOTION_AUDIT_EXISTS",
+                        severity="ERROR",
+                        status="FAIL",
+                        message=f"promotion audit is missing: {promotion_path.relative_to(ROOT)}",
+                        fix="Write a promotion audit before using the promoted gate.",
+                        decision_if_fail="BLOCKED",
+                    )
 
     decision = overall_decision(checks, gate=gate)
     if decision not in AUDIT_DECISIONS:
