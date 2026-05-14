@@ -37,3 +37,4 @@ class PredictionRecord:
     y_pred: int | None = None
     y_true: int | None = None
     fold: int | None = None
+    seed: int | None = None

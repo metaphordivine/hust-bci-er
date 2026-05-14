@@ -68,6 +68,22 @@ def nvidia_driver_version() -> str | None:
     return lines[0] if lines else None
 
 
+def pip_freeze() -> list[str]:
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "freeze"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+
+
 def capture_environment() -> dict[str, Any]:
     """Capture the runtime versions that can affect reproducibility."""
     return {
@@ -89,4 +105,5 @@ def capture_environment() -> dict[str, Any]:
             "torch": package_version("torch"),
         },
         "torch": torch_environment(),
+        "pip_freeze": pip_freeze(),
     }

@@ -17,6 +17,8 @@ def run_step(cmd: list[str]) -> int:
 def fast() -> int:
     commands = [
         [sys.executable, "scripts/check_repo_conventions.py"],
+        [sys.executable, "scripts/scan_no_leakage.py"],
+        [sys.executable, "scripts/check_registry_consistency.py"],
         [sys.executable, "scripts/validate_route.py", "--all"],
         [sys.executable, "scripts/update_route_board.py", "--check"],
         [sys.executable, "scripts/check_summary_consistency.py"],

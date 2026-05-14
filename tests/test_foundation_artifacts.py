@@ -1,0 +1,193 @@
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
+from hust_bci_er.audit.cache_manager import CacheManager
+from hust_bci_er.audit.promotion import check_candidate_audit, check_promotion_fields, parse_key_value_markdown
+from hust_bci_er.audit.source_scanner import scan_no_leakage
+from hust_bci_er.audit.summary import render_route_summary
+from hust_bci_er.config.consistency import registry_consistency_errors
+from hust_bci_er.config.docs import render_component_docs
+from hust_bci_er.contracts.artifacts import ComponentScoreRecord, validate_component_score_rows, write_component_scores
+from hust_bci_er.contracts.records import PredictionRecord
+from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
+from hust_bci_er.evaluation.prediction_writer import write_predictions
+from hust_bci_er.training.monitor import TrainingMonitor
+
+
+def test_component_artifact_and_prediction_writer_contracts(tmp_path):
+    component_csv = tmp_path / "component_scores.csv"
+    component_meta = write_component_scores(
+        [ComponentScoreRecord("c1", "s1", "t1", 0, 0.9, y_true=1)],
+        component_csv,
+    )
+    assert component_meta["rows"] == 1
+    assert validate_component_score_rows([{"component_id": "c1", "subject_id": "s1", "trial_id": "t1", "crop_id": 0, "score": 0.9}]) == []
+    bad_rows = [
+        {"component_id": "c1", "subject_id": "s1", "trial_id": "t1", "crop_id": 0, "score": "nan", "y_true": 3},
+        {"component_id": "c1", "subject_id": "s1", "trial_id": "t1", "crop_id": 0, "score": 0.1},
+    ]
+    bad_errors = validate_component_score_rows(bad_rows)
+    assert any("not finite" in err for err in bad_errors)
+    assert any("not binary" in err for err in bad_errors)
+    assert any("duplicates" in err for err in bad_errors)
+
+    records = [
+        PredictionRecord("r1", "s1", f"t{idx}", None, 1.0 - idx * 0.1, y_true=1 if idx < 4 else 0)
+        for idx in range(8)
+    ]
+    prediction_csv = tmp_path / "predictions.csv"
+    pred_meta = write_predictions(records, prediction_csv)
+    assert pred_meta["rows"] == 8
+    text = prediction_csv.read_text(encoding="utf-8")
+    assert "pred_top4" in text
+    assert text.count(",1,") >= 4
+
+    with pytest.raises(ValueError, match="must contain 8 rows"):
+        write_predictions(records[:3], tmp_path / "bad_predictions.csv")
+
+
+def test_metric_report_builder_outputs_board_subject_and_audit(tmp_path):
+    records = [
+        PredictionRecord("r1", "s1", f"t{idx}", None, 1.0 - idx * 0.1, y_true=1 if idx < 4 else 0)
+        for idx in range(8)
+    ]
+    prediction_csv = tmp_path / "predictions.csv"
+    write_predictions(records, prediction_csv)
+
+    report = build_metric_report(route_id="r1", prediction_csv=prediction_csv)
+    paths = write_metric_report(report, tmp_path / "report")
+
+    assert report["metrics"]["top4_BA"] == 1.0
+    assert Path(paths["board"]).exists()
+    assert Path(paths["subject_ba"]).exists()
+    assert json.loads(Path(paths["audit_json"]).read_text(encoding="utf-8"))["route_id"] == "r1"
+
+
+def test_metric_report_builder_supports_score_matrix_exact_metric(tmp_path):
+    score_matrix = tmp_path / "score_matrix.csv"
+    lines = ["subject_id,trial_id,y_true,crop_0,crop_1,crop_2,crop_3,crop_4"]
+    for idx in range(8):
+        label = 1 if idx < 4 else 0
+        score = 1.0 - idx * 0.01
+        lines.append(f"s1,t{idx},{label},{score},{score},{score},{score},{score}")
+    score_matrix.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    report = build_metric_report(route_id="r1", score_matrix_csv=score_matrix, primary_metric="exact_single_crop_expected_BA")
+    paths = write_metric_report(report, tmp_path / "score_report")
+
+    assert report["metrics"]["exact_single_crop_expected_BA"] == 1.0
+    assert report["score_matrix_sha256"]
+    assert "metric_value" in Path(paths["subject_ba"]).read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_source_scanner_finds_leakage_pattern(tmp_path):
+    root = tmp_path
+    src = root / "src"
+    src.mkdir()
+    (src / "bad.py").write_text("value = 'public_label'\n", encoding="utf-8")
+
+    findings = scan_no_leakage(root)
+
+    assert len(findings) == 1
+    assert findings[0].pattern == "public_label"
+
+
+def test_source_scanner_finds_id_feature_and_inference_label_leaks(tmp_path):
+    root = tmp_path
+    features = root / "src" / "hust_bci_er" / "features"
+    inference = root / "src" / "hust_bci_er" / "inference"
+    scripts = root / "scripts"
+    features.mkdir(parents=True)
+    inference.mkdir(parents=True)
+    scripts.mkdir()
+    (features / "bad_feature.py").write_text("features.append(row['subject_id'])\n", encoding="utf-8")
+    (inference / "bad_infer.py").write_text("return batch['y_true']\n", encoding="utf-8")
+    (scripts / "infer.py").write_text("return batch['y_true']\n", encoding="utf-8")
+
+    patterns = {finding.pattern for finding in scan_no_leakage(root)}
+
+    assert "id_shortcut_as_feature" in patterns
+    assert sum(1 for finding in scan_no_leakage(root) if finding.pattern == "inference_label_reference") == 2
+
+
+def test_summary_and_promotion_helpers(tmp_path):
+    summary = render_route_summary(
+        route_data={"route_id": "r1", "status": "IDEA", "dataset_version": "d1", "split_id": "s1", "seed": 42, "evaluation": {"protocol": "p1", "primary_metric": "top4_BA"}},
+        audit_report={"route_id": "r1", "overall": "PASS", "gate": "candidate", "route_config": "configs/routes/models/r1.yaml", "run_dir": "outputs/r1/run", "metrics": {"top4_BA": 0.75}},
+    )
+    assert "route_id: r1" in summary
+    assert "primary_metric_value: 0.75" in summary
+
+    promotion = tmp_path / "promotion.md"
+    promotion.write_text(
+        "\n".join(
+            [
+                "route_id: r1",
+                "promoted_from_run: outputs/r1/run",
+                "candidate_audit_report: candidate.json",
+                "primary_metric: top4_BA",
+                "comparison_baseline: baseline",
+                "risk_review: reviewed",
+                "no_leakage_review: reviewed",
+                "decision: promote",
+                "reviewer: test",
+                "date: 2026-05-14",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fields = parse_key_value_markdown(promotion)
+    assert check_promotion_fields(fields) == []
+    candidate = tmp_path / "candidate.json"
+    critical_rules = [
+        "MANIFEST_VALID",
+        "PRIMARY_METRIC_RECOMPUTE",
+        "PRIMARY_METRIC_REPORTED",
+        "RUN_DATASET_EVIDENCE_VALID",
+        "RUN_SPLIT_EVIDENCE_VALID",
+        "RUN_SPLIT_EVIDENCE_CONSISTENT",
+        "RUN_REPRODUCIBILITY_LOCKED",
+    ]
+    candidate.write_text(
+        json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS", "checks": [{"rule_id": rule, "status": "PASS"} for rule in critical_rules]}),
+        encoding="utf-8",
+    )
+    assert check_candidate_audit(candidate, route_id="r1") == []
+
+    top4_missing_truth_balance = tmp_path / "top4_missing_truth_balance.json"
+    top4_checks = [{"rule_id": rule, "status": "PASS"} for rule in critical_rules + ["PREDICTION_TOP4_RANKING", "PREDICTION_TOP4_BINARY", "PREDICTION_TRIAL_ID_UNIQUE"]]
+    top4_missing_truth_balance.write_text(
+        json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS", "checks": top4_checks}),
+        encoding="utf-8",
+    )
+    assert "PREDICTION_TOP4_TRUTH_BALANCE" in "; ".join(check_candidate_audit(top4_missing_truth_balance, route_id="r1"))
+
+    minimal = tmp_path / "minimal_candidate.json"
+    minimal.write_text(json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS"}), encoding="utf-8")
+    assert "checks list" in "; ".join(check_candidate_audit(minimal, route_id="r1"))
+
+
+def test_registry_docs_checker_monitor_and_cache_manager(tmp_path):
+    assert registry_consistency_errors(Path.cwd()) == []
+    docs = render_component_docs()
+    assert "Torch Backbones" in docs
+    assert "deformer_lite" in docs
+
+    monitor = TrainingMonitor(tmp_path / "run", route_id="r1", run_id="run")
+    monitor.epoch(1, {"loss": 0.5})
+    monitor.finish()
+    assert (tmp_path / "run" / "training_events.jsonl").exists()
+    assert json.loads((tmp_path / "run" / "heartbeat.json").read_text(encoding="utf-8"))["event"] == "finish"
+
+    cache_dir = tmp_path / "cache"
+    artifact = cache_dir / "features.npy"
+    cache_dir.mkdir()
+    artifact.write_bytes(b"features")
+    entry = CacheManager(cache_dir).register(key="features", path=artifact, kind="feature")
+    assert entry["path"] == "features.npy"
+    with pytest.raises(ValueError):
+        CacheManager(cache_dir).register(key="bad", path=tmp_path / "outside.bin", kind="feature")
