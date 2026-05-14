@@ -27,17 +27,26 @@ def write_route(root: Path, *, status: str = "CANDIDATE") -> None:
     )
 
 
-def write_bound_summary(root: Path, *, metric_value: str = "0.75", manifest_hash: str | None = None) -> None:
+def write_bound_summary(
+    root: Path,
+    *,
+    metric_value: str = "0.75",
+    manifest_hash: str | None = None,
+    manifest_payload: dict | None = None,
+    manifest_path: str = "reports/audits/manifest.json",
+) -> None:
     reports = root / "reports" / "route_summaries"
     reports.mkdir(parents=True)
     audit = root / "reports" / "audits" / "audit_report.json"
-    audit.parent.mkdir(parents=True)
+    audit.parent.mkdir(parents=True, exist_ok=True)
     audit.write_text(json.dumps({"route_id": "summary_route", "gate": "candidate", "overall": "PASS"}), encoding="utf-8")
-    manifest = root / "reports" / "audits" / "manifest.json"
-    manifest.write_text(
-        json.dumps({"route_id": "summary_route", "primary_metric": "top4_BA", "metrics": {"top4_BA": 0.75}}),
-        encoding="utf-8",
-    )
+    manifest = root / manifest_path
+    manifest.mkdir(parents=True, exist_ok=True) if manifest_path.endswith("/") else manifest.parent.mkdir(parents=True, exist_ok=True)
+    if not manifest_path.endswith("/"):
+        manifest.write_text(
+            json.dumps(manifest_payload or {"route_id": "summary_route", "primary_metric": "top4_BA", "metrics": {"top4_BA": 0.75}}),
+            encoding="utf-8",
+        )
     manifest_hash = manifest_hash or sha256_file(manifest)
     (reports / "summary_route_summary.md").write_text(
         "\n".join(
@@ -49,7 +58,7 @@ def write_bound_summary(root: Path, *, metric_value: str = "0.75", manifest_hash
                 "primary_metric: top4_BA",
                 f"primary_metric_value: {metric_value}",
                 "audit_report_path: reports/audits/audit_report.json",
-                "manifest_path: reports/audits/manifest.json",
+                f"manifest_path: {manifest_path}",
                 f"manifest_sha256: {manifest_hash}",
                 "decision: keep",
                 "reproduce: test",
@@ -77,3 +86,39 @@ def test_advanced_summary_rejects_manifest_hash_and_metric_mismatch(monkeypatch,
     output = capsys.readouterr().out
     assert "summary manifest_sha256 mismatch" in output
     assert "summary primary_metric_value mismatch" in output
+
+
+def test_advanced_summary_rejects_directory_manifest_path(monkeypatch, tmp_path, capsys):
+    write_route(tmp_path)
+    manifest_dir = tmp_path / "reports" / "audits" / "manifest_dir"
+    manifest_dir.mkdir(parents=True)
+    write_bound_summary(tmp_path, manifest_path="reports/audits/manifest_dir/", manifest_hash="0" * 64)
+    monkeypatch.setattr(check_summary_consistency, "ROOT", tmp_path)
+
+    assert check_summary_consistency.main() == 1
+    assert "summary manifest_path is not a file" in capsys.readouterr().out
+
+
+def test_advanced_summary_rejects_non_finite_metric_values(monkeypatch, tmp_path, capsys):
+    write_route(tmp_path)
+    write_bound_summary(
+        tmp_path,
+        metric_value="NaN",
+        manifest_payload={"route_id": "summary_route", "primary_metric": "top4_BA", "metrics": {"top4_BA": 0.75}},
+    )
+    monkeypatch.setattr(check_summary_consistency, "ROOT", tmp_path)
+
+    assert check_summary_consistency.main() == 1
+    assert "summary primary_metric_value is not numeric" in capsys.readouterr().out
+
+
+def test_advanced_summary_rejects_missing_manifest_primary_metric(monkeypatch, tmp_path, capsys):
+    write_route(tmp_path)
+    write_bound_summary(
+        tmp_path,
+        manifest_payload={"route_id": "summary_route", "metrics": {"top4_BA": 0.75}},
+    )
+    monkeypatch.setattr(check_summary_consistency, "ROOT", tmp_path)
+
+    assert check_summary_consistency.main() == 1
+    assert "summary manifest primary_metric missing or invalid" in capsys.readouterr().out

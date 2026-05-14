@@ -27,6 +27,13 @@ Before code, experiment, or report changes:
 - Do not create one-off giant scripts in `scripts/`.
 - Do not silently change split definitions or evaluation protocols.
 
+## Code Review Language
+
+- All automated code review summaries and review comments for this repository must be written in Simplified Chinese.
+- Risk levels, issue descriptions, suggested fixes, and final review conclusions must be written in Simplified Chinese.
+- Keep code identifiers, file paths, function names, class names, commands, and error messages in their original spelling.
+- Do not translate variable names, API names, config keys, or command output literally into Chinese.
+
 ## Required Before Completion
 
 Run:

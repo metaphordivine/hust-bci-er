@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -66,9 +67,10 @@ def resolve_repo_path(value: str) -> Path | None:
 
 def parse_numeric(value: str) -> float | None:
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def validate_summary_manifest_binding(summary: Path, route_id: str, fields: dict[str, str], errors: list[str]) -> None:
@@ -81,6 +83,9 @@ def validate_summary_manifest_binding(summary: Path, route_id: str, fields: dict
         return
     if not manifest_path.exists():
         errors.append(f"summary manifest_path does not exist: {summary.relative_to(ROOT)}")
+        return
+    if not manifest_path.is_file():
+        errors.append(f"summary manifest_path is not a file: {summary.relative_to(ROOT)}")
         return
 
     manifest_sha256 = fields.get("manifest_sha256")
@@ -101,8 +106,12 @@ def validate_summary_manifest_binding(summary: Path, route_id: str, fields: dict
     if manifest.get("route_id") != route_id:
         errors.append(f"summary manifest route_id mismatch: {summary.relative_to(ROOT)}")
 
-    primary_metric = fields.get("primary_metric") or manifest.get("primary_metric")
-    if fields.get("primary_metric") and manifest.get("primary_metric") and fields["primary_metric"] != manifest.get("primary_metric"):
+    manifest_primary_metric = manifest.get("primary_metric")
+    if not isinstance(manifest_primary_metric, str) or not manifest_primary_metric:
+        errors.append(f"summary manifest primary_metric missing or invalid: {summary.relative_to(ROOT)}")
+        return
+    primary_metric = manifest_primary_metric
+    if fields.get("primary_metric") and fields["primary_metric"] != primary_metric:
         errors.append(f"summary manifest primary_metric mismatch: {summary.relative_to(ROOT)}")
     metrics = manifest.get("metrics")
     primary_metric_value = fields.get("primary_metric_value")
