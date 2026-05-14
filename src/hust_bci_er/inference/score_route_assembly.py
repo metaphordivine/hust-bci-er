@@ -22,9 +22,10 @@ class ComponentScoreTable:
     key_columns: tuple[str, ...]
     keys: tuple[tuple[str, ...], ...]
     scores: np.ndarray
+    y_true: Mapping[tuple[str, ...], str]
 
 
-def read_component_score_table(path: Path) -> ComponentScoreTable:
+def read_component_score_table(path: Path, *, component_id: str | None = None) -> ComponentScoreTable:
     with path.open(encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
     if not rows:
@@ -33,8 +34,18 @@ def read_component_score_table(path: Path) -> ComponentScoreTable:
     subject_col = schema["subject_id"]
     trial_col = schema["trial_id"]
     score_col = schema["score"]
+    truth_col = schema["y_true"]
     if subject_col is None or trial_col is None or score_col is None:
         raise ValueError(f"component score table must include subject, trial, and score columns: {path}")
+    if component_id is not None and "component_id" not in rows[0]:
+        raise ValueError(f"component score table must include component_id for {component_id}: {path}")
+    if component_id is not None:
+        for idx, row in enumerate(rows):
+            actual = row.get("component_id")
+            if actual in {None, ""}:
+                raise ValueError(f"component score table row {idx} component_id is empty for {component_id}: {path}")
+            if str(actual) != component_id:
+                raise ValueError(f"component score table component_id does not match {component_id}: {path} ({actual})")
 
     optional_key_cols: list[str] = []
     for col in ("seed", "fold"):
@@ -51,6 +62,7 @@ def read_component_score_table(path: Path) -> ComponentScoreTable:
     keys: list[tuple[str, ...]] = []
     seen_keys: set[tuple[str, ...]] = set()
     scores: list[float] = []
+    y_true: dict[tuple[str, ...], str] = {}
     for row in rows:
         key = tuple(str(row[col]) for col in key_sources)
         if key in seen_keys:
@@ -64,7 +76,15 @@ def read_component_score_table(path: Path) -> ComponentScoreTable:
         keys.append(key)
         seen_keys.add(key)
         scores.append(score)
-    return ComponentScoreTable(key_columns, tuple(keys), np.asarray(scores, dtype=np.float64))
+        if truth_col is not None and row.get(truth_col) not in {None, ""}:
+            try:
+                truth = int(row[truth_col])
+            except ValueError as exc:
+                raise ValueError(f"component score y_true is not binary in {path}: {key}") from exc
+            if truth not in {0, 1}:
+                raise ValueError(f"component score y_true is not binary in {path}: {key}")
+            y_true[key] = str(truth)
+    return ComponentScoreTable(key_columns, tuple(keys), np.asarray(scores, dtype=np.float64), y_true)
 
 
 def alignment_key(key_columns: tuple[str, ...], group_columns: tuple[str, ...], group: tuple[str, ...], trial: str) -> tuple[str, ...]:
@@ -76,7 +96,7 @@ def alignment_key(key_columns: tuple[str, ...], group_columns: tuple[str, ...], 
 def matrices_from_component_tables(
     tables: Mapping[str, ComponentScoreTable],
     required_components: tuple[str, ...],
-) -> tuple[tuple[str, ...], list[tuple[str, ...]], list[list[str]], dict[str, np.ndarray]]:
+) -> tuple[tuple[str, ...], list[tuple[str, ...]], list[list[str]], dict[str, np.ndarray], dict[tuple[str, ...], str]]:
     first = tables[required_components[0]]
     first_keys = list(first.keys)
     if "trial_id" not in first.key_columns or "subject_id" not in first.key_columns:
@@ -100,6 +120,8 @@ def matrices_from_component_tables(
     n_trials = trial_counts.pop()
 
     component_matrices: dict[str, np.ndarray] = {}
+    truth_by_key: dict[tuple[str, ...], str] = {}
+    has_truth = any(bool(table.y_true) for table in tables.values())
     first_key_set = set(first_keys)
     for name in required_components:
         table = tables[name]
@@ -112,8 +134,17 @@ def matrices_from_component_tables(
             [[score_map[alignment_key(first.key_columns, group_columns, group, trial)] for trial in trials_by_group[group]] for group in groups],
             dtype=np.float64,
         ).reshape(len(groups), n_trials)
+        if has_truth:
+            for key in first_keys:
+                truth = table.y_true.get(key)
+                if truth is None:
+                    raise ValueError(f"component score table is missing y_true for alignment key: {name} {key}")
+                existing = truth_by_key.get(key)
+                if existing is not None and existing != truth:
+                    raise ValueError(f"component score y_true mismatch for alignment key: {key}")
+                truth_by_key[key] = truth
 
-    return group_columns, groups, [trials_by_group[group] for group in groups], component_matrices
+    return group_columns, groups, [trials_by_group[group] for group in groups], component_matrices, truth_by_key
 
 
 def assemble_score_route_rows(route_config_path: Path, component_score_paths: Mapping[str, Path]) -> list[dict[str, str]]:
@@ -127,8 +158,8 @@ def assemble_score_route_rows(route_config_path: Path, component_score_paths: Ma
     if missing:
         raise ValueError(f"missing component score tables: {missing}")
 
-    tables = {name: read_component_score_table(Path(component_score_paths[name])) for name in route.components}
-    group_columns, groups, trials_by_group, component_matrices = matrices_from_component_tables(tables, route.components)
+    tables = {name: read_component_score_table(Path(component_score_paths[name]), component_id=name) for name in route.components}
+    group_columns, groups, trials_by_group, component_matrices, truth_by_key = matrices_from_component_tables(tables, route.components)
     route_scores = assemble_score_route(route, component_matrices)
 
     rows: list[dict[str, str]] = []
@@ -149,6 +180,8 @@ def assemble_score_route_rows(route_config_path: Path, component_score_paths: Ma
                     "pred_top4": str(int(top4)),
                 }
             )
+            if truth_by_key:
+                item["y_true"] = truth_by_key[alignment_key(tables[route.components[0]].key_columns, group_columns, group, trial)]
             rows.append(item)
     return rows
 
@@ -156,7 +189,8 @@ def assemble_score_route_rows(route_config_path: Path, component_score_paths: Ma
 def write_score_route_rows(rows: list[dict[str, str]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_fields = [field for field in ("seed", "fold") if any(field in row for row in rows)]
-    fieldnames = ["route_id", *metadata_fields, "subject_id", "trial_id", "score", "pred_top4"]
+    truth_fields = ["y_true"] if any("y_true" in row for row in rows) else []
+    fieldnames = ["route_id", *metadata_fields, "subject_id", "trial_id", "score", "pred_top4", *truth_fields]
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

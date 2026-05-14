@@ -13,7 +13,7 @@ import yaml
 from hust_bci_er.audit.environment import capture_environment
 from hust_bci_er.audit.manifest import sha256_file
 from hust_bci_er.evaluation.crop_policy import route_crop_policy_manifest
-from hust_bci_er.training.reproducibility import ReproducibilityConfig, reproducibility_manifest
+from hust_bci_er.training.reproducibility import ReproducibilityConfig, apply_reproducibility
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -162,7 +162,7 @@ def write_run_manifest(
         "prediction_record_level": "trial",
         "top4_group_keys": group_keys_payload(top4_group_keys),
         "environment": dict(environment or capture_environment()),
-        "determinism": dict(determinism or reproducibility_manifest(ReproducibilityConfig(seed=seed))),
+        "determinism": dict(determinism or apply_reproducibility(ReproducibilityConfig(seed=seed))),
         "checkpoint_selection": dict(checkpoint_selection or default_checkpoint_selection(route_data)),
         "crop_policy": dict(crop_policy or route_crop_policy_manifest(route_data, seed=seed)),
     }

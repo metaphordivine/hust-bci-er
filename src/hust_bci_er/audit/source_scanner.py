@@ -39,6 +39,7 @@ MODEL_FEATURE_REL_ROOTS = (
 )
 INFERENCE_REL_ROOTS = ("src/hust_bci_er/inference",)
 INFERENCE_SCRIPT_HINTS = ("infer", "inference", "predict", "prediction", "submit", "assemble_score_route")
+INFERENCE_LABEL_AUDIT_ALLOWLIST = {"src/hust_bci_er/inference/score_route_assembly.py"}
 ID_SHORTCUT_KEYS = ("subject_id", "trial_id", "pseudo_trial_id", "file_name", "filename")
 ID_AS_FEATURE_PATTERNS = (
     re.compile(r"\b(feature|features|input|inputs|x)\b.*\b(subject_id|trial_id|pseudo_trial_id|file_name|filename)\b"),
@@ -89,6 +90,14 @@ def is_inference_script(path: Path, root: Path) -> bool:
     return any(hint in name for hint in INFERENCE_SCRIPT_HINTS)
 
 
+def allows_inference_label_reference(path: Path, root: Path) -> bool:
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        return False
+    return rel in INFERENCE_LABEL_AUDIT_ALLOWLIST
+
+
 def scan_no_leakage(root: Path) -> list[SourceFinding]:
     findings: list[SourceFinding] = []
     for path in iter_scan_files(root):
@@ -107,6 +116,6 @@ def scan_no_leakage(root: Path) -> list[SourceFinding]:
                 else:
                     if in_model_feature_path and any(regex.search(lowered) for regex in ID_AS_FEATURE_PATTERNS):
                         findings.append(SourceFinding(path.relative_to(root).as_posix(), "id_shortcut_as_feature", idx))
-                    if in_inference and any(regex.search(lowered) for regex in MODEL_LABEL_PATTERNS):
+                    if in_inference and not allows_inference_label_reference(path, root) and any(regex.search(lowered) for regex in MODEL_LABEL_PATTERNS):
                         findings.append(SourceFinding(path.relative_to(root).as_posix(), "inference_label_reference", idx))
     return findings

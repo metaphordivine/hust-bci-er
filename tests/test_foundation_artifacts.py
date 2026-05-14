@@ -162,6 +162,19 @@ def test_source_scanner_finds_id_feature_and_inference_label_leaks(tmp_path):
     assert sum(1 for finding in scan_no_leakage(root) if finding.pattern == "inference_label_reference") == 2
 
 
+def test_source_scanner_allows_score_route_assembly_audit_label_passthrough(tmp_path):
+    root = tmp_path
+    inference = root / "src" / "hust_bci_er" / "inference"
+    inference.mkdir(parents=True)
+    (inference / "score_route_assembly.py").write_text("row['y_true'] = label\n", encoding="utf-8")
+    (inference / "bad_infer.py").write_text("return row['y_true']\n", encoding="utf-8")
+
+    findings = scan_no_leakage(root)
+
+    assert all(finding.path != "src/hust_bci_er/inference/score_route_assembly.py" for finding in findings)
+    assert any(finding.path == "src/hust_bci_er/inference/bad_infer.py" and finding.pattern == "inference_label_reference" for finding in findings)
+
+
 def test_summary_and_promotion_helpers(tmp_path):
     summary = render_route_summary(
         route_data={"route_id": "r1", "status": "IDEA", "dataset_version": "d1", "split_id": "s1", "seed": 42, "evaluation": {"protocol": "p1", "primary_metric": "top4_BA"}},

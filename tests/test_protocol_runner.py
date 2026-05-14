@@ -119,6 +119,33 @@ def test_write_run_manifest_locks_artifact_hashes(monkeypatch, tmp_path):
     assert json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["audit_schema_version"] == 2
 
 
+def test_write_run_manifest_requires_locked_pythonhashseed_for_default_determinism(monkeypatch, tmp_path):
+    monkeypatch.delenv("PYTHONHASHSEED", raising=False)
+    monkeypatch.setattr(reproducibility_module, "PROCESS_START_PYTHONHASHSEED", None)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    predictions = run_dir / "predictions.csv"
+    predictions.write_text(
+        "subject_id,trial_id,y_score,y_pred,y_true,pred_top4\n"
+        + "\n".join(f"s1,t{idx},{1.0 - idx * 0.01},{1 if idx < 4 else 0},{1 if idx < 4 else 0},{1 if idx < 4 else 0}" for idx in range(8))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        write_run_manifest(
+            route_config_path=ROUTE,
+            run_dir=run_dir,
+            prediction_csv=predictions,
+            metrics={"exact_single_crop_expected_BA": 1.0},
+            command="test",
+        )
+    except ValueError as exc:
+        assert "restart Python with PYTHONHASHSEED=42" in str(exc)
+    else:
+        raise AssertionError("default run manifest determinism should require a locked PYTHONHASHSEED")
+
+
 def test_write_run_manifest_accepts_job_specific_split_and_seed(monkeypatch, tmp_path):
     protocol_run = tmp_path / "protocol"
     protocol_manifest = materialize_protocol_run("p1", [ROUTE], run_dir=protocol_run, seeds=[123], n_folds=2)
