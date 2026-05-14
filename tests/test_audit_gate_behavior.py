@@ -1,11 +1,16 @@
 from pathlib import Path
+import csv
 import json
 
 from hust_bci_er.audit.manifest import sha256_file
+from hust_bci_er.contracts.prediction import prediction_schema
+from hust_bci_er.evaluation.report import build_metric_report
 from scripts.audit_experiment import (
     check_promotion_audit,
     check_reproducibility_manifest,
+    compare_metric,
     dataset_checksum_errors,
+    recompute_primary_metric_from_predictions,
     run_audit,
     split_evidence_consistency_errors,
     split_manifest_has_formal_evidence,
@@ -1402,7 +1407,7 @@ def test_candidate_gate_rejects_unconsumed_fold_rows_end_to_end(tmp_path):
 
     report = run_audit(route, run_dir, gate="candidate")
     rules = {check["rule_id"]: check["status"] for check in report["checks"]}
-    assert rules["RUN_SPLIT_EVIDENCE_CONSISTENT"] == "FAIL"
+    assert rules["RUN_SPLIT_EVIDENCE_VALID"] == "FAIL"
 
 
 def test_dataset_checksum_extra_paths_are_reported():
@@ -1550,6 +1555,36 @@ def test_split_evidence_accepts_folded_trial_rows_only_membership():
     assert split_evidence_consistency_errors(split) == []
 
 
+def test_split_evidence_rejects_trial_rows_only_without_test_membership():
+    split = {
+        "split_id": "train_only_rows",
+        "subject_group_split": True,
+        "status": "ready",
+        "trial_rows": [
+            {"subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+            {"subject_id": "s2", "original_trial_id": "t2", "split": "train"},
+        ],
+    }
+
+    assert not split_manifest_has_formal_evidence(split)
+    assert "trial_rows must derive non-empty train and test subject membership" in split_evidence_consistency_errors(split)
+
+
+def test_split_evidence_rejects_folded_trial_rows_without_test_membership():
+    split = {
+        "split_id": "folded_train_only_rows",
+        "subject_group_split": True,
+        "status": "ready",
+        "trial_rows": [
+            {"fold": 0, "subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+            {"fold": 0, "subject_id": "s2", "original_trial_id": "t2", "split": "train"},
+        ],
+    }
+
+    assert not split_manifest_has_formal_evidence(split)
+    assert "trial_rows fold 0 must derive non-empty train and test subject membership" in split_evidence_consistency_errors(split)
+
+
 def test_split_evidence_rejects_mixed_folded_and_unfolded_trial_rows():
     split = {
         "split_id": "mixed_rows",
@@ -1561,8 +1596,42 @@ def test_split_evidence_rejects_mixed_folded_and_unfolded_trial_rows():
         ],
     }
 
-    assert split_manifest_has_formal_evidence(split)
+    assert not split_manifest_has_formal_evidence(split)
     assert "trial_rows must either all declare fold or none declare fold" in split_evidence_consistency_errors(split)
     subject_errors, trial_errors = split_leakage_errors(split)
     assert any("mix folded and unfolded" in error for error in subject_errors)
     assert any("mix folded and unfolded" in error for error in trial_errors)
+
+
+def test_primary_metric_recompute_uses_subject_mean_for_prediction_ba(tmp_path):
+    prediction_csv = tmp_path / "predictions.csv"
+    lines = ["subject_id,trial_id,y_true,y_pred,pred_top4"]
+    lines.extend(["s1,s1_t0,0,0,0", "s1,s1_t1,1,1,1"])
+    for idx in range(5):
+        lines.append(f"s2,s2_n{idx},0,0,0")
+    for idx in range(5):
+        lines.append(f"s2,s2_p{idx},1,0,0")
+    prediction_csv.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    report = build_metric_report(route_id="r1", prediction_csv=prediction_csv, primary_metric="no_top4_BA")
+    with prediction_csv.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    fields = set(rows[0])
+    recomputed = recompute_primary_metric_from_predictions(
+        metric_name="no_top4_BA",
+        rows=rows,
+        fields=fields,
+        schema=prediction_schema(fields),
+        manifest={"metric_group_keys": ["subject_id"]},
+    )
+
+    assert report["metrics"]["no_top4_BA"] == 0.75
+    assert recomputed == report["metrics"]["no_top4_BA"]
+
+
+def test_primary_metric_report_rejects_nan_metric_value():
+    checks = []
+    compare_metric(checks, metric_name="no_top4_BA", recomputed=0.75, manifest={"metrics": {"no_top4_BA": float("nan")}})
+
+    assert checks[-1]["rule_id"] == "PRIMARY_METRIC_REPORTED"
+    assert checks[-1]["status"] == "FAIL"

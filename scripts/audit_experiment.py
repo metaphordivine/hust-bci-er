@@ -153,9 +153,10 @@ def manifest_metric_value(manifest: dict[str, Any], metric_name: str) -> float |
     if not isinstance(metrics, dict) or metric_name not in metrics:
         return None
     try:
-        return float(metrics[metric_name])
+        value = float(metrics[metric_name])
     except (TypeError, ValueError):
         return None
+    return value if np.isfinite(value) else None
 
 
 def compare_metric(checks: list[AuditCheck], *, metric_name: str, recomputed: float, manifest: dict[str, Any], tolerance: float = 1e-9) -> None:
@@ -334,7 +335,7 @@ def split_manifest_has_formal_evidence(split_data: dict[str, Any]) -> bool:
     has_trial_index = isinstance(trial_rows, list) and bool(trial_rows) and all(
         isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
     )
-    return has_trial_index
+    return has_trial_index and not trial_row_membership_errors([row for row in trial_rows if isinstance(row, dict)])
 
 
 def subjects_from_trial_rows(rows: list[dict[str, Any]]) -> dict[str, set[str]]:
@@ -345,6 +346,30 @@ def subjects_from_trial_rows(rows: list[dict[str, Any]]) -> dict[str, set[str]]:
         if split in subjects_by_split and subject is not None:
             subjects_by_split[split].add(str(subject))
     return subjects_by_split
+
+
+def trial_row_membership_errors(rows: list[dict[str, Any]]) -> list[str]:
+    """Verify trial_rows derive usable train/test subject membership."""
+    if not rows:
+        return ["trial_rows must derive non-empty train and test subject membership"]
+    has_fold_rows = any("fold" in row for row in rows)
+    has_unfolded_rows = any("fold" not in row for row in rows)
+    if has_fold_rows and has_unfolded_rows:
+        return ["trial_rows must either all declare fold or none declare fold"]
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("fold", "__single_fold__")), []).append(row)
+
+    errors: list[str] = []
+    for fold_id, fold_rows in sorted(grouped.items()):
+        subjects = subjects_from_trial_rows(fold_rows)
+        if not subjects["train"] or not subjects["test"]:
+            if fold_id == "__single_fold__":
+                errors.append("trial_rows must derive non-empty train and test subject membership")
+            else:
+                errors.append(f"trial_rows fold {fold_id} must derive non-empty train and test subject membership")
+    return errors
 
 
 def split_evidence_consistency_errors(split_data: dict[str, Any]) -> list[str]:
@@ -375,6 +400,7 @@ def split_evidence_consistency_errors(split_data: dict[str, Any]) -> list[str]:
     rows_without_fold = [idx for idx, row in indexed_rows if "fold" not in row]
     if rows_with_fold and rows_without_fold:
         errors.append("trial_rows must either all declare fold or none declare fold")
+    errors.extend(trial_row_membership_errors(normalized_rows))
 
     if has_subject_membership(split_data):
         top_level_rows = [(idx, row) for idx, row in indexed_rows if "fold" not in row]
@@ -1171,11 +1197,20 @@ def recompute_primary_metric_from_predictions(
         if schema["y_true"] is None or pred_col is None:
             required = "y_true and pred_top4" if metric_name == "top4_BA" else "y_true and y_pred"
             raise ValueError(f"prediction CSV must include {required}")
-        y_true = np.array([parse_binary(row[schema["y_true"]], field=schema["y_true"], context="primary metric") for row in rows], dtype=int)
-        if set(np.unique(y_true)) != {0, 1}:
-            raise ValueError("primary metric y_true must contain both binary classes")
-        y_pred = np.array([parse_binary(row[pred_col], field=pred_col, context="primary metric") for row in rows], dtype=int)
-        return balanced_accuracy(y_true, y_pred)
+        group_cols = metric_group_columns(fields, schema, manifest)
+        if group_cols is None:
+            raise ValueError("metric group keys are missing")
+        values: list[float] = []
+        for group_id, group in group_prediction_rows(rows, group_cols).items():
+            y_true = np.array([parse_binary(row[schema["y_true"]], field=schema["y_true"], context=group_id) for row in group], dtype=int)
+            y_pred = np.array([parse_binary(row[pred_col], field=pred_col, context=group_id) for row in group], dtype=int)
+            value = balanced_accuracy(y_true, y_pred)
+            if not np.isfinite(value):
+                raise ValueError(f"primary metric is not finite for group {group_id}")
+            values.append(value)
+        if not values:
+            raise ValueError("prediction CSV has no metric groups")
+        return float(np.mean(values))
 
     if metric_name == "all_correct_rate":
         if schema["y_true"] is None or schema["y_pred"] is None:
@@ -1227,6 +1262,17 @@ def check_primary_metric(
             rule_id="PRIMARY_METRIC_RECOMPUTE",
             message=f"primary metric could not be recomputed: {exc}",
             fix="Provide the prediction or metric_inputs artifacts required by the route primary metric.",
+            decision_if_fail="DIAGNOSTIC_ONLY",
+        )
+        return
+    if not np.isfinite(recomputed):
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="PRIMARY_METRIC_RECOMPUTE",
+            message=f"primary metric recomputed to a non-finite value: {recomputed}",
+            fix="Regenerate prediction or metric_inputs artifacts so the primary metric is finite.",
             decision_if_fail="DIAGNOSTIC_ONLY",
         )
         return
