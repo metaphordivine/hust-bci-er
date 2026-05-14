@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 import numpy as np
 
 FIXED_CROP_POLICIES = {"crop1": 0, "crop2": 1, "crop3": 2, "crop4": 3, "crop5": 4}
 
 
-def crop_policy_manifest(policy: str, *, seed: int, metric: str = "exact_single_crop_expected_BA") -> dict[str, object]:
+def crop_policy_manifest(
+    policy: str,
+    *,
+    seed: int,
+    metric: str = "exact_single_crop_expected_BA",
+    tie_break: str | None = None,
+) -> dict[str, object]:
     """Return the manifest contract for a crop policy.
 
     P2 uses this to make random and worst-crop runs reproducible. ``worst`` is
@@ -27,11 +35,17 @@ def crop_policy_manifest(policy: str, *, seed: int, metric: str = "exact_single_
             "crop_index": 0,
             "tie_break": "not_applicable",
         }
-    if policy in {"exact_single_crop", "sliding_window_vote"}:
+    if policy == "exact_single_crop":
         return {
             "name": policy,
             "selection": "route_defined",
-            "tie_break": "stable_input_order",
+            "tie_break": tie_break or "stable_input_order",
+        }
+    if policy == "sliding_window_vote":
+        return {
+            "name": policy,
+            "selection": "route_defined",
+            "tie_break": tie_break or "mean_score",
         }
     if policy == "random":
         return {
@@ -49,6 +63,16 @@ def crop_policy_manifest(policy: str, *, seed: int, metric: str = "exact_single_
             "tie_break": "lowest_assignment_index",
         }
     raise ValueError(f"unsupported crop policy: {policy}")
+
+
+def route_crop_policy_manifest(route_data: Mapping[str, Any], *, seed: int) -> dict[str, object]:
+    """Return the crop-policy manifest implied by a route config."""
+    inference = route_data.get("inference") if isinstance(route_data, Mapping) else None
+    policy = str(inference.get("crop_policy", "single")) if isinstance(inference, Mapping) else "single"
+    augmentation = route_data.get("augmentation") if isinstance(route_data, Mapping) else None
+    aggregate = augmentation.get("aggregate_to_trial") if isinstance(augmentation, Mapping) else None
+    tie_break = aggregate.get("tie_break") if isinstance(aggregate, Mapping) else None
+    return crop_policy_manifest(policy, seed=seed, tie_break=str(tie_break) if tie_break else None)
 
 
 def select_crop_matrix(mat: np.ndarray, policy: str, random_state: int | None = None) -> np.ndarray:

@@ -12,7 +12,7 @@ import yaml
 
 from hust_bci_er.audit.environment import capture_environment
 from hust_bci_er.audit.manifest import sha256_file
-from hust_bci_er.evaluation.crop_policy import crop_policy_manifest
+from hust_bci_er.evaluation.crop_policy import route_crop_policy_manifest
 from hust_bci_er.training.reproducibility import ReproducibilityConfig, reproducibility_manifest
 
 
@@ -86,6 +86,13 @@ def environment_lock_payload(root: Path) -> dict[str, Any] | None:
     return {"files": files}
 
 
+def group_keys_payload(keys: Sequence[str] | None, *, default: Sequence[str] = ("subject_id",)) -> list[str]:
+    values = list(default if keys is None else keys)
+    if not values or any(not isinstance(key, str) or not key for key in values):
+        raise ValueError("group keys must be a non-empty sequence of strings")
+    return values
+
+
 def write_run_manifest(
     *,
     route_config_path: Path,
@@ -104,6 +111,8 @@ def write_run_manifest(
     determinism: Mapping[str, Any] | None = None,
     checkpoint_selection: Mapping[str, Any] | None = None,
     crop_policy: Mapping[str, Any] | None = None,
+    top4_group_keys: Sequence[str] | None = None,
+    metric_group_keys: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Write ``manifest.json`` for a finished run and return its payload."""
     route_config_path = route_config_path.resolve()
@@ -121,7 +130,10 @@ def write_run_manifest(
     shutil.copyfile(route_config_path, snapshot_path)
 
     dataset_manifest_path = dataset_manifest_path or root / "configs" / "datasets" / f"{route_data['dataset_version']}.yaml"
-    split_manifest_path = split_manifest_path or root / "configs" / "splits" / f"{route_data['split_id']}.yaml"
+    if split_manifest_path is None:
+        if split_id != source_split_id:
+            raise ValueError("split_manifest_path is required when split_id overrides the route split_id")
+        split_manifest_path = root / "configs" / "splits" / f"{source_split_id}.yaml"
     prediction_csv = prediction_csv.resolve()
     if not prediction_csv.exists():
         raise FileNotFoundError(f"prediction_csv not found: {prediction_csv}")
@@ -148,12 +160,16 @@ def write_run_manifest(
         "prediction_csv": relative_to_run(prediction_csv, run_dir),
         "prediction_sha256": sha256_file(prediction_csv),
         "prediction_record_level": "trial",
-        "top4_group_keys": ["subject_id"],
+        "top4_group_keys": group_keys_payload(top4_group_keys),
         "environment": dict(environment or capture_environment()),
         "determinism": dict(determinism or reproducibility_manifest(ReproducibilityConfig(seed=seed))),
         "checkpoint_selection": dict(checkpoint_selection or default_checkpoint_selection(route_data)),
-        "crop_policy": dict(crop_policy or crop_policy_manifest(str(route_data.get("inference", {}).get("crop_policy", "single")), seed=seed)),
+        "crop_policy": dict(crop_policy or route_crop_policy_manifest(route_data, seed=seed)),
     }
+    if metric_group_keys is not None:
+        manifest["metric_group_keys"] = group_keys_payload(metric_group_keys)
+    elif top4_group_keys is not None:
+        manifest["metric_group_keys"] = manifest["top4_group_keys"]
     lock = environment_lock_payload(root)
     if lock is not None:
         manifest["environment_lock"] = lock

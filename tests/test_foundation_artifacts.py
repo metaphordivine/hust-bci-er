@@ -15,6 +15,7 @@ from hust_bci_er.contracts.records import PredictionRecord
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
 from hust_bci_er.evaluation.prediction_writer import write_predictions
 from hust_bci_er.training.monitor import TrainingMonitor
+from scripts.check_promotion_audit import route_top4_required
 
 
 def test_component_artifact_and_prediction_writer_contracts(tmp_path):
@@ -208,6 +209,61 @@ def test_summary_and_promotion_helpers(tmp_path):
     minimal = tmp_path / "minimal_candidate.json"
     minimal.write_text(json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS"}), encoding="utf-8")
     assert "checks list" in "; ".join(check_candidate_audit(minimal, route_id="r1"))
+
+
+def test_promotion_cli_derives_top4_requirement_from_route_config(monkeypatch, tmp_path):
+    from scripts import check_promotion_audit as promotion_cli
+
+    monkeypatch.setattr(promotion_cli, "ROOT", tmp_path)
+    route = tmp_path / "r1.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: r1",
+                "inference:",
+                "  top4: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert route_top4_required("r1", route) is True
+    candidate = tmp_path / "candidate.json"
+    critical_rules = [
+        "MANIFEST_VALID",
+        "PRIMARY_METRIC_RECOMPUTE",
+        "PRIMARY_METRIC_REPORTED",
+        "RUN_DATASET_EVIDENCE_VALID",
+        "RUN_SPLIT_EVIDENCE_VALID",
+        "RUN_SPLIT_EVIDENCE_CONSISTENT",
+        "RUN_REPRODUCIBILITY_LOCKED",
+    ]
+    candidate.write_text(
+        json.dumps({"route_id": "r1", "gate": "candidate", "overall": "PASS", "checks": [{"rule_id": rule, "status": "PASS"} for rule in critical_rules]}),
+        encoding="utf-8",
+    )
+    promotion = tmp_path / "promotion.md"
+    promotion.write_text(
+        "\n".join(
+            [
+                "route_id: r1",
+                "promoted_from_run: outputs/r1/run",
+                "candidate_audit_report: candidate.json",
+                "primary_metric: top4_BA",
+                "comparison_baseline: baseline",
+                "risk_review: reviewed",
+                "no_leakage_review: reviewed",
+                "decision: promote",
+                "reviewer: test",
+                "date: 2026-05-14",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert promotion_cli.main(["--promotion-audit", str(promotion), "--route-config", str(route)]) == 1
 
 
 def test_registry_docs_checker_monitor_and_cache_manager(tmp_path):

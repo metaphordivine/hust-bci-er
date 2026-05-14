@@ -169,6 +169,59 @@ def test_write_run_manifest_accepts_job_specific_split_and_seed(tmp_path):
     assert rules["PRIMARY_METRIC_RECOMPUTE"] == "PASS"
 
 
+def test_write_run_manifest_requires_split_evidence_for_split_override(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    predictions = run_dir / "predictions.csv"
+    predictions.write_text(
+        "subject_id,trial_id,y_score,y_pred,y_true,pred_top4\n"
+        + "\n".join(f"s1,t{idx},{1.0 - idx * 0.01},{1 if idx < 4 else 0},{1 if idx < 4 else 0},{1 if idx < 4 else 0}" for idx in range(8))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        write_run_manifest(
+            route_config_path=ROUTE,
+            run_dir=run_dir,
+            prediction_csv=predictions,
+            split_id="p1_seed42_fold0__derived",
+            metrics={"exact_single_crop_expected_BA": 1.0},
+            command="test",
+        )
+    except ValueError as exc:
+        assert "split_manifest_path is required" in str(exc)
+    else:
+        raise AssertionError("write_run_manifest should reject split_id override without split evidence")
+
+
+def test_write_run_manifest_records_group_keys_and_route_crop_tie_break(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    predictions = run_dir / "predictions.csv"
+    predictions.write_text(
+        "seed,fold,subject_id,trial_id,y_score,y_pred,y_true,pred_top4\n"
+        + "\n".join(f"42,0,s1,t{idx},{1.0 - idx * 0.01},{1 if idx < 4 else 0},{1 if idx < 4 else 0},{1 if idx < 4 else 0}" for idx in range(8))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manifest = write_run_manifest(
+        route_config_path=Path("configs/routes/models/sliding_window_eegnet.yaml"),
+        run_dir=run_dir,
+        prediction_csv=predictions,
+        metrics={"exact_single_crop_expected_BA": 1.0},
+        command="test",
+        top4_group_keys=("seed", "fold", "subject_id"),
+        metric_group_keys=("seed", "fold", "subject_id"),
+    )
+
+    assert manifest["top4_group_keys"] == ["seed", "fold", "subject_id"]
+    assert manifest["metric_group_keys"] == ["seed", "fold", "subject_id"]
+    assert manifest["crop_policy"]["name"] == "sliding_window_vote"
+    assert manifest["crop_policy"]["tie_break"] == "mean_score"
+
+
 def test_reproducibility_helpers_define_worker_seed_and_apply():
     applied = apply_reproducibility(ReproducibilityConfig(seed=123, dataloader_worker_seed_base=500))
     assert applied["python_seed"] == 123
@@ -181,6 +234,7 @@ def test_reproducibility_helpers_define_worker_seed_and_apply():
 def test_crop_policy_random_and_worst_are_deterministic():
     assert crop_policy_manifest("random", seed=7)["random_seed"] == 7
     assert crop_policy_manifest("worst", seed=7)["tie_break"] == "lowest_assignment_index"
+    assert crop_policy_manifest("sliding_window_vote", seed=7)["tie_break"] == "mean_score"
     mat = [[0, 1, 2], [3, 4, 5]]
     assert select_crop_matrix(mat, "random", random_state=1).tolist() == select_crop_matrix(mat, "random", random_state=1).tolist()
     try:

@@ -1124,8 +1124,12 @@ def test_top4_truth_balance_message_is_explicit_when_y_true_is_absent(tmp_path):
 
     report = run_audit(route, run_dir, gate="smoke")
     checks = {check["rule_id"]: check for check in report["checks"]}
-    assert checks["PREDICTION_TOP4_TRUTH_BALANCE"]["status"] == "PASS"
+    assert checks["PREDICTION_TOP4_TRUTH_BALANCE"]["status"] == "WARN"
     assert "not checked" in checks["PREDICTION_TOP4_TRUTH_BALANCE"]["message"]
+
+    candidate_report = run_audit(route, run_dir, gate="candidate")
+    candidate_checks = {check["rule_id"]: check for check in candidate_report["checks"]}
+    assert candidate_checks["PREDICTION_TOP4_TRUTH_BALANCE"]["status"] == "FAIL"
 
 
 def test_top4_ranking_is_warn_when_score_is_absent(tmp_path):
@@ -1511,3 +1515,54 @@ def test_split_evidence_allows_empty_validation_holdout():
 
     assert split_manifest_has_formal_evidence(split)
     assert split_evidence_consistency_errors(split) == []
+
+
+def test_split_evidence_accepts_trial_rows_only_membership():
+    split = {
+        "split_id": "rows_only",
+        "subject_group_split": True,
+        "status": "ready",
+        "trial_rows": [
+            {"subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+            {"subject_id": "s2", "original_trial_id": "t2", "split": "val"},
+            {"subject_id": "s3", "original_trial_id": "t3", "split": "test"},
+        ],
+    }
+
+    assert split_manifest_has_formal_evidence(split)
+    assert split_evidence_consistency_errors(split) == []
+
+
+def test_split_evidence_accepts_folded_trial_rows_only_membership():
+    split = {
+        "split_id": "rows_only_folded",
+        "subject_group_split": True,
+        "status": "ready",
+        "trial_rows": [
+            {"fold": 0, "subject_id": "s1", "original_trial_id": "f0_t1", "split": "train"},
+            {"fold": 0, "subject_id": "s2", "original_trial_id": "f0_t2", "split": "test"},
+            {"fold": 1, "subject_id": "s2", "original_trial_id": "f1_t1", "split": "train"},
+            {"fold": 1, "subject_id": "s1", "original_trial_id": "f1_t2", "split": "test"},
+        ],
+    }
+
+    assert split_manifest_has_formal_evidence(split)
+    assert split_evidence_consistency_errors(split) == []
+
+
+def test_split_evidence_rejects_mixed_folded_and_unfolded_trial_rows():
+    split = {
+        "split_id": "mixed_rows",
+        "subject_group_split": True,
+        "status": "ready",
+        "trial_rows": [
+            {"fold": 0, "subject_id": "s1", "original_trial_id": "t1", "split": "train"},
+            {"subject_id": "s1", "original_trial_id": "t1", "split": "test"},
+        ],
+    }
+
+    assert split_manifest_has_formal_evidence(split)
+    assert "trial_rows must either all declare fold or none declare fold" in split_evidence_consistency_errors(split)
+    subject_errors, trial_errors = split_leakage_errors(split)
+    assert any("mix folded and unfolded" in error for error in subject_errors)
+    assert any("mix folded and unfolded" in error for error in trial_errors)

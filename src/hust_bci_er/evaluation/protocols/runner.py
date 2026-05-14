@@ -13,7 +13,7 @@ import yaml
 from hust_bci_er.audit.environment import capture_environment
 from hust_bci_er.audit.manifest import sha256_file
 from hust_bci_er.audit.run_manifest import default_checkpoint_selection, environment_lock_payload, git_commit, repo_root_from_route
-from hust_bci_er.evaluation.crop_policy import crop_policy_manifest
+from hust_bci_er.evaluation.crop_policy import crop_policy_manifest, route_crop_policy_manifest
 from hust_bci_er.evaluation.protocols.plans import (
     DEFAULT_CROP_POLICIES,
     DEFAULT_SEEDS,
@@ -123,7 +123,7 @@ def build_protocol_jobs(
                             stage="train_eval",
                             fold=fold,
                             expected_artifacts=("config_snapshot.yaml", "predictions.csv", "score_matrix.csv", "manifest.json", "audit_report.json"),
-                            crop_policy=crop_policy_manifest(str(data.get("inference", {}).get("crop_policy", "single")), seed=int(seed)),
+                            crop_policy=route_crop_policy_manifest(data, seed=int(seed)),
                             **route_job_base(path, data, seed=int(seed), split_id=split_id),
                         )
                     )
@@ -187,7 +187,7 @@ def build_protocol_jobs(
                         stage="outer_train_eval",
                         outer_fold=outer,
                         expected_artifacts=("config_snapshot.yaml", "predictions.csv", "score_matrix.csv", "manifest.json", "audit_report.json"),
-                        crop_policy=crop_policy_manifest(str(data.get("inference", {}).get("crop_policy", "single")), seed=seed),
+                        crop_policy=route_crop_policy_manifest(data, seed=seed),
                         **route_job_base(path, data, seed=seed, split_id=split_id),
                     )
                 )

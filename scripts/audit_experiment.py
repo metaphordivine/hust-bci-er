@@ -325,18 +325,16 @@ def split_manifest_has_evidence(split_data: dict[str, Any]) -> bool:
 
 
 def split_manifest_has_formal_evidence(split_data: dict[str, Any]) -> bool:
-    """Formal candidate evidence needs both subject membership and trial rows."""
-    has_top_level_membership = has_subject_membership(split_data)
-    folds = split_data.get("folds") or split_data.get("fold_definitions") or []
-    has_fold_membership = isinstance(folds, list) and bool(folds) and all(
-        isinstance(fold, dict) and has_subject_membership(fold)
-        for fold in folds
-    )
+    """Formal candidate evidence needs complete trial rows.
+
+    Subject membership may be declared explicitly or derived from trial_rows,
+    including per-fold rows.
+    """
     trial_rows = split_data.get("trial_rows") or []
     has_trial_index = isinstance(trial_rows, list) and bool(trial_rows) and all(
         isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
     )
-    return (has_top_level_membership or has_fold_membership) and has_trial_index
+    return has_trial_index
 
 
 def subjects_from_trial_rows(rows: list[dict[str, Any]]) -> dict[str, set[str]]:
@@ -373,14 +371,18 @@ def split_evidence_consistency_errors(split_data: dict[str, Any]) -> list[str]:
     indexed_rows = list(enumerate(normalized_rows))
     folds = split_data.get("folds") or split_data.get("fold_definitions") or []
     has_declared_folds = isinstance(folds, list) and bool(folds)
+    rows_with_fold = [idx for idx, row in indexed_rows if "fold" in row]
+    rows_without_fold = [idx for idx, row in indexed_rows if "fold" not in row]
+    if rows_with_fold and rows_without_fold:
+        errors.append("trial_rows must either all declare fold or none declare fold")
 
     if has_subject_membership(split_data):
-        rows_without_fold = [(idx, row) for idx, row in indexed_rows if "fold" not in row]
-        if not rows_without_fold:
+        top_level_rows = [(idx, row) for idx, row in indexed_rows if "fold" not in row]
+        if not top_level_rows:
             errors.append("top-level subject lists require trial_rows without fold")
         else:
-            consumed.update(idx for idx, _ in rows_without_fold)
-            row_subjects = subjects_from_trial_rows([row for _, row in rows_without_fold])
+            consumed.update(idx for idx, _ in top_level_rows)
+            row_subjects = subjects_from_trial_rows([row for _, row in top_level_rows])
             for split in ["train", "val", "test"]:
                 expected = set(map(str, split_data.get(f"{split}_subjects") or []))
                 actual = row_subjects[split]
@@ -417,7 +419,7 @@ def split_evidence_consistency_errors(split_data: dict[str, Any]) -> list[str]:
                 errors.append(f"trial_rows[{idx}].fold is not declared")
 
     unconsumed = sorted(set(range(len(normalized_rows))) - consumed)
-    if unconsumed:
+    if unconsumed and (has_subject_membership(split_data) or has_declared_folds):
         errors.append("trial_rows contain rows not covered by subject lists or fold definitions: " + ", ".join(map(str, unconsumed[:5])))
     return errors
 
@@ -455,6 +457,10 @@ def split_leakage_errors(split_data: dict[str, Any]) -> tuple[list[str], list[st
     if isinstance(rows, list) and rows:
         rows_by_fold: dict[str, list[dict[str, Any]]] = {}
         has_fold_rows = any(isinstance(row, dict) and "fold" in row for row in rows)
+        has_unfolded_rows = any(isinstance(row, dict) and "fold" not in row for row in rows)
+        if has_fold_rows and has_unfolded_rows:
+            subject_errors.append("trial_rows mix folded and unfolded rows")
+            trial_errors.append("trial_rows mix folded and unfolded rows")
         if not has_fold_rows:
             try:
                 assert_original_trial_not_cross_split(rows)
@@ -742,7 +748,7 @@ def check_run_dataset_split_evidence(
                     fail_gate=STRICT_GATES,
                     rule_id="RUN_SPLIT_EVIDENCE_VALID",
                     message="run split evidence is not verifiable",
-                    fix="Add complete subject lists or fold definitions plus trial_rows with subject_id, original_trial_id, and split before candidate/promoted review.",
+                    fix="Add complete trial_rows with subject_id, original_trial_id, and split before candidate/promoted review; subject membership may be derived from those rows.",
                     decision_if_fail="BLOCKED",
                 )
             else:
@@ -922,6 +928,7 @@ def check_top4_group_semantics(
     *,
     groups: dict[str, list[dict[str, str]]],
     schema: dict[str, str | None],
+    gate: str,
 ) -> None:
     trial_col = schema["trial_id"]
     top4_col = schema["pred_top4"]
@@ -980,12 +987,14 @@ def check_top4_group_semantics(
         ("PREDICTION_TOP4_BINARY", bad_binary, "pred_top4 contains non-binary values", "Encode pred_top4 as 0 or 1 only."),
     ]
     if truth_col is None:
-        add_check(
+        add_warn_or_fail(
             checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
             rule_id="PREDICTION_TOP4_TRUTH_BALANCE",
-            severity="INFO",
-            status="PASS",
-            message="truth balance was not checked because y_true is absent; primary metric gates require y_true when needed",
+            message="truth balance was not checked because y_true is absent",
+            fix="For Top-4 candidate/promoted audits, include y_true in prediction CSV or provide an explicitly supported truth-balance evidence path.",
+            decision_if_fail="BLOCKED",
         )
     else:
         semantic_specs.append(("PREDICTION_TOP4_TRUTH_BALANCE", bad_truth, "y_true is not binary or not 4 positives per 8-trial group", "For labeled Top-4 audits, each 8-trial group should contain 4 positive labels."))
@@ -1348,7 +1357,7 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             )
         else:
             add_check(checks, rule_id="PREDICTION_TOP4_GROUPS", severity="INFO", status="PASS", message="Top-4 groups are valid")
-        check_top4_group_semantics(checks, groups=groups, schema=schema)
+        check_top4_group_semantics(checks, groups=groups, schema=schema, gate=gate)
     else:
         add_warn_or_fail(
             checks,
