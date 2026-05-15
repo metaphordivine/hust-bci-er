@@ -9,6 +9,21 @@ features: []
 model:
   name: deformer_lite
 adaptation: none
+training:
+  trainer: torch_classifier
+  job_adapter: torch_classifier
+  epochs: 80
+  batch_size: 32
+  optimizer:
+    name: adamw
+    lr: 0.001
+    weight_decay: 0.01
+  loss: cross_entropy
+  grad_clip_norm: 1.0
+  early_stopping:
+    monitor: val_loss
+    mode: min
+    patience: 12
 inference:
   top4: true
   crop_policy: single

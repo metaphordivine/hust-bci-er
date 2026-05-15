@@ -26,6 +26,7 @@ model:
 adaptation: none
 training:
   trainer: torch_classifier
+  job_adapter: torch_classifier
   epochs: 80
   batch_size: 32
   optimizer:

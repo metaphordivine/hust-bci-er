@@ -6,8 +6,8 @@
 当前实现状态：
 
 ```text
-已实现：协议配置、协议 plan/dry-run、runner manifest、审计口径说明、component trainer。
-未实现：真实 HUST EEG dataset loader 和真实训练 job adapter。
+已实现：协议配置、协议 plan/dry-run、runner manifest、审计口径说明、component trainer、真实 HUST EEG `.mat` loader、`torch_classifier` candidate job adapter。
+未实现：已提交绑定 summary 的真实 candidate 结果、完整 P1/P2/P3 多 job 自动执行。
 原则：先生成计划和证据边界，再显式启动重训练；不能用 runner manifest 伪装 candidate 结果。
 ```
 
@@ -92,7 +92,7 @@ python scripts/run_evaluation_protocol.py \
   --max-execute-jobs 1
 ```
 
-`--execute` 只调用已支持的 route job adapter。当前用于 toy route 的端到端 smoke；真实 HUST EEG route 在 dataset loader 和 training adapter 完成前仍不能声称 candidate evidence。
+`--execute` 只调用已支持的 route job adapter。toy route 用于端到端平台 smoke；真实 HUST EEG route 应通过 `run_candidate_route.py` 产生 held-out test predictions、score matrix、run manifest、route summary，并完成 candidate audit。
 
 ## P2：pseudo-public holdout
 
@@ -254,16 +254,19 @@ P3：
 
 ## 当前限制
 
-当前仓库已有统一 runner manifest 和 toy end-to-end smoke，但还没有真实 HUST EEG dataset loader 和真实训练 job adapter。
+当前仓库已有统一 runner manifest、toy end-to-end smoke，以及真实 HUST EEG `.mat` loader / `torch_classifier` candidate adapter。
 `plan_evaluation_protocol.py` 只生成计划，不训练，不读取标签，不生成结果。  
-`run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息，不会生成 prediction、score matrix 或 candidate 结果。
+`run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息；真实 candidate 结果应由 `run_candidate_route.py` 按 route 默认训练轮数生成，并由 `repo_doctor.py experiment --gate candidate` 审计。真实数据根目录通过 `--data-root` 或 `HUST_BCI_ER_DATA_ROOT` 提供，`.mat` 文件必须是 HDF5/v7.3 格式。带 `--epochs-override` 的运行只用于链路验证，会被 candidate/promoted gate 阻止。
 
-后续要真正运行训练时，必须先补：
+无 sliding-window augmentation 的 exact-metric route（例如 `ea_deformer`）在 candidate 模式下不是普通单 crop 证据：adapter 会为 held-out test trial 生成 5 个不重叠 fixed crops 写入 `score_matrix.csv`，并要求 dataset manifest 中的 `crop_ids/window_start_secs` 与之对齐。原始 trial 必须至少覆盖 `5 * input_window_sec` 秒；`predictions.csv` 的 trial-level score 是这些 fixed crops 的均值，审计主指标以 score matrix 复算为准。
+
+后续要提交真实 candidate 结论时，必须具备：
 
 ```text
 正式 dataset manifest
 正式 split manifest
-job adapter / dataset loader
+held-out test prediction / score matrix
 run manifest
 candidate audit report
+绑定 audit/manifest 的 route summary
 ```
