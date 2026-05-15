@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import h5py
 import numpy as np
 import yaml
 
@@ -40,7 +39,6 @@ from hust_bci_er.training.classifier import (
 
 SFREQ = 250
 KEY_TO_LABEL = {"EEG_data_neu": 0, "EEG_data_pos": 1}
-SOURCE_TRIAL_SEC = 50
 SOURCE_TRIALS_PER_CLASS = 4
 DATA_ROOT_DEFAULT = Path(__file__).resolve().parents[3] / "scratch" / "local_data" / "hust_bci_er_train" / "训练集"
 
@@ -69,6 +67,7 @@ def _load_mat_trials(data_root: Path) -> list[dict[str, Any]]:
 
 
 def _read_mat(path: Path, key: str) -> np.ndarray:
+    import h5py
     with h5py.File(path, "r") as f:
         data = np.asarray(f[key][()], dtype=np.float32)
     if data.shape[0] == 30:
@@ -118,9 +117,17 @@ def _clip_trial(x: np.ndarray, duration_sec: float) -> np.ndarray:
     return x[:, :min(n_samples, x.shape[1])]
 
 
+KNOWN_PREPROC = frozenset({
+    "zscore", "robust_zscore", "whitening_eps1e3", "whitening_eps3e4",
+    "shrinkage_whitening", "euclidean_alignment", "car",
+})
+
+
 def _apply_preprocessing(x: np.ndarray, preproc_names: list[str], *, ea_transform: np.ndarray | None = None) -> np.ndarray:
     """Apply a sequence of preprocessing steps to one window [channels, time]."""
     for name in preproc_names:
+        if name not in KNOWN_PREPROC:
+            raise ValueError(f"unknown preprocessing step: {name}")
         if name == "zscore":
             x = zscore_per_channel(x)
         elif name == "robust_zscore":
@@ -377,6 +384,15 @@ def _write_evidence_manifests(
     data_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_version = str(route_data["dataset_version"])
+    window_sec = float(route_data.get("input_window_sec", 10))
+    aug = route_data.get("augmentation")
+    if isinstance(aug, dict) and aug.get("name") == "split_first_sliding_window":
+        source_samples = int(round(float(aug["source_trial_sec"]) * SFREQ))
+        window_samples = int(round(float(aug["window_sec"]) * SFREQ))
+        stride_samples = int(round(float(aug["stride_sec"]) * SFREQ))
+        actual_n_crops = max(1, (source_samples - window_samples) // stride_samples + 1)
+    else:
+        actual_n_crops = 1
 
     # Write one feature-anchor CSV per trial with channel-mean signal statistics.
     # These are not model features — they serve as lightweight checksum anchors
@@ -414,7 +430,7 @@ def _write_evidence_manifests(
     dataset_manifest = {
         "dataset_version": dataset_version,
         "status": "ready",
-        "description": f"Real EEG dataset manifest for {dataset_version} (smoke subset).",
+        "description": f"Real EEG dataset manifest for {dataset_version}, {len(trial_index)} trials across {len(subject_ids)} subjects.",
         "label_scope": {
             "train": "available",
             "val": "available",
@@ -424,7 +440,7 @@ def _write_evidence_manifests(
         "subject_ids": sorted(subject_ids),
         "n_subjects": len(subject_ids),
         "n_trials": len(trial_index),
-        "n_crops": 1,
+        "n_crops": actual_n_crops,
         "missing_data_sources": [],
         "data_sources": [{"path": item["path"], "kind": "file", "checksum_available": True} for item in trial_index],
         "checksum_manifest": checksums,
@@ -441,7 +457,7 @@ def _write_evidence_manifests(
         "split_id": active_split_id,
         "subject_group_split": True,
         "status": "ready",
-        "description": f"Subject holdout split for {active_split_id} (smoke subset).",
+        "description": f"Subject holdout split for {active_split_id}, {len(train_subjects)} train / {len(val_subjects)} val / {len(test_subjects)} test subjects.",
         "train_subjects": sorted(train_subjects),
         "val_subjects": sorted(val_subjects),
         "test_subjects": sorted(test_subjects),
