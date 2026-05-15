@@ -1667,7 +1667,7 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_RULES", severity="INFO", status="PASS", message="candidate audit report contains passing critical evidence rules")
 
 
-def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir: Path | None = None) -> dict[str, Any]:
+def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir: Path | None = None, allow_run_local_summary: bool = False) -> dict[str, Any]:
     if gate not in GATES:
         raise ValueError(f"unknown gate: {gate}")
     checks: list[AuditCheck] = []
@@ -1753,6 +1753,16 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir:
                     )
 
             summary_root = summary_dir.resolve() if summary_dir is not None else ROOT / "reports" / "route_summaries"
+            if summary_dir is not None and not allow_run_local_summary and gate in STRICT_GATES:
+                add_warn_or_fail(
+                    checks,
+                    gate=gate,
+                    fail_gate=STRICT_GATES,
+                    rule_id="SUMMARY_DIR_OVERRIDE",
+                    message="run-local summary directory is only allowed for toy/CI smoke; real candidate/promoted must use reports/route_summaries",
+                    fix="Remove summary_dir override and write the summary to reports/route_summaries/<route_id>_summary.md.",
+                    decision_if_fail="BLOCKED",
+                )
             summary_path = summary_root / f"{route_id}_summary.md"
             if summary_path.exists():
                 add_check(checks, rule_id="SUMMARY_EXISTS", severity="INFO", status="PASS", message=f"summary found: {display_path(summary_path)}")

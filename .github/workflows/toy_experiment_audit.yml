@@ -4,19 +4,16 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - ".github/workflows/**"
+      - "requirements-ci.txt"
+      - "pyproject.toml"
+      - "scripts/**"
+      - "src/hust_bci_er/**"
       - "configs/datasets/toy_eeg_v1.yaml"
-      - "configs/routes/models/toy_eegnet.yaml"
       - "configs/splits/toy_subject_holdout_seed42.yaml"
-      - "scripts/train_route.py"
-      - "scripts/run_route_job.py"
-      - "scripts/toy_experiment_audit.py"
-      - "scripts/launch_reproducible.py"
-      - "scripts/audit_experiment.py"
-      - "src/hust_bci_er/audit/**"
-      - "src/hust_bci_er/data/**"
-      - "src/hust_bci_er/evaluation/**"
-      - "src/hust_bci_er/training/**"
-      - ".github/workflows/toy_experiment_audit.yml"
+      - "configs/routes/models/toy_eegnet.yaml"
+  push:
+    branches: [main]
 
 jobs:
   toy-experiment-audit:

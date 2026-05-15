@@ -7,8 +7,12 @@ from typing import Any
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
+
+from hust_bci_er.audit.promotion import parse_key_value_markdown  # noqa: E402
+
 BOARD_PATH = ROOT / "reports" / "route_board.md"
 REGISTRY_PATH = ROOT / "reports" / "route_registry.yaml"
 SUMMARY_REQUIRED_STATUSES = {"CANDIDATE", "PROMOTED", "REJECTED", "ARCHIVED"}
@@ -61,17 +65,10 @@ def primary_metric(evaluation: Any) -> str:
     return ""
 
 
-def summary_fields(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    fields: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = raw.strip().lstrip("-").strip()
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        fields[key.strip()] = value.strip().strip("`")
-    return fields
+def job_adapter(training: Any) -> str:
+    if isinstance(training, dict):
+        return str(training.get("job_adapter") or "")
+    return ""
 
 
 def generate_board() -> str:
@@ -81,21 +78,22 @@ def generate_board() -> str:
         "",
         "generated_by: `python scripts/update_route_board.py`",
         "",
-        "| route_id | owner | status | latest_gate | primary_metric | dataset | split | model | protocol | summary | blocker |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| route_id | owner | status | latest_gate | primary_metric | dataset | split | model | adapter | protocol | summary | blocker |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for path in route_files():
         data = load_yaml(path)
         route_id = str(data.get("route_id") or path.stem)
         status = str(data.get("status") or "")
         model = model_name(data.get("model"))
+        adapter_name = job_adapter(data.get("training"))
         evaluation = data.get("evaluation")
         protocol = protocol_name(evaluation)
         metric = primary_metric(evaluation)
         dataset = str(data.get("dataset_version") or "")
         split = str(data.get("split_id") or "")
         summary = ROOT / "reports" / "route_summaries" / f"{route_id}_summary.md"
-        fields = summary_fields(summary)
+        fields = parse_key_value_markdown(summary) if summary.exists() else {}
         registry_entry = registry.get(route_id, {})
         owner = str(registry_entry.get("owner") or "")
         if summary.exists():
@@ -106,7 +104,7 @@ def generate_board() -> str:
             summary_state = "not_required"
         latest_gate = fields.get("gate", "")
         blocker = fields.get("risk notes", "") or str(registry_entry.get("blocker") or "")
-        lines.append(f"| `{route_id}` | {owner} | {status} | {latest_gate} | `{metric}` | `{dataset}` | `{split}` | `{model}` | `{protocol}` | {summary_state} | {blocker} |")
+        lines.append(f"| `{route_id}` | {owner} | {status} | {latest_gate} | `{metric}` | `{dataset}` | `{split}` | `{model}` | `{adapter_name}` | `{protocol}` | {summary_state} | {blocker} |")
     return "\n".join(lines) + "\n"
 
 
