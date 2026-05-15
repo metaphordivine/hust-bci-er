@@ -14,12 +14,12 @@ from hust_bci_er.training.toy_adapter import run_toy_route  # noqa: E402
 from scripts.audit_experiment import run_audit, write_reports  # noqa: E402
 
 
-def write_summary(route: Path, run_dir: Path) -> Path:
+def write_summary(route: Path, run_dir: Path, *, summary_dir: Path) -> Path:
     audit_report_path = run_dir / "audit_report.json"
     manifest_path = run_dir / "manifest.json"
     route_data = load_mapping(route)
     audit_report = load_mapping(audit_report_path)
-    summary_path = ROOT / "reports" / "route_summaries" / f"{route_data['route_id']}_summary.md"
+    summary_path = summary_dir / f"{route_data['route_id']}_summary.md"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(
         render_route_summary(route_data=route_data, audit_report=audit_report, manifest_path=manifest_path, root=ROOT),
@@ -28,8 +28,8 @@ def write_summary(route: Path, run_dir: Path) -> Path:
     return summary_path
 
 
-def audit_once(route: Path, run_dir: Path, *, gate: str) -> dict:
-    report = run_audit(route, run_dir, gate=gate)
+def audit_once(route: Path, run_dir: Path, *, gate: str, summary_dir: Path | None = None) -> dict:
+    report = run_audit(route, run_dir, gate=gate, summary_dir=summary_dir)
     write_reports(run_dir, report)
     return report
 
@@ -56,20 +56,16 @@ def main(argv: list[str] | None = None) -> int:
         command=["python", "scripts/toy_experiment_audit.py", "--route", args.route.as_posix(), "--run-dir", args.run_dir.as_posix()],
     )
     report = audit_once(args.route, args.run_dir, gate=args.gate)
-    summary_path: Path | None = None
     if args.gate == "candidate" and report["overall"] != "PASS" and failed_only_missing_summary(report):
         # Candidate audit intentionally requires a route summary, but the toy
-        # CI smoke must not commit run-specific output paths under reports/.
-        # Write a temporary summary only to prove the candidate gate can pass,
-        # then remove it before returning.
-        summary_path = write_summary(args.route, args.run_dir)
-        try:
-            report = audit_once(args.route, args.run_dir, gate=args.gate)
-        finally:
-            if summary_path.exists():
-                summary_path.unlink()
-            if summary_path.parent.exists() and not any(summary_path.parent.iterdir()):
-                summary_path.parent.rmdir()
+        # CI smoke must not create run-specific files under tracked reports/.
+        # Keep the proof summary inside this run directory so interruptions
+        # cannot leave accidental changes in the repository tree.
+        summary_dir = args.run_dir / "route_summaries"
+        write_summary(args.route, args.run_dir, summary_dir=summary_dir)
+        report = audit_once(args.route, args.run_dir, gate=args.gate, summary_dir=summary_dir)
+        if report["overall"] == "PASS":
+            write_summary(args.route, args.run_dir, summary_dir=summary_dir)
 
     print(json.dumps({"route_id": report["route_id"], "gate": report["gate"], "overall": report["overall"], "run_dir": str(args.run_dir.resolve())}, ensure_ascii=False))
     return 0 if report["overall"] == "PASS" else 1

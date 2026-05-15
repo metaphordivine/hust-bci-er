@@ -343,9 +343,24 @@ def execute_protocol_jobs(
         raise ValueError(f"could not find repository root for protocol run: {protocol_run_manifest_path}")
     jobs = [job for job in manifest.get("jobs", []) if isinstance(job, Mapping)]
     runnable = [job for job in jobs if "predictions.csv" in job.get("expected_artifacts", [])]
+    artifact_only = [job for job in jobs if "predictions.csv" not in job.get("expected_artifacts", [])]
     if max_jobs is not None:
         runnable = runnable[: int(max_jobs)]
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = [
+        {
+            "job_id": str(job.get("job_id", "")),
+            "route_config": str(job.get("route_config", "")),
+            "run_dir": None,
+            "status": "SKIPPED_ARTIFACT_ONLY",
+            "reason": "--execute currently runs prediction-producing jobs only; this artifact-only job must be produced by the formal training/selection adapter.",
+            "command_returncode": None,
+            "audit_gate": gate,
+            "audit_returncode": None,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+        for job in artifact_only
+    ]
     for job in runnable:
         seed = int(job["seed"])
         command = [
@@ -393,6 +408,7 @@ def execute_protocol_jobs(
                 "job_id": str(job["job_id"]),
                 "route_config": route_config,
                 "run_dir": str(run_dir),
+                "status": "EXECUTED",
                 "command_returncode": proc.returncode,
                 "audit_gate": gate,
                 "audit_returncode": audit_code,

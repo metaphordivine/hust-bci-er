@@ -10,7 +10,7 @@ import hust_bci_er.training.reproducibility as reproducibility_module
 from hust_bci_er.audit.manifest import sha256_file, validate_manifest
 from hust_bci_er.audit.run_manifest import write_run_manifest
 from hust_bci_er.evaluation.crop_policy import crop_policy_manifest, select_crop_matrix, worst_crop_score
-from hust_bci_er.evaluation.protocols.runner import build_protocol_jobs, materialize_protocol_run
+from hust_bci_er.evaluation.protocols.runner import build_protocol_jobs, execute_protocol_jobs, materialize_protocol_run
 from hust_bci_er.training.reproducibility import dataloader_worker_seed
 from scripts.audit_experiment import run_audit
 
@@ -67,6 +67,19 @@ def test_protocol_runner_materializes_p2_crop_jobs(tmp_path):
     split_contract = yaml.safe_load(split_path.read_text(encoding="utf-8"))
     assert len(split_contract["job_ids"]) == 8
     assert [policy["name"] for policy in split_contract["crop_policies"]] == ["crop1", "crop2", "crop3", "crop4", "crop5", "random", "worst"]
+
+
+def test_protocol_execute_results_list_artifact_only_skips(tmp_path):
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+
+    results = execute_protocol_jobs(manifest, protocol_run_manifest_path=run_dir / "protocol_run_manifest.json", max_jobs=0)
+
+    skipped = [item for item in results if item["status"] == "SKIPPED_ARTIFACT_ONLY"]
+    assert [item["job_id"] for item in skipped] == ["p2__ea_deformer__train_seed42"]
+    assert skipped[0]["command_returncode"] is None
+    assert "prediction-producing jobs only" in skipped[0]["reason"]
+    assert (run_dir / "protocol_execution_results.json").exists()
 
 
 def test_protocol_runner_counts_p1_and_p3_jobs():

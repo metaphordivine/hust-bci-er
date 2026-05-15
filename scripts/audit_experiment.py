@@ -106,6 +106,13 @@ def is_under(path: Path, parent: Path) -> bool:
         return False
 
 
+def display_path(path: Path, *, root: Path = ROOT) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
 def resolve_run_artifact(value: str, *, run_dir: Path, field: str) -> Path:
     resolved = (run_dir / value).resolve()
     if not is_under(resolved, run_dir):
@@ -1660,7 +1667,7 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_RULES", severity="INFO", status="PASS", message="candidate audit report contains passing critical evidence rules")
 
 
-def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str, Any]:
+def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir: Path | None = None) -> dict[str, Any]:
     if gate not in GATES:
         raise ValueError(f"unknown gate: {gate}")
     checks: list[AuditCheck] = []
@@ -1745,16 +1752,17 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
                         decision_if_fail="BLOCKED",
                     )
 
-            summary_path = ROOT / "reports" / "route_summaries" / f"{route_id}_summary.md"
+            summary_root = summary_dir.resolve() if summary_dir is not None else ROOT / "reports" / "route_summaries"
+            summary_path = summary_root / f"{route_id}_summary.md"
             if summary_path.exists():
-                add_check(checks, rule_id="SUMMARY_EXISTS", severity="INFO", status="PASS", message=f"summary found: {summary_path.relative_to(ROOT)}")
+                add_check(checks, rule_id="SUMMARY_EXISTS", severity="INFO", status="PASS", message=f"summary found: {display_path(summary_path)}")
             else:
                 add_warn_or_fail(
                     checks,
                     gate=gate,
                     fail_gate={"diagnostic", "candidate", "promoted"},
                     rule_id="SUMMARY_EXISTS",
-                    message=f"route summary is missing: {summary_path.relative_to(ROOT)}",
+                    message=f"route summary is missing: {display_path(summary_path)}",
                     fix="Write one concise route summary before treating this as a finished experiment.",
                     decision_if_fail="BLOCKED",
                 )

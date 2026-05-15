@@ -72,8 +72,14 @@ def main(argv: list[str] | None = None) -> int:
             gate=args.execute_gate,
             max_jobs=args.max_execute_jobs,
         )
-        payload["executed_jobs"] = len(results)
-        payload["failed_jobs"] = sum(1 for item in results if item["command_returncode"] != 0 or item["audit_returncode"] not in {0, None})
+        payload["executed_jobs"] = sum(1 for item in results if item.get("status") == "EXECUTED")
+        payload["skipped_artifact_only_jobs"] = sum(1 for item in results if item.get("status") == "SKIPPED_ARTIFACT_ONLY")
+        payload["failed_jobs"] = sum(
+            1
+            for item in results
+            if item.get("status") == "EXECUTED"
+            and (item["command_returncode"] != 0 or item["audit_returncode"] not in {0, None})
+        )
         if payload["failed_jobs"]:
             print(json.dumps(payload, ensure_ascii=False))
             return 1
