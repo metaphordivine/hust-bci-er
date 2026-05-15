@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run a command in a fresh process with deterministic seed environment.")
+    parser = argparse.ArgumentParser(description="Run a trusted command in a fresh process with deterministic seed environment.")
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     if not command:
         parser.error("command is required after --")
 
+    # This launcher is deliberately generic because it is used by local humans
+    # and fixed CI workflow commands. Do not pass untrusted user input here.
     env = os.environ.copy()
     seed = str(int(args.seed))
     env["PYTHONHASHSEED"] = seed
@@ -34,4 +36,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

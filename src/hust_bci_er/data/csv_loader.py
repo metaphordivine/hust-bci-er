@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Iterator, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +61,7 @@ class CsvManifestLoader:
             path = Path(crop.path)
             resolved = path if path.is_absolute() else self.base_dir / path
             x, _ = read_feature_vector(resolved)
-            yield trial_crop_from_index_row(row, x=x)
+            yield replace(crop, x=x)
 
     def iter_trials(self) -> Iterator[EEGTrial]:
         for crop in self.iter_crops():
@@ -96,4 +97,3 @@ class CsvManifestLoader:
         batch = ModelBatch(x=x, y=y, metadata=metadata, feature_names=tuple(f"{FEATURE_PREFIX}{idx}" for idx in range(feature_count)))
         validate_model_input_contract(batch)
         return batch
-

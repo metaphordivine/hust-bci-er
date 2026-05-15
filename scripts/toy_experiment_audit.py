@@ -34,6 +34,15 @@ def audit_once(route: Path, run_dir: Path, *, gate: str) -> dict:
     return report
 
 
+def failed_only_missing_summary(report: dict) -> bool:
+    failing = [
+        check
+        for check in report.get("checks", [])
+        if isinstance(check, dict) and check.get("status") == "FAIL"
+    ]
+    return bool(failing) and all(check.get("rule_id") == "SUMMARY_EXISTS" for check in failing)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the toy route end-to-end and prove candidate audit can pass.")
     parser.add_argument("--route", type=Path, default=ROOT / "configs" / "routes" / "models" / "toy_eegnet.yaml")
@@ -48,7 +57,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     report = audit_once(args.route, args.run_dir, gate=args.gate)
     summary_path: Path | None = None
-    if report["overall"] != "PASS" and args.gate == "candidate":
+    if args.gate == "candidate" and report["overall"] != "PASS" and failed_only_missing_summary(report):
+        # Candidate audit intentionally requires a route summary, but the toy
+        # CI smoke must not commit run-specific output paths under reports/.
+        # Write a temporary summary only to prove the candidate gate can pass,
+        # then remove it before returning.
         summary_path = write_summary(args.route, args.run_dir)
         try:
             report = audit_once(args.route, args.run_dir, gate=args.gate)

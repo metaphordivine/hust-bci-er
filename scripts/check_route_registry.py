@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,7 @@ def main() -> int:
         if len(entries) != len(routes):
             errors.append("route registry routes must contain only mappings")
         listed = [str(item.get("route_id") or "") for item in entries]
-        duplicate = sorted(route_id for route_id in set(listed) if listed.count(route_id) > 1)
+        duplicate = sorted(route_id for route_id, count in Counter(listed).items() if route_id and count > 1)
         if duplicate:
             errors.append("route registry has duplicate route_id values: " + ", ".join(duplicate))
         expected = route_ids_from_configs()
@@ -88,4 +89,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
