@@ -40,6 +40,15 @@ routes:
   - route_id: sliding_window_eegnet
     owner: unassigned
     blocker: missing_real_candidate_run
+  - route_id: sliding_window_cbramod
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: sliding_window_fbstcnet
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: sliding_window_shallow_conv_net
+    owner: unassigned
+    blocker: missing_real_candidate_run
   - route_id: sliding_window_srfnet
     owner: unassigned
     blocker: missing_real_candidate_run
