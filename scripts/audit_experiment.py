@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from hust_bci_er.audit.manifest import load_manifest, resolve_repo_or_run_path, validate_manifest  # noqa: E402
+from hust_bci_er.audit.manifest import load_manifest, resolve_repo_or_run_path, sha256_file, validate_manifest  # noqa: E402
+from hust_bci_er.audit.promotion import parse_key_value_markdown  # noqa: E402
 from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
@@ -47,11 +48,14 @@ PROMOTION_REQUIRED_CANDIDATE_RULES = {
     "PRIMARY_METRIC_REPORTED",
     "RUN_DATASET_EVIDENCE_VALID",
     "RUN_SPLIT_EVIDENCE_VALID",
+    "RUN_SPLIT_EVIDENCE_CONSISTENT",
+    "RUN_REPRODUCIBILITY_LOCKED",
 }
 PROMOTION_REQUIRED_TOP4_RULES = {
     "PREDICTION_TOP4_RANKING",
     "PREDICTION_TOP4_BINARY",
     "PREDICTION_TRIAL_ID_UNIQUE",
+    "PREDICTION_TOP4_TRUTH_BALANCE",
 }
 
 
@@ -126,17 +130,6 @@ def parse_binary(value: Any, *, field: str, context: str) -> int:
     return int(parsed)
 
 
-def parse_key_fields(text: str) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip().lstrip("-").strip()
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        fields[key.strip()] = value.strip().strip("`")
-    return fields
-
-
 def route_primary_metric(route_data: dict[str, Any]) -> str | None:
     evaluation = route_data.get("evaluation")
     if isinstance(evaluation, dict):
@@ -150,9 +143,10 @@ def manifest_metric_value(manifest: dict[str, Any], metric_name: str) -> float |
     if not isinstance(metrics, dict) or metric_name not in metrics:
         return None
     try:
-        return float(metrics[metric_name])
+        value = float(metrics[metric_name])
     except (TypeError, ValueError):
         return None
+    return value if np.isfinite(value) else None
 
 
 def compare_metric(checks: list[AuditCheck], *, metric_name: str, recomputed: float, manifest: dict[str, Any], tolerance: float = 1e-9) -> None:
@@ -301,12 +295,17 @@ def add_warn_or_fail(
         add_check(checks, rule_id=rule_id, severity="WARN", status="WARN", message=message, fix=fix)
 
 
+def has_subject_membership(data: dict[str, Any]) -> bool:
+    if not all(isinstance(data.get(f"{split}_subjects"), list) for split in ["train", "val", "test"]):
+        return False
+    return bool(data.get("train_subjects")) and bool(data.get("test_subjects"))
+
+
 def split_manifest_has_evidence(split_data: dict[str, Any]) -> bool:
-    has_subject_lists = all(isinstance(split_data.get(key), list) and bool(split_data.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+    has_subject_lists = has_subject_membership(split_data)
     folds = split_data.get("folds") or split_data.get("fold_definitions") or []
     has_fold_definitions = isinstance(folds, list) and bool(folds) and all(
-        isinstance(fold, dict)
-        and all(isinstance(fold.get(key), list) and bool(fold.get(key)) for key in ["train_subjects", "val_subjects", "test_subjects"])
+        isinstance(fold, dict) and has_subject_membership(fold)
         for fold in folds
     )
     trial_rows = split_data.get("trial_rows") or []
@@ -314,6 +313,131 @@ def split_manifest_has_evidence(split_data: dict[str, Any]) -> bool:
         isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
     )
     return has_subject_lists or has_fold_definitions or has_trial_rows
+
+
+def split_manifest_has_formal_evidence(split_data: dict[str, Any]) -> bool:
+    """Formal candidate evidence needs complete trial rows.
+
+    Subject membership may be declared explicitly or derived from trial_rows,
+    including per-fold rows.
+    """
+    trial_rows = split_data.get("trial_rows") or []
+    has_trial_index = isinstance(trial_rows, list) and bool(trial_rows) and all(
+        isinstance(row, dict) and {"subject_id", "original_trial_id", "split"}.issubset(row) for row in trial_rows
+    )
+    return has_trial_index and not trial_row_membership_errors([row for row in trial_rows if isinstance(row, dict)])
+
+
+def subjects_from_trial_rows(rows: list[dict[str, Any]]) -> dict[str, set[str]]:
+    subjects_by_split = {"train": set(), "val": set(), "test": set()}
+    for row in rows:
+        split = str(row.get("split"))
+        subject = row.get("subject_id")
+        if split in subjects_by_split and subject is not None:
+            subjects_by_split[split].add(str(subject))
+    return subjects_by_split
+
+
+def trial_row_membership_errors(rows: list[dict[str, Any]]) -> list[str]:
+    """Verify trial_rows derive usable train/test subject membership."""
+    if not rows:
+        return ["trial_rows must derive non-empty train and test subject membership"]
+    has_fold_rows = any("fold" in row for row in rows)
+    has_unfolded_rows = any("fold" not in row for row in rows)
+    if has_fold_rows and has_unfolded_rows:
+        return ["trial_rows must either all declare fold or none declare fold"]
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("fold", "__single_fold__")), []).append(row)
+
+    errors: list[str] = []
+    for fold_id, fold_rows in sorted(grouped.items()):
+        subjects = subjects_from_trial_rows(fold_rows)
+        if not subjects["train"] or not subjects["test"]:
+            if fold_id == "__single_fold__":
+                errors.append("trial_rows must derive non-empty train and test subject membership")
+            else:
+                errors.append(f"trial_rows fold {fold_id} must derive non-empty train and test subject membership")
+    return errors
+
+
+def split_evidence_consistency_errors(split_data: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    rows = split_data.get("trial_rows") or []
+    if not isinstance(rows, list) or not rows:
+        return ["trial_rows must be a non-empty list"]
+    valid_splits = {"train", "val", "test"}
+    normalized_rows = [row for row in rows if isinstance(row, dict)]
+    if len(normalized_rows) != len(rows):
+        errors.append("trial_rows must contain only mappings")
+    for idx, row in enumerate(normalized_rows):
+        split = row.get("split")
+        subject = row.get("subject_id")
+        original_trial = row.get("original_trial_id")
+        if split not in valid_splits:
+            errors.append(f"trial_rows[{idx}].split must be train/val/test")
+        if subject in {None, ""}:
+            errors.append(f"trial_rows[{idx}].subject_id is required")
+        if original_trial in {None, ""}:
+            errors.append(f"trial_rows[{idx}].original_trial_id is required")
+
+    consumed: set[int] = set()
+    indexed_rows = list(enumerate(normalized_rows))
+    folds = split_data.get("folds") or split_data.get("fold_definitions") or []
+    has_declared_folds = isinstance(folds, list) and bool(folds)
+    rows_with_fold = [idx for idx, row in indexed_rows if "fold" in row]
+    rows_without_fold = [idx for idx, row in indexed_rows if "fold" not in row]
+    if rows_with_fold and rows_without_fold:
+        errors.append("trial_rows must either all declare fold or none declare fold")
+    errors.extend(trial_row_membership_errors(normalized_rows))
+
+    if has_subject_membership(split_data):
+        top_level_rows = [(idx, row) for idx, row in indexed_rows if "fold" not in row]
+        if not top_level_rows:
+            errors.append("top-level subject lists require trial_rows without fold")
+        else:
+            consumed.update(idx for idx, _ in top_level_rows)
+            row_subjects = subjects_from_trial_rows([row for _, row in top_level_rows])
+            for split in ["train", "val", "test"]:
+                expected = set(map(str, split_data.get(f"{split}_subjects") or []))
+                actual = row_subjects[split]
+                if expected != actual:
+                    missing = sorted(expected - actual)[:5]
+                    extra = sorted(actual - expected)[:5]
+                    errors.append(f"top-level {split}_subjects do not match trial_rows; missing={missing}, extra={extra}")
+
+    declared_fold_ids: set[str] = set()
+    if has_declared_folds:
+        for idx, fold in enumerate(folds):
+            if not isinstance(fold, dict):
+                errors.append(f"fold {idx} must be a mapping")
+                continue
+            fold_id = fold.get("fold", fold.get("fold_id", idx))
+            declared_fold_ids.add(str(fold_id))
+            fold_rows = [(row_idx, row) for row_idx, row in indexed_rows if str(row.get("fold")) == str(fold_id)]
+            if not fold_rows:
+                errors.append(f"fold {fold_id} has no trial_rows")
+                continue
+            consumed.update(row_idx for row_idx, _ in fold_rows)
+            row_subjects = subjects_from_trial_rows([row for _, row in fold_rows])
+            for split in ["train", "val", "test"]:
+                expected = set(map(str, fold.get(f"{split}_subjects") or []))
+                actual = row_subjects[split]
+                if expected != actual:
+                    missing = sorted(expected - actual)[:5]
+                    extra = sorted(actual - expected)[:5]
+                    errors.append(f"fold {fold_id} {split}_subjects do not match trial_rows; missing={missing}, extra={extra}")
+        for idx, row in indexed_rows:
+            if "fold" not in row:
+                errors.append(f"trial_rows[{idx}] must declare fold when fold definitions are present")
+            elif str(row.get("fold")) not in declared_fold_ids:
+                errors.append(f"trial_rows[{idx}].fold is not declared")
+
+    unconsumed = sorted(set(range(len(normalized_rows))) - consumed)
+    if unconsumed and (has_subject_membership(split_data) or has_declared_folds):
+        errors.append("trial_rows contain rows not covered by subject lists or fold definitions: " + ", ".join(map(str, unconsumed[:5])))
+    return errors
 
 
 def subject_sets_from_split(data: dict[str, Any]) -> tuple[set[str], set[str], set[str]]:
@@ -347,16 +471,27 @@ def split_leakage_errors(split_data: dict[str, Any]) -> tuple[list[str], list[st
 
     rows = split_data.get("trial_rows") or []
     if isinstance(rows, list) and rows:
-        try:
-            assert_original_trial_not_cross_split(rows)
-        except (KeyError, ValueError) as exc:
-            trial_errors.append(str(exc))
         rows_by_fold: dict[str, list[dict[str, Any]]] = {}
+        has_fold_rows = any(isinstance(row, dict) and "fold" in row for row in rows)
+        has_unfolded_rows = any(isinstance(row, dict) and "fold" not in row for row in rows)
+        if has_fold_rows and has_unfolded_rows:
+            subject_errors.append("trial_rows mix folded and unfolded rows")
+            trial_errors.append("trial_rows mix folded and unfolded rows")
+        if not has_fold_rows:
+            try:
+                assert_original_trial_not_cross_split(rows)
+            except (KeyError, ValueError) as exc:
+                trial_errors.append(str(exc))
         for row in rows:
             if not isinstance(row, dict):
                 continue
             rows_by_fold.setdefault(str(row.get("fold", "__single_fold__")), []).append(row)
         for fold, fold_rows in rows_by_fold.items():
+            if has_fold_rows:
+                try:
+                    assert_original_trial_not_cross_split(fold_rows)
+                except (KeyError, ValueError) as exc:
+                    trial_errors.append(f"fold {fold}: {exc}")
             subjects_by_split = {"train": set(), "val": set(), "test": set()}
             for row in fold_rows:
                 split = str(row.get("split"))
@@ -622,20 +757,168 @@ def check_run_dataset_split_evidence(
                     fix="Use split evidence for the audited manifest split_id.",
                     decision_if_fail="BLOCKED",
                 )
-            elif split_data.get("status") == "declared_without_subject_list" or not split_manifest_has_evidence(split_data):
+            elif split_data.get("status") == "declared_without_subject_list" or not split_manifest_has_formal_evidence(split_data):
                 add_warn_or_fail(
                     checks,
                     gate=gate,
                     fail_gate=STRICT_GATES,
                     rule_id="RUN_SPLIT_EVIDENCE_VALID",
                     message="run split evidence is not verifiable",
-                    fix="Add complete subject lists, fold definitions, or trial rows before candidate/promoted review.",
+                    fix="Add complete trial_rows with subject_id, original_trial_id, and split before candidate/promoted review; subject membership may be derived from those rows.",
                     decision_if_fail="BLOCKED",
                 )
             else:
                 add_check(checks, rule_id="RUN_SPLIT_EVIDENCE_VALID", severity="INFO", status="PASS", message="run split evidence is verifiable")
+                consistency_errors = split_evidence_consistency_errors(split_data)
+                if consistency_errors:
+                    add_check(
+                        checks,
+                        rule_id="RUN_SPLIT_EVIDENCE_CONSISTENT",
+                        severity="ERROR",
+                        status="FAIL",
+                        message="run split evidence is inconsistent: " + "; ".join(consistency_errors[:5]),
+                        fix="Make subject lists or fold definitions match trial_rows exactly, and use only train/val/test split values.",
+                        decision_if_fail="BLOCKED",
+                    )
+                else:
+                    add_check(checks, rule_id="RUN_SPLIT_EVIDENCE_CONSISTENT", severity="INFO", status="PASS", message="run split subject lists match trial_rows")
             if split_data is not None and split_data.get("status") != "declared_without_subject_list" and split_manifest_has_evidence(split_data):
                 add_split_leakage_checks(checks, split_data, gate=gate)
+
+
+def check_reproducibility_manifest(manifest: dict[str, Any], checks: list[AuditCheck], *, gate: str, root: Path = ROOT) -> None:
+    missing: list[str] = []
+    malformed: list[str] = []
+
+    environment = manifest.get("environment")
+    if not isinstance(environment, dict):
+        missing.append("environment")
+    else:
+        if not isinstance(environment.get("python"), dict) or not environment["python"].get("version"):
+            malformed.append("environment.python.version")
+        if not isinstance(environment.get("packages"), dict):
+            malformed.append("environment.packages")
+        if not isinstance(environment.get("torch"), dict):
+            malformed.append("environment.torch")
+
+    determinism = manifest.get("determinism")
+    required_determinism = {
+        "python_seed",
+        "python_hash_seed",
+        "pythonhashseed_env",
+        "numpy_seed",
+        "torch_seed",
+        "deterministic_algorithms",
+        "cudnn_deterministic",
+        "cudnn_benchmark",
+        "dataloader_worker_seed_base",
+        "batch_order",
+    }
+    if not isinstance(determinism, dict):
+        missing.append("determinism")
+    else:
+        absent = sorted(key for key in required_determinism if key not in determinism)
+        malformed.extend(f"determinism.{key}" for key in absent)
+        manifest_seed = manifest.get("seed")
+        for key in ["python_seed", "python_hash_seed", "numpy_seed", "torch_seed", "dataloader_worker_seed_base"]:
+            if key in determinism and type(determinism[key]) is not int:
+                malformed.append(f"determinism.{key} must be int")
+            elif key in determinism and type(manifest_seed) is int and determinism[key] != manifest_seed:
+                malformed.append(f"determinism.{key} must match manifest seed")
+        if "pythonhashseed_env" in determinism:
+            if determinism["pythonhashseed_env"] in {None, ""}:
+                malformed.append("determinism.pythonhashseed_env must be set before Python starts")
+            elif type(manifest_seed) is int and str(determinism["pythonhashseed_env"]) != str(manifest_seed):
+                malformed.append("determinism.pythonhashseed_env must match manifest seed")
+        if "seed" in determinism and type(manifest_seed) is int and determinism["seed"] != manifest_seed:
+            malformed.append("determinism.seed must match manifest seed")
+        if determinism.get("deterministic_algorithms") is not True:
+            malformed.append("determinism.deterministic_algorithms must be true")
+        if determinism.get("cudnn_deterministic") is not True:
+            malformed.append("determinism.cudnn_deterministic must be true")
+        if determinism.get("cudnn_benchmark") is not False:
+            malformed.append("determinism.cudnn_benchmark must be false")
+        batch_order = determinism.get("batch_order")
+        if not isinstance(batch_order, dict):
+            malformed.append("determinism.batch_order")
+        else:
+            if batch_order.get("policy") != "seeded_sampler_or_shuffle_false":
+                malformed.append("determinism.batch_order.policy")
+            if type(manifest_seed) is int and batch_order.get("sampler_seed") != manifest_seed:
+                malformed.append("determinism.batch_order.sampler_seed")
+
+    checkpoint_selection = manifest.get("checkpoint_selection")
+    if not isinstance(checkpoint_selection, dict):
+        missing.append("checkpoint_selection")
+    else:
+        if checkpoint_selection.get("rule") != "best_monitored_epoch":
+            malformed.append("checkpoint_selection.rule")
+        if checkpoint_selection.get("monitor") not in {"train_loss", "train_accuracy", "val_loss", "val_accuracy"}:
+            malformed.append("checkpoint_selection.monitor")
+        if checkpoint_selection.get("mode") not in {"min", "max"}:
+            malformed.append("checkpoint_selection.mode")
+        if checkpoint_selection.get("tie_break") != "earliest_epoch":
+            malformed.append("checkpoint_selection.tie_break")
+        if checkpoint_selection.get("restore_best") is not True:
+            malformed.append("checkpoint_selection.restore_best")
+
+    crop_policy = manifest.get("crop_policy")
+    if not isinstance(crop_policy, dict):
+        missing.append("crop_policy")
+    else:
+        for key in ["name", "selection", "tie_break"]:
+            if not crop_policy.get(key):
+                malformed.append(f"crop_policy.{key}")
+        if crop_policy.get("name") == "random":
+            if type(crop_policy.get("random_seed")) is not int:
+                malformed.append("crop_policy.random_seed")
+            elif type(manifest.get("seed")) is int and crop_policy.get("random_seed") != manifest["seed"]:
+                malformed.append("crop_policy.random_seed must match manifest seed")
+            if crop_policy.get("selection") != "per_trial_uniform_crop":
+                malformed.append("crop_policy.selection")
+        if crop_policy.get("name") == "worst":
+            if crop_policy.get("selection") != "label_aware_min_metric_stress_test":
+                malformed.append("crop_policy.selection")
+            if crop_policy.get("tie_break") != "lowest_assignment_index":
+                malformed.append("crop_policy.tie_break")
+
+    environment_lock = manifest.get("environment_lock")
+    if not isinstance(environment_lock, dict):
+        missing.append("environment_lock")
+    else:
+        files = environment_lock.get("files")
+        if not isinstance(files, list) or not files:
+            malformed.append("environment_lock.files")
+        else:
+            paths = {str(item.get("path")) for item in files if isinstance(item, dict)}
+            if "environment.lock" not in paths:
+                malformed.append("environment_lock.environment.lock")
+            if "requirements.lock" not in paths:
+                malformed.append("environment_lock.requirements.lock")
+            for item in files:
+                if not isinstance(item, dict) or not isinstance(item.get("path"), str) or SHA256_RE.fullmatch(str(item.get("sha256") or "")) is None:
+                    malformed.append("environment_lock.file")
+                    break
+                lock_path = (root / item["path"]).resolve()
+                if not is_under(lock_path, root):
+                    malformed.append(f"environment_lock.{item['path']} escapes repository")
+                elif not lock_path.exists():
+                    malformed.append(f"environment_lock.{item['path']} missing")
+                elif sha256_file(lock_path) != item["sha256"]:
+                    malformed.append(f"environment_lock.{item['path']} sha256")
+
+    if missing or malformed:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RUN_REPRODUCIBILITY_LOCKED",
+            message="run reproducibility metadata is incomplete: " + ", ".join(missing + malformed),
+            fix="Regenerate manifest.json with environment, determinism, checkpoint_selection, crop_policy, and environment_lock entries.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="RUN_REPRODUCIBILITY_LOCKED", severity="INFO", status="PASS", message="run reproducibility metadata is locked")
 
 
 def top4_group_columns(fields: set[str], schema: dict[str, str | None], manifest: dict[str, Any]) -> list[str] | None:
@@ -668,6 +951,7 @@ def check_top4_group_semantics(
     *,
     groups: dict[str, list[dict[str, str]]],
     schema: dict[str, str | None],
+    gate: str,
 ) -> None:
     trial_col = schema["trial_id"]
     top4_col = schema["pred_top4"]
@@ -726,12 +1010,14 @@ def check_top4_group_semantics(
         ("PREDICTION_TOP4_BINARY", bad_binary, "pred_top4 contains non-binary values", "Encode pred_top4 as 0 or 1 only."),
     ]
     if truth_col is None:
-        add_check(
+        add_warn_or_fail(
             checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
             rule_id="PREDICTION_TOP4_TRUTH_BALANCE",
-            severity="INFO",
-            status="PASS",
-            message="truth balance was not checked because y_true is absent; primary metric gates require y_true when needed",
+            message="truth balance was not checked because y_true is absent",
+            fix="For Top-4 candidate/promoted audits, include y_true in prediction CSV or provide an explicitly supported truth-balance evidence path.",
+            decision_if_fail="BLOCKED",
         )
     else:
         semantic_specs.append(("PREDICTION_TOP4_TRUTH_BALANCE", bad_truth, "y_true is not binary or not 4 positives per 8-trial group", "For labeled Top-4 audits, each 8-trial group should contain 4 positive labels."))
@@ -908,11 +1194,20 @@ def recompute_primary_metric_from_predictions(
         if schema["y_true"] is None or pred_col is None:
             required = "y_true and pred_top4" if metric_name == "top4_BA" else "y_true and y_pred"
             raise ValueError(f"prediction CSV must include {required}")
-        y_true = np.array([parse_binary(row[schema["y_true"]], field=schema["y_true"], context="primary metric") for row in rows], dtype=int)
-        if set(np.unique(y_true)) != {0, 1}:
-            raise ValueError("primary metric y_true must contain both binary classes")
-        y_pred = np.array([parse_binary(row[pred_col], field=pred_col, context="primary metric") for row in rows], dtype=int)
-        return balanced_accuracy(y_true, y_pred)
+        group_cols = metric_group_columns(fields, schema, manifest)
+        if group_cols is None:
+            raise ValueError("metric group keys are missing")
+        values: list[float] = []
+        for group_id, group in group_prediction_rows(rows, group_cols).items():
+            y_true = np.array([parse_binary(row[schema["y_true"]], field=schema["y_true"], context=group_id) for row in group], dtype=int)
+            y_pred = np.array([parse_binary(row[pred_col], field=pred_col, context=group_id) for row in group], dtype=int)
+            value = balanced_accuracy(y_true, y_pred)
+            if not np.isfinite(value):
+                raise ValueError(f"primary metric is not finite for group {group_id}")
+            values.append(value)
+        if not values:
+            raise ValueError("prediction CSV has no metric groups")
+        return float(np.mean(values))
 
     if metric_name == "all_correct_rate":
         if schema["y_true"] is None or schema["y_pred"] is None:
@@ -967,6 +1262,17 @@ def check_primary_metric(
             decision_if_fail="DIAGNOSTIC_ONLY",
         )
         return
+    if not np.isfinite(recomputed):
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="PRIMARY_METRIC_RECOMPUTE",
+            message=f"primary metric recomputed to a non-finite value: {recomputed}",
+            fix="Regenerate prediction or metric_inputs artifacts so the primary metric is finite.",
+            decision_if_fail="DIAGNOSTIC_ONLY",
+        )
+        return
 
     add_check(checks, rule_id="PRIMARY_METRIC_RECOMPUTE", severity="INFO", status="PASS", message=f"recomputed {metric_name}: {recomputed:.6f}")
     compare_metric(checks, metric_name=metric_name, recomputed=recomputed, manifest=manifest)
@@ -1016,15 +1322,19 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
     add_check(checks, rule_id="PREDICTION_NONEMPTY", severity="INFO", status="PASS", message=f"prediction rows: {len(rows)}")
 
     schema = prediction_schema(fields)
+    metric_name = route_primary_metric(route_data)
     if schema["score"] is None:
-        add_check(
-            checks,
-            rule_id="PREDICTION_SCORE_COLUMN",
-            severity="WARN",
-            status="WARN",
-            message="prediction CSV has no standard score column",
-            fix="Use one of: score, y_score, probability, logit.",
-        )
+        if route_uses_top4(route_data):
+            add_check(
+                checks,
+                rule_id="PREDICTION_SCORE_COLUMN",
+                severity="WARN",
+                status="WARN",
+                message="prediction CSV has no standard score column",
+                fix="Use one of: score, y_score, probability, logit.",
+            )
+        else:
+            add_check(checks, rule_id="PREDICTION_SCORE_COLUMN", severity="INFO", status="PASS", message="score column is not required for this no-Top4 route")
     else:
         add_check(checks, rule_id="PREDICTION_SCORE_COLUMN", severity="INFO", status="PASS", message="score column found")
 
@@ -1041,7 +1351,15 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             decision_if_fail="BLOCKED",
         )
 
-    if schema["subject_id"] and schema["trial_id"] and schema["pred_top4"]:
+    if not top4_required:
+        add_check(
+            checks,
+            rule_id="PREDICTION_TOP4_GROUPS",
+            severity="INFO",
+            status="PASS",
+            message="Top-4 audit is not required for this route",
+        )
+    elif schema["subject_id"] and schema["trial_id"] and schema["pred_top4"]:
         group_columns = top4_group_columns(fields, schema, manifest)
         if group_columns is None:
             add_warn_or_fail(
@@ -1082,26 +1400,17 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             )
         else:
             add_check(checks, rule_id="PREDICTION_TOP4_GROUPS", severity="INFO", status="PASS", message="Top-4 groups are valid")
-        check_top4_group_semantics(checks, groups=groups, schema=schema)
+        check_top4_group_semantics(checks, groups=groups, schema=schema, gate=gate)
     else:
-        if not top4_required:
-            add_check(
-                checks,
-                rule_id="PREDICTION_TOP4_GROUPS",
-                severity="INFO",
-                status="PASS",
-                message="Top-4 audit is not required for this route",
-            )
-        else:
-            add_warn_or_fail(
-                checks,
-                gate=gate,
-                fail_gate={"diagnostic", "candidate", "promoted"},
-                rule_id="PREDICTION_TOP4_GROUPS",
-                message="Top-4 group columns are not present",
-                fix="For Top-4 audits, include subject_id or user_id, trial_id, and pred_top4.",
-                decision_if_fail="BLOCKED",
-            )
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate={"diagnostic", "candidate", "promoted"},
+            rule_id="PREDICTION_TOP4_GROUPS",
+            message="Top-4 group columns are not present",
+            fix="For Top-4 audits, include subject_id or user_id, trial_id, and pred_top4.",
+            decision_if_fail="BLOCKED",
+        )
 
     if schema["y_true"] and schema["y_pred"]:
         try:
@@ -1123,15 +1432,23 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
             )
         else:
             add_check(checks, rule_id="METRIC_RECOMPUTE_BA", severity="INFO", status="PASS", message=f"recomputed BA: {score:.6f}")
-    else:
+    elif metric_name == "no_top4_BA":
         add_warn_or_fail(
             checks,
             gate=gate,
             fail_gate=STRICT_GATES,
             rule_id="METRIC_RECOMPUTE_BA",
             message="y_true/y_pred columns are not present; BA recompute skipped",
-            fix="For labeled validation runs, include y_true and y_pred in the prediction CSV.",
+            fix="For no_top4_BA validation runs, include y_true and y_pred in the prediction CSV.",
             decision_if_fail="DIAGNOSTIC_ONLY",
+        )
+    else:
+        add_check(
+            checks,
+            rule_id="METRIC_RECOMPUTE_BA",
+            severity="INFO",
+            status="PASS",
+            message=f"BA recompute skipped because {metric_name or 'the primary metric'} is checked by primary metric recompute",
         )
 
     check_primary_metric(checks, manifest=manifest, route_data=route_data, rows=rows, fields=fields, schema=schema, run_dir=path.parent, gate=gate)
@@ -1183,7 +1500,7 @@ def write_reports(run_dir: Path, report: dict[str, Any]) -> None:
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[AuditCheck]) -> None:
+def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[AuditCheck], *, top4_required: bool = False) -> None:
     if not promotion_path.exists():
         add_check(
             checks,
@@ -1197,8 +1514,7 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         return
 
     add_check(checks, rule_id="PROMOTION_AUDIT_EXISTS", severity="INFO", status="PASS", message=f"promotion audit found: {promotion_path.relative_to(ROOT)}")
-    text = promotion_path.read_text(encoding="utf-8", errors="ignore")
-    fields = parse_key_fields(text)
+    fields = parse_key_value_markdown(promotion_path)
     missing = sorted(field for field in PROMOTION_REQUIRED_FIELDS if not fields.get(field))
     if missing:
         add_check(
@@ -1288,7 +1604,7 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         return
     statuses = {str(item.get("rule_id")): item.get("status") for item in report_checks if isinstance(item, dict)}
     required = set(PROMOTION_REQUIRED_CANDIDATE_RULES)
-    if "PREDICTION_TOP4_RANKING" in statuses or "PREDICTION_TOP4_GROUPS" in statuses:
+    if top4_required:
         required.update(PROMOTION_REQUIRED_TOP4_RULES)
     missing_or_failed = sorted(rule for rule in required if statuses.get(rule) != "PASS")
     if missing_or_failed:
@@ -1374,6 +1690,7 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
             else:
                 add_check(checks, rule_id="MANIFEST_VALID", severity="INFO", status="PASS", message="manifest is valid")
                 manifest = load_manifest(manifest_path)
+                check_reproducibility_manifest(manifest, checks, gate=gate, root=ROOT)
                 check_run_dataset_split_evidence(manifest, route_data, run_dir, checks, gate=gate)
                 prediction_csv = manifest.get("prediction_csv")
                 if isinstance(prediction_csv, str) and prediction_csv:
@@ -1405,7 +1722,7 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
 
             if gate == "promoted":
                 promotion_path = ROOT / "reports" / "promotion_audits" / f"{route_id}_promotion.md"
-                check_promotion_audit(route_id, promotion_path, checks)
+                check_promotion_audit(route_id, promotion_path, checks, top4_required=route_uses_top4(route_data))
 
     decision = overall_decision(checks, gate=gate)
     if decision not in AUDIT_DECISIONS:

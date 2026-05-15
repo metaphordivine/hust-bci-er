@@ -41,21 +41,24 @@ python scripts/repo_doctor.py fast
 - route schema、registry、route board、summary consistency。
 - manifest / prediction / Top-4 / primary metric 的审计逻辑。
 - 基础预处理、手工特征、Top-4、score route 组装函数。
+- PyTorch classifier component trainer。
+- deterministic runtime helpers、environment/requirements lock、run manifest writer。
+- P1/P2/P3 protocol runner manifest materialization。
 - score route 从 component score CSV 到 `score/pred_top4` prediction table 的最小执行入口。
 
 仍属于预留或后续实现：
 
-- 完整训练 loop。
-- 完整 P1/P2/P3 protocol runner。
+- 数据集专用 loader 和真实训练 job adapter。
 - 图模型、heads、复杂训练 callback。
 - candidate 级真实实验结果。
 
-P1/P2/P3 当前已迁入为 protocol 配置和 dry-run plan。它们定义评估口径和工作量，不会自动训练：
+P1/P2/P3 当前已迁入为 protocol 配置、dry-run plan 和统一 runner manifest。plan 只看工作量；runner 会锁定 route/config/dataset/source split、job-specific split contract、seed、environment 和 job artifact contract，但不会伪造训练结果：
 
 ```bash
 python scripts/plan_evaluation_protocol.py --protocol p1 --route-config configs/routes/models/ea_deformer.yaml
 python scripts/plan_evaluation_protocol.py --protocol p2 --route-config configs/routes/models/ea_deformer.yaml
 python scripts/plan_evaluation_protocol.py --protocol p3 --route-config configs/routes/models/ea_deformer.yaml --grid-size ea_deformer=6
+python scripts/run_evaluation_protocol.py --protocol p2 --route-config configs/routes/models/ea_deformer.yaml --run-dir outputs/protocol_runs/<run_id>
 ```
 
 Torch 模型 forward smoke 不在默认 fast gate 中运行；改动模型路径时由 `.github/workflows/model_smoke.yml` 触发，也可以手动运行：
@@ -80,6 +83,7 @@ python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir> 
 ```
 
 candidate gate 会检查 manifest、prediction CSV、Top-4 语义、主指标复算、split/dataset 证据、summary 绑定证据。
+candidate gate 还会要求 manifest 记录 environment、determinism、checkpoint_selection、crop_policy 和 environment_lock，并复核 seed/deterministic/crop/checkpoint/lock hash 语义；缺失或不一致时保持 route status 不变。
 
 promoted gate 还需要 `reports/promotion_audits/<route_id>_promotion.md`，并引用一个通过的 candidate audit report。
 

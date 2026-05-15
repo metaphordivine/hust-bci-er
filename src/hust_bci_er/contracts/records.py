@@ -8,6 +8,15 @@ import numpy as np
 
 
 @dataclass(frozen=True)
+class EEGTrial:
+    x: np.ndarray
+    y: int | None
+    subject_id: str
+    trial_id: str
+    split: str
+
+
+@dataclass(frozen=True)
 class EEGWindow:
     x: np.ndarray
     y: int | None
@@ -28,4 +37,4 @@ class PredictionRecord:
     y_pred: int | None = None
     y_true: int | None = None
     fold: int | None = None
-
+    seed: int | None = None

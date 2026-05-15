@@ -2,6 +2,10 @@ from pathlib import Path
 
 
 SCAN_ROOTS = [Path("src"), Path("scripts"), Path("configs/routes"), Path("configs/protocols")]
+EXCLUDED_FILES = {
+    Path("src/hust_bci_er/audit/source_scanner.py"),
+    Path("scripts/scan_no_leakage.py"),
+}
 BLOCKED_PATTERNS = [
     "public_label",
     "public labels",
@@ -22,6 +26,8 @@ def text_files():
         if not root.exists():
             continue
         for path in root.rglob("*"):
+            if path in EXCLUDED_FILES:
+                continue
             if path.is_file() and path.suffix.lower() in {".py", ".yaml", ".yml", ".md", ".json", ".toml"}:
                 yield path
 

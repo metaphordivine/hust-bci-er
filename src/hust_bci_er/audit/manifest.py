@@ -176,9 +176,19 @@ def validate_manifest(path: Path, *, root: Path | None = None, route_data: dict[
 
     route_basis = snapshot_data or route_data or {}
     if route_basis:
-        for key in ["route_id", "split_id", "seed"]:
+        for key in ["route_id"]:
             if key in data and key in route_basis and data[key] != route_basis[key]:
                 errors.append(f"manifest {key} does not match config snapshot")
+        route_seed = route_basis.get("seed")
+        if route_seed is not None:
+            manifest_source_seed = data.get("source_seed", data.get("seed"))
+            if manifest_source_seed != route_seed:
+                errors.append("manifest source_seed does not match config snapshot")
+        route_split = route_basis.get("split_id")
+        if route_split is not None:
+            manifest_source_split = data.get("source_split_id", data.get("split_id"))
+            if manifest_source_split != route_split:
+                errors.append("manifest source_split_id does not match config snapshot")
         route_metric = None
         evaluation = route_basis.get("evaluation")
         if isinstance(evaluation, dict):

@@ -46,6 +46,24 @@ FEATURES = {
     "connectivity",
 }
 
+AUGMENTATION = {
+    "split_first_sliding_window",
+}
+
+TRAINERS = {
+    "torch_classifier",
+}
+
+LOSSES = {
+    "cross_entropy",
+}
+
+OPTIMIZERS = {
+    "adam",
+    "adamw",
+    "sgd",
+}
+
 TORCH_BACKBONES = {
     "eegnet",
     "conformer_lite",
