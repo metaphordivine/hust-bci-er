@@ -170,8 +170,8 @@ def run_toy_route(
     route_data = load_mapping(route_config_path)
     if str(route_data.get("dataset_version")) != "toy_eeg_v1":
         raise ValueError("toy adapter only supports dataset_version: toy_eeg_v1")
-    if model_name(route_data) not in {"logistic_regression", "eegnet"}:
-        raise ValueError("toy adapter supports only logistic_regression or eegnet route smoke configs")
+    if model_name(route_data) not in {"logistic_regression", "toy_centroid"}:
+        raise ValueError("toy adapter supports only logistic_regression or toy_centroid route smoke configs")
 
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)

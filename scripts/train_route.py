@@ -5,10 +5,17 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from hust_bci_er.training.toy_adapter import run_toy_route  # noqa: E402
+
+
+SUPPORTED_ADAPTERS = {
+    "toy_centroid": run_toy_route,
+}
 
 
 def default_run_dir(route: Path) -> Path:
@@ -23,8 +30,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int)
     args = parser.parse_args(argv)
 
+    route_data = yaml.safe_load(args.route.read_text(encoding="utf-8")) or {}
+    if not isinstance(route_data, dict):
+        raise ValueError(f"route config must be a mapping: {args.route}")
+
+    training = route_data.get("training")
+    adapter_name = training.get("job_adapter") if isinstance(training, dict) else None
+    if adapter_name not in SUPPORTED_ADAPTERS:
+        supported = ", ".join(sorted(SUPPORTED_ADAPTERS))
+        raise ValueError(
+            f"route {route_data.get('route_id', args.route.stem)} has "
+            f"training.job_adapter={adapter_name or 'missing'}, "
+            f"supported adapters: {supported}"
+        )
+
     run_dir = args.run_dir or default_run_dir(args.route)
-    artifacts = run_toy_route(
+    adapter = SUPPORTED_ADAPTERS[adapter_name]
+    artifacts = adapter(
         route_config_path=args.route,
         run_dir=run_dir,
         split_id=args.split_id,

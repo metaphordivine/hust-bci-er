@@ -28,8 +28,8 @@ def write_summary(route: Path, run_dir: Path, *, summary_dir: Path) -> Path:
     return summary_path
 
 
-def audit_once(route: Path, run_dir: Path, *, gate: str, summary_dir: Path | None = None) -> dict:
-    report = run_audit(route, run_dir, gate=gate, summary_dir=summary_dir)
+def audit_once(route: Path, run_dir: Path, *, gate: str, summary_dir: Path | None = None, allow_run_local_summary: bool = False) -> dict:
+    report = run_audit(route, run_dir, gate=gate, summary_dir=summary_dir, allow_run_local_summary=allow_run_local_summary)
     write_reports(run_dir, report)
     return report
 
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         # cannot leave accidental changes in the repository tree.
         summary_dir = args.run_dir / "route_summaries"
         write_summary(args.route, args.run_dir, summary_dir=summary_dir)
-        report = audit_once(args.route, args.run_dir, gate=args.gate, summary_dir=summary_dir)
+        report = audit_once(args.route, args.run_dir, gate=args.gate, summary_dir=summary_dir, allow_run_local_summary=True)
         if report["overall"] == "PASS":
             write_summary(args.route, args.run_dir, summary_dir=summary_dir)
 

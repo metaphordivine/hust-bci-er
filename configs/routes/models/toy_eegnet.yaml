@@ -7,7 +7,7 @@ input_window_sec: 10
 preprocessing: [zscore]
 features: []
 model:
-  name: eegnet
+  name: toy_centroid
 adaptation: none
 training:
   trainer: torch_classifier
