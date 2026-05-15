@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: hust-bci-er
+Version: 0.1.0
+Summary: Clean EEG/BCI emotion-recognition evaluation workspace
+Requires-Python: >=3.10
+Requires-Dist: numpy>=1.23
+Requires-Dist: PyYAML>=6.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Provides-Extra: models
+Requires-Dist: torch>=2.0; extra == "models"
+Provides-Extra: tables
+Requires-Dist: pandas>=1.5; extra == "tables"
