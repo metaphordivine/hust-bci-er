@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,10 +31,10 @@ def test_required_first_reads_keep_foundation_protocol_in_order():
         "agent_protocols/skill_router.md",
         "AGENTS.md",
     ]
-    text = read("agent_protocols/skill_router.md").split("## Required Documents", 1)[1]
-    positions = [text.index(item) for item in expected]
+    section = read("agent_protocols/skill_router.md").split("## Required Documents", 1)[1].split("## Skill Rules", 1)[0]
+    observed = [match.group(1) for match in re.finditer(r"^\d+\. `([^`]+)`$", section, flags=re.MULTILINE)]
 
-    assert positions == sorted(positions)
+    assert observed == expected
 
 
 def test_foundation_usage_protocol_names_stable_foundations_and_commands():
@@ -48,6 +49,7 @@ def test_foundation_usage_protocol_names_stable_foundations_and_commands():
         "Component Artifact Contract",
         "Prediction Writer",
         "Metric Report Builder",
+        "Route Summary Generator",
         "No-Leakage Source Scanner",
         "Promotion Audit Helper",
         "Registry Consistency",
@@ -82,6 +84,7 @@ def test_foundation_usage_protocol_names_stable_foundations_and_commands():
         "hust_bci_er.evaluation.prediction_writer",
         "hust_bci_er.inference.score_route_assembly",
         "hust_bci_er.evaluation.report",
+        "hust_bci_er.audit.summary",
         "hust_bci_er.audit.source_scanner",
         "hust_bci_er.training.monitor",
         "hust_bci_er.audit.cache_manager",
@@ -111,8 +114,10 @@ def test_foundation_artifact_router_does_not_overlap_score_route_trigger():
     score_route_line = next(line for line in text.splitlines() if "Score Route Assembly Skill" in line)
     foundation_artifact_line = next(line for line in text.splitlines() if "Foundation Artifact Skill" in line)
 
-    assert "assemble component scores" in score_route_line
-    assert "assemble component scores" not in foundation_artifact_line
+    for trigger in ["assemble this score route", "assemble component scores", "combine component scores"]:
+        assert trigger in score_route_line
+        assert trigger not in foundation_artifact_line
+    assert "generate route summary" in foundation_artifact_line
 
 
 def test_foundation_usage_protocol_references_existing_script_entrypoints():

@@ -18,7 +18,7 @@ Humans do not need to name the exact skill. If the request describes a scenario,
 | "changed dataset or split evidence" | Evidence and Leakage Guard Skill | Validate dataset/split manifests and run fast gate | No subject overlap, no original-trial split leakage, fast gate exits 0 |
 | "use the common foundations", "make the agent use the base modules", "wire reusable foundation artifacts" | Foundation Usage Skill | Read `agent_protocols/foundation_usage.md` and select the matching foundation map row | Narrow artifact validation and `python scripts/repo_doctor.py fast` pass |
 | "build dataset manifest", "build split manifest", "formal evidence", "dataset QA" | Foundation Evidence Skill | Use dataset/split builders and QA commands from `agent_protocols/foundation_usage.md` | Dataset/split evidence is auditable and fast gate passes |
-| "write predictions", "write metric report", "write run manifest", "combine artifact reports" | Foundation Artifact Skill | Use contracts, prediction writer, metric report builder, score route assembly, and run manifest writer | Artifact contract validates; experiment gate passes when run artifacts exist |
+| "write predictions", "write metric report", "write route summary", "generate route summary", "write run manifest", "combine artifact reports" | Foundation Artifact Skill | Use contracts, prediction writer, metric report builder, route summary generator, score route assembly outputs, and run manifest writer | Artifact contract validates; experiment gate passes when run artifacts exist |
 | "track training", "cache derived features", "refresh component docs", "check registry consistency" | Foundation Maintenance Skill | Use training monitor, cache manager, registry checker, or docs generator from `agent_protocols/foundation_usage.md` | Generated maintenance artifact is local or concise, and fast gate passes |
 | "prepare promoted evidence" | Promotion Audit Skill | Fill `reports/promotion_audits/<route_id>_promotion.md` from template | Promoted gate references a passing candidate audit report |
 | "review this PR/code" | Chinese Code Review Skill | Inspect changes and lead with findings | All review summaries and comments are in Simplified Chinese |
@@ -101,6 +101,8 @@ Route to Evaluation Protocol Planning Skill.
 ```
 
 Route to Score Route Assembly Skill.
+
+Composite foundation workflow example:
 
 ```text
 帮 agent 用公共基座把 dataset/split/run artifact 串起来。

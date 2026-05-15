@@ -31,7 +31,8 @@ right foundation pieces, then calls the repository gates.
 | Model/component output needs a contract | Component Artifact Contract | `hust_bci_er.contracts.artifacts` | component score CSV with `component_id`, subject/trial/crop metadata, score, optional `y_true` | Contract validator passes |
 | Prediction output needs a contract | Prediction Writer | `hust_bci_er.evaluation.prediction_writer` | prediction CSV with `subject_id`, `trial_id`, optional `crop_id`, `score`, `pred_top4`, `y_true`/`y_pred` as appropriate | Audit can recompute the declared primary metric |
 | Component scores need route assembly | Score Route Assembly | `scripts/assemble_score_route.py` / `hust_bci_er.inference.score_route_assembly` | score-fusion prediction CSV preserving alignment keys and labels when available | Score route tests and experiment audit pass |
-| Prediction/score outputs need reports | Metric Report Builder | `hust_bci_er.evaluation.report`, `scripts/generate_route_summary.py` | metric board, subject metric rows, audit JSON, concise route summary | Summary consistency check passes |
+| Prediction/score outputs need reports | Metric Report Builder | `hust_bci_er.evaluation.report` | metric board, subject metric rows, audit JSON | Report values match the declared primary metric |
+| Audit evidence needs a concise route summary | Route Summary Generator | `scripts/generate_route_summary.py` / `hust_bci_er.audit.summary` | concise route summary under `reports/route_summaries/` | Summary consistency check passes |
 | Source paths need leakage guard | No-Leakage Source Scanner | `scripts/scan_no_leakage.py` / `hust_bci_er.audit.source_scanner` | scanner findings or pass output | No public/private label, leaderboard, ID shortcut, inference-label leaks |
 | Promotion evidence is requested | Promotion Audit Helper | `reports/promotion_audits/_template.md`, `scripts/check_promotion_audit.py` | promotion audit referencing a passing candidate audit report | promoted gate passes |
 | Registry/docs drift is suspected | Registry Consistency + Docs Generator | `scripts/check_registry_consistency.py`, `scripts/generate_component_docs.py` | consistent registry/factory/config names; refreshed component docs | registry consistency plus fast gate |
@@ -40,7 +41,7 @@ right foundation pieces, then calls the repository gates.
 
 ## Required Order
 
-1. Read the required repository documents from `agent_protocols/skill_router.md`.
+1. Complete the required first reads listed in `agent_protocols/skill_router.md`.
 2. Classify the task into one or more rows from the foundation map.
 3. Prefer the stable script entry point when one exists; otherwise use the module API.
 4. Keep generated full outputs, caches, checkpoints, and trial-level tables under `outputs/` or `scratch/` unless the repository explicitly says to commit a concise summary or config.
