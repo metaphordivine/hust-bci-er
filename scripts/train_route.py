@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--split-id")
     parser.add_argument("--seed", type=int)
-    parser.add_argument("--mode", choices=["smoke", "full"], default="smoke")
+    parser.add_argument("--mode", choices=["smoke", "full_subjects"], default="smoke")
     parser.add_argument("--smoke-epochs", type=int)
     parser.add_argument("--smoke-dep", type=int, default=4)
     parser.add_argument("--smoke-hc", type=int, default=8)

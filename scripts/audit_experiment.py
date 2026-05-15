@@ -1667,6 +1667,11 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_RULES", severity="INFO", status="PASS", message="candidate audit report contains passing critical evidence rules")
 
 
+VALID_RUN_MODES = frozenset({"smoke", "full_subjects"})
+VALID_PREDICTION_SCOPES = frozenset({"val_only"})
+VALID_SCORE_MATRIX_EVIDENCE = frozenset({"genuine", "synthetic"})
+
+
 def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck], *, gate: str) -> None:
     """Reject candidate/promoted gates for smoke runs, val-only predictions, or synthetic score matrices."""
     strict_gates = {"candidate", "promoted"}
@@ -1674,24 +1679,39 @@ def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck
     prediction_scope = manifest.get("prediction_scope")
     score_matrix_evidence = manifest.get("score_matrix_evidence")
 
-    promoted_only = {"promoted"}
-
     # Absent fields → legacy manifest, skip (not produced by current adapter).
     if run_mode is None:
         pass
+    elif run_mode not in VALID_RUN_MODES:
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="RUN_MODE_UNKNOWN",
+            message=f"run_mode '{run_mode}' is not a known value; valid: {', '.join(sorted(VALID_RUN_MODES))}",
+            fix="Use a known run_mode value from the supported set.",
+            decision_if_fail="BLOCKED",
+        )
     elif run_mode == "smoke":
         add_warn_or_fail(
             checks, gate=gate, fail_gate=strict_gates,
             rule_id="RUN_MODE_SMOKE",
             message="smoke runs cannot be used for candidate or promoted gates",
-            fix="Re-run with --mode full before attempting candidate audit.",
+            fix="Re-run with --mode full_subjects to use all subjects.",
             decision_if_fail="BLOCKED",
         )
     else:
-        add_check(checks, rule_id="RUN_MODE_FULL", severity="INFO", status="PASS", message="run mode is full (candidate-eligible)")
+        add_check(checks, rule_id="RUN_MODE_FULL_SUBJECTS", severity="INFO", status="PASS",
+                  message="run mode uses all subjects")
 
     if prediction_scope is None:
         pass
+    elif prediction_scope not in VALID_PREDICTION_SCOPES:
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="PREDICTION_SCOPE_UNKNOWN",
+            message=f"prediction_scope '{prediction_scope}' is not a known value; valid: {', '.join(sorted(VALID_PREDICTION_SCOPES))}",
+            fix="Use a known prediction_scope value.",
+            decision_if_fail="BLOCKED",
+        )
     elif prediction_scope == "val_only":
         add_warn_or_fail(
             checks, gate=gate, fail_gate=strict_gates,
@@ -1700,11 +1720,17 @@ def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck
             fix="Produce predictions for train/val/test splits before candidate audit.",
             decision_if_fail="BLOCKED",
         )
-    else:
-        add_check(checks, rule_id="PREDICTION_SCOPE", severity="INFO", status="PASS", message="prediction scope covers required splits")
 
     if score_matrix_evidence is None:
         pass
+    elif score_matrix_evidence not in VALID_SCORE_MATRIX_EVIDENCE:
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="SCORE_MATRIX_EVIDENCE_UNKNOWN",
+            message=f"score_matrix_evidence '{score_matrix_evidence}' is not a known value; valid: {', '.join(sorted(VALID_SCORE_MATRIX_EVIDENCE))}",
+            fix="Declare score_matrix_evidence as genuine or synthetic in manifest.",
+            decision_if_fail="BLOCKED",
+        )
     elif score_matrix_evidence == "synthetic":
         add_warn_or_fail(
             checks, gate=gate, fail_gate=strict_gates,
@@ -1713,16 +1739,34 @@ def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck
             fix="Generate genuine 5-crop score evidence from sliding windows before candidate audit.",
             decision_if_fail="BLOCKED",
         )
-    elif score_matrix_evidence == "genuine":
-        add_check(checks, rule_id="SCORE_MATRIX_GENUINE", severity="INFO", status="PASS", message="score matrix evidence is genuine (sliding-window crops)")
     else:
-        add_warn_or_fail(
-            checks, gate=gate, fail_gate=strict_gates,
-            rule_id="SCORE_MATRIX_EVIDENCE_UNKNOWN",
-            message="score matrix evidence type is unspecified",
-            fix="Declare score_matrix_evidence as genuine or synthetic in manifest.",
-            decision_if_fail="BLOCKED",
-        )
+        add_check(checks, rule_id="SCORE_MATRIX_GENUINE", severity="INFO", status="PASS",
+                  message="score matrix evidence is genuine (sliding-window crops)")
+
+    # raw_data_sources: full_subjects runs must have raw .mat evidence
+    if run_mode == "full_subjects":
+        raw_sources = manifest.get("raw_data_sources")
+        if not isinstance(raw_sources, list) or not raw_sources:
+            add_warn_or_fail(
+                checks, gate=gate, fail_gate=strict_gates,
+                rule_id="RAW_DATA_SOURCES_MISSING",
+                message="full_subjects run must record raw .mat data sources in manifest",
+                fix="Re-run with --mode full_subjects to generate raw_data_sources.",
+                decision_if_fail="BLOCKED",
+            )
+        else:
+            bad = [s for s in raw_sources if not isinstance(s.get("sha256"), str) or len(s["sha256"]) != 64]
+            if bad:
+                add_warn_or_fail(
+                    checks, gate=gate, fail_gate=strict_gates,
+                    rule_id="RAW_DATA_SOURCES_SHA256",
+                    message=f"{len(bad)} raw_data_sources entries have invalid sha256",
+                    fix="Regenerate manifest with valid raw .mat sha256 values.",
+                    decision_if_fail="BLOCKED",
+                )
+            else:
+                add_check(checks, rule_id="RAW_DATA_SOURCES_VALID", severity="INFO", status="PASS",
+                          message=f"raw_data_sources records {len(raw_sources)} .mat files with valid sha256")
 
 
 def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir: Path | None = None, allow_run_local_summary: bool = False) -> dict[str, Any]:

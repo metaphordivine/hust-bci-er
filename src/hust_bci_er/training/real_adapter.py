@@ -322,11 +322,12 @@ def _build_score_matrix(
     *,
     crop_policy: str,
     seed: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str]:
     """Build score_matrix rows with exactly 5 crops per trial.
 
-    For sliding_window_vote, each of the 5 windows IS a crop.
-    For single/exact_single_crop, replicate the single score with small perturbations.
+    Returns (rows, evidence_type) where evidence_type is "genuine" if every trial
+    contributed >=5 real sliding windows, or "synthetic" if any trial fell back to
+    single-score perturbation.
     """
     from collections import defaultdict
 
@@ -335,6 +336,7 @@ def _build_score_matrix(
         by_trial[(row["subject_id"], row["trial_id"])].append(row)
 
     rows: list[dict[str, Any]] = []
+    all_genuine = True
     for (subject_id, trial_id), trial_rows in sorted(by_trial.items()):
         trial_rows = sorted(trial_rows, key=lambda r: r.get("crop_id", 0))
         y_true = trial_rows[0]["y_true"]
@@ -350,7 +352,8 @@ def _build_score_matrix(
                 row[f"crop_{i}"] = f"{crops[i]['y_score']:.8f}"
             rows.append(row)
         else:
-            # single crop: generate 5 deterministically perturbed scores
+            all_genuine = False
+            # single crop or insufficient windows: generate 5 deterministically perturbed scores
             base = trial_rows[0]["y_score"]
             row = {
                 "subject_id": subject_id,
@@ -361,7 +364,7 @@ def _build_score_matrix(
             for i in range(5):
                 row[f"crop_{i}"] = f"{base + float(rng.normal(0, 1e-6)):.8f}"
             rows.append(row)
-    return rows
+    return rows, "genuine" if all_genuine else "synthetic"
 
 
 def _write_evidence_manifests(
@@ -425,7 +428,7 @@ def _write_evidence_manifests(
 
     # In full mode, record original .mat paths as primary data sources.
     raw_sources: list[dict[str, Any]] = []
-    if run_mode == "full":
+    if run_mode == "full_subjects":
         mat_paths = sorted({t.get("_mat_path") for t in all_trials if isinstance(t.get("_mat_path"), str)})
         for mp in mat_paths:
             try:
@@ -497,6 +500,14 @@ class RealRunArtifacts:
     metric_report: Mapping[str, Any]
 
 
+VALID_RUN_MODES = frozenset({"smoke", "full_subjects"})
+"""Known run modes. ``smoke`` uses a seeded subset; ``full_subjects`` uses all subjects.
+Neither mode produces candidate-eligible test predictions — both are val-only."""
+
+VALID_PREDICTION_SCOPES = frozenset({"val_only"})
+"""Known prediction scopes. Currently only val_only is supported."""
+
+
 def run_real_classifier_route(
     *,
     route_config_path: Path,
@@ -516,7 +527,7 @@ def run_real_classifier_route(
     Args:
         route_config_path: Path to route YAML config.
         run_dir: Output directory for all artifacts.
-        run_mode: "smoke" (default, subset + val-only) or "full" (all subjects).
+        run_mode: "smoke" (default, subset + val-only) or "full_subjects" (all subjects, still val-only).
         split_id: Override split_id (default from route config).
         seed: Override seed (default from route config).
         command: Command string for manifest provenance.
@@ -526,6 +537,8 @@ def run_real_classifier_route(
         smoke_epochs: Override epoch count (smoke mode).
         device: Torch device.
     """
+    if run_mode not in VALID_RUN_MODES:
+        raise ValueError(f"unknown run_mode: {run_mode}; valid: {', '.join(sorted(VALID_RUN_MODES))}")
     import torch
     from torch.utils.data import DataLoader
     from hust_bci_er.models.factory import build_model
@@ -560,7 +573,7 @@ def run_real_classifier_route(
     dep_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "DEP"))
     hc_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "HC"))
 
-    if run_mode == "full":
+    if run_mode == "full_subjects":
         # Use all subjects with 20% val + 20% test per cohort
         n_dep = len(dep_subjects)
         n_hc = len(hc_subjects)
@@ -696,7 +709,7 @@ def run_real_classifier_route(
     val_trial_rows = _aggregate_to_trials(val_window_rows, method=method, tie_break=tie_break)
 
     # Build score matrix (5 crops per trial) from window rows
-    score_matrix_rows = _build_score_matrix(val_window_rows, crop_policy=crop_policy, seed=active_seed)
+    score_matrix_rows, score_matrix_evidence = _build_score_matrix(val_window_rows, crop_policy=crop_policy, seed=active_seed)
     score_matrix_path = run_dir / "score_matrix.csv"
     _write_score_matrix(score_matrix_path, score_matrix_rows)
 
@@ -728,7 +741,6 @@ def run_real_classifier_route(
     write_metric_report(metric_report, run_dir)
 
     # Write evidence manifests
-    score_matrix_evidence = "genuine" if crop_policy == "sliding_window_vote" else "synthetic"
     prediction_scope = "val_only"
 
     dataset_path, split_path = _write_evidence_manifests(
@@ -779,6 +791,9 @@ def run_real_classifier_route(
     manifest["run_mode"] = run_mode
     manifest["prediction_scope"] = prediction_scope
     manifest["score_matrix_evidence"] = score_matrix_evidence
+    if run_mode == "full_subjects":
+        ds = yaml.safe_load(dataset_path.read_text(encoding="utf-8")) or {}
+        manifest["raw_data_sources"] = ds.get("raw_data_sources") or []
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     return RealRunArtifacts(

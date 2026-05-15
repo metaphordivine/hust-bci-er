@@ -111,14 +111,15 @@ def _make_window_rows(trial_id: str, n_windows: int, subject_id: str = "S01",
 
 def test_build_score_matrix_single_crop_produces_5_crops():
     rows = _make_window_rows("t1", n_windows=1, base_score=0.6)
-    result = _build_score_matrix(rows, crop_policy="single", seed=42)
+    result, evidence = _build_score_matrix(rows, crop_policy="single", seed=42)
+    assert evidence == "synthetic"
     assert len(result) == 1
     assert all(f"crop_{i}" in result[0] for i in range(5))
 
 
 def test_build_score_matrix_single_crop_crops_near_base():
     rows = _make_window_rows("t1", n_windows=1, base_score=0.6)
-    result = _build_score_matrix(rows, crop_policy="single", seed=42)
+    result, _ = _build_score_matrix(rows, crop_policy="single", seed=42)
     for i in range(5):
         assert abs(float(result[0][f"crop_{i}"]) - 0.6) < 1e-4, (
             f"crop_{i} far from base score: {result[0][f'crop_{i}']}"
@@ -127,7 +128,8 @@ def test_build_score_matrix_single_crop_crops_near_base():
 
 def test_build_score_matrix_sliding_window_uses_real_scores():
     rows = _make_window_rows("t1", n_windows=5, base_score=0.5)
-    result = _build_score_matrix(rows, crop_policy="sliding_window_vote", seed=42)
+    result, evidence = _build_score_matrix(rows, crop_policy="sliding_window_vote", seed=42)
+    assert evidence == "genuine"
     assert len(result) == 1
     for i in range(5):
         expected = f"{0.5 + i * 0.01:.8f}"
@@ -136,7 +138,7 @@ def test_build_score_matrix_sliding_window_uses_real_scores():
 
 def test_build_score_matrix_preserves_y_true():
     rows = _make_window_rows("t1", n_windows=1, y_true=0)
-    result = _build_score_matrix(rows, crop_policy="single", seed=42)
+    result, _ = _build_score_matrix(rows, crop_policy="single", seed=42)
     assert result[0]["y_true"] == 0
 
 
@@ -145,16 +147,25 @@ def test_build_score_matrix_multiple_trials():
         _make_window_rows("t1", n_windows=1, subject_id="S01", base_score=0.8)
         + _make_window_rows("t2", n_windows=1, subject_id="S01", base_score=0.3)
     )
-    result = _build_score_matrix(rows, crop_policy="single", seed=42)
+    result, _ = _build_score_matrix(rows, crop_policy="single", seed=42)
     assert len(result) == 2
     trial_ids = {r["trial_id"] for r in result}
     assert trial_ids == {"t1", "t2"}
 
 
+def test_build_score_matrix_sliding_window_few_windows_fallback_synthetic():
+    """When sliding_window_vote has <5 windows, evidence must be synthetic."""
+    rows = _make_window_rows("t1", n_windows=3, base_score=0.5)
+    result, evidence = _build_score_matrix(rows, crop_policy="sliding_window_vote", seed=42)
+    assert evidence == "synthetic"
+    assert len(result) == 1
+    assert all(f"crop_{i}" in result[0] for i in range(5))
+
+
 def test_build_score_matrix_seed_deterministic():
     rows = _make_window_rows("t1", n_windows=1, base_score=0.5)
-    r1 = _build_score_matrix(rows, crop_policy="single", seed=99)
-    r2 = _build_score_matrix(rows, crop_policy="single", seed=99)
+    r1, _ = _build_score_matrix(rows, crop_policy="single", seed=99)
+    r2, _ = _build_score_matrix(rows, crop_policy="single", seed=99)
     for i in range(5):
         assert r1[0][f"crop_{i}"] == r2[0][f"crop_{i}"]
 
@@ -163,8 +174,8 @@ def test_build_score_matrix_seed_independent_of_trial_id():
     """Crop scores must NOT depend on trial_id — only on seed and base score."""
     rows_a = _make_window_rows("trial_AAA", n_windows=1, base_score=0.5)
     rows_b = _make_window_rows("trial_ZZZ", n_windows=1, base_score=0.5)
-    r_a = _build_score_matrix(rows_a, crop_policy="single", seed=42)
-    r_b = _build_score_matrix(rows_b, crop_policy="single", seed=42)
+    r_a, _ = _build_score_matrix(rows_a, crop_policy="single", seed=42)
+    r_b, _ = _build_score_matrix(rows_b, crop_policy="single", seed=42)
     for i in range(5):
         assert r_a[0][f"crop_{i}"] == r_b[0][f"crop_{i}"], (
             f"crop_{i} differs by trial_id: {r_a[0][f'crop_{i}']} vs {r_b[0][f'crop_{i}']}"
