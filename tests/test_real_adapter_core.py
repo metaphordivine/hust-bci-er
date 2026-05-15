@@ -8,16 +8,28 @@ Tests cover:
 """
 from __future__ import annotations
 
+import csv
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
+import yaml
 
+import hust_bci_er.training.real_adapter as real_adapter
 from hust_bci_er.training.real_adapter import (
+    FIXED_CANDIDATE_CROPS,
     KNOWN_PREPROC,
     _apply_preprocessing,
     _build_score_matrix,
     _fit_ea_on_windows,
+    _load_mat_trials,
     _make_fixed_crops,
+    _read_mat,
     _split_subjects,
+    _write_evidence_manifests,
+    run_real_classifier_route,
 )
 
 
@@ -284,3 +296,193 @@ def test_make_fixed_crops_returns_non_overlapping_crops():
     assert [crop["crop_id"] for crop in crops] == [0, 1, 2, 3, 4]
     assert [crop["window_start_sec"] for crop in crops] == [0.0, 10.0, 20.0, 30.0, 40.0]
     np.testing.assert_array_equal(crops[1]["x"], x[:, 2500:5000])
+
+
+# ---------------------------------------------------------------------------
+# .mat loading and evidence manifests
+# ---------------------------------------------------------------------------
+
+
+def _write_hdf5_mat(path: Path, *, transpose: bool = False, samples_per_trial: int = 50) -> None:
+    h5py = pytest.importorskip("h5py")
+    total = samples_per_trial * 4
+    neu = np.arange(30 * total, dtype=np.float32).reshape(30, total)
+    pos = (neu + 1000.0).astype(np.float32)
+    if transpose:
+        neu = neu.T
+        pos = pos.T
+    with h5py.File(path, "w") as f:
+        f.create_dataset("EEG_data_neu", data=neu)
+        f.create_dataset("EEG_data_pos", data=pos)
+
+
+def test_read_mat_accepts_channel_first_and_channel_last_hdf5(tmp_path):
+    channel_first = tmp_path / "DEP001timedata.mat"
+    channel_last = tmp_path / "HC001timedata.mat"
+    _write_hdf5_mat(channel_first, transpose=False)
+    _write_hdf5_mat(channel_last, transpose=True)
+
+    assert _read_mat(channel_first, "EEG_data_neu").shape == (30, 200)
+    assert _read_mat(channel_last, "EEG_data_pos").shape == (30, 200)
+
+
+def test_load_mat_trials_reads_dep_hc_subjects_and_trials(tmp_path):
+    _write_hdf5_mat(tmp_path / "DEP001timedata.mat", transpose=False)
+    _write_hdf5_mat(tmp_path / "HC001timedata.mat", transpose=True)
+
+    trials = _load_mat_trials(tmp_path)
+
+    assert len(trials) == 16
+    assert {trial["cohort"] for trial in trials} == {"DEP", "HC"}
+    assert {trial["subject_id"] for trial in trials} == {"DEP001", "HC001"}
+    assert {trial["y"] for trial in trials} == {0, 1}
+    assert all(trial["x"].shape == (30, 50) for trial in trials)
+
+
+def test_load_mat_trials_rejects_unknown_subject_prefix(tmp_path):
+    _write_hdf5_mat(tmp_path / "BAD001timedata.mat", transpose=False)
+
+    with pytest.raises(ValueError, match="expected DEP\\* or HC\\*"):
+        _load_mat_trials(tmp_path)
+
+
+def test_candidate_non_sliding_evidence_declares_fixed_five_crops(tmp_path):
+    trials = []
+    for subject_id, cohort in [("DEP001", "DEP"), ("HC001", "HC")]:
+        for idx in range(8):
+            trials.append({
+                "x": np.zeros((30, 2500 * FIXED_CANDIDATE_CROPS), dtype=np.float32),
+                "y": 1 if idx < 4 else 0,
+                "subject_id": subject_id,
+                "cohort": cohort,
+                "trial_id": f"{subject_id}_t{idx}",
+            })
+    dataset_path, _ = _write_evidence_manifests(
+        tmp_path / "run",
+        route_data={
+            "dataset_version": "train_v1",
+            "split_id": "split1",
+            "input_window_sec": 10,
+        },
+        active_split_id="split1",
+        all_trials=trials,
+        train_subjects={"DEP001"},
+        val_subjects=set(),
+        test_subjects={"HC001"},
+        run_mode="candidate",
+    )
+
+    dataset = yaml.safe_load(dataset_path.read_text(encoding="utf-8"))
+    assert dataset["n_crops"] == FIXED_CANDIDATE_CROPS
+    first = dataset["trial_index"][0]
+    assert first["crop_ids"] == [0, 1, 2, 3, 4]
+    assert first["window_start_secs"] == [0, 10, 20, 30, 40]
+
+
+def test_run_real_classifier_route_candidate_fake_hdf5_is_test_only(monkeypatch, tmp_path):
+    torch = pytest.importorskip("torch")
+    import hust_bci_er.models.factory as model_factory
+    import hust_bci_er.training.reproducibility as reproducibility
+
+    monkeypatch.setenv("PYTHONHASHSEED", "42")
+    monkeypatch.setattr(reproducibility, "PROCESS_START_PYTHONHASHSEED", "42")
+
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    for idx in range(3):
+        _write_hdf5_mat(data_root / f"DEP{idx:03d}timedata.mat", samples_per_trial=50)
+        _write_hdf5_mat(data_root / f"HC{idx:03d}timedata.mat", samples_per_trial=50, transpose=True)
+
+    route = tmp_path / "fake_real_route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: fake_real_route",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "input_window_sec: 0.04",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model:",
+                "  name: eegnet",
+                "adaptation: none",
+                "training:",
+                "  trainer: torch_classifier",
+                "  job_adapter: torch_classifier",
+                "  epochs: 1",
+                "  batch_size: 8",
+                "  optimizer:",
+                "    name: sgd",
+                "    lr: 0.01",
+                "    weight_decay: 0.0",
+                "  loss: cross_entropy",
+                "inference:",
+                "  top4: true",
+                "  crop_policy: single",
+                "evaluation:",
+                "  protocol: p1_repeated_group_kfold",
+                "  primary_metric: exact_single_crop_expected_BA",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class TinyClassifier(torch.nn.Module):
+        def __init__(self, n_channels: int, n_times: int) -> None:
+            super().__init__()
+            self.linear = torch.nn.Linear(n_channels * n_times, 2)
+
+        def forward(self, x):
+            return self.linear(x.flatten(1))
+
+    def fake_build_model(_name, *, n_channels, n_times, n_classes):
+        assert n_classes == 2
+        return TinyClassifier(n_channels, n_times)
+
+    def fake_context(**kwargs):
+        return SimpleNamespace(
+            run_dir=kwargs["run_dir"],
+            prediction_csv=kwargs["prediction_csv"],
+        )
+
+    def fake_manifest(context, *, metrics, command, score_matrix_csv):
+        return {
+            "audit_schema_version": 2,
+            "route_id": "fake_real_route",
+            "command": " ".join(command) if isinstance(command, list) else command,
+            "primary_metric": "exact_single_crop_expected_BA",
+            "metrics": dict(metrics),
+            "prediction_csv": context.prediction_csv.name,
+            "metric_inputs": {"score_matrix_csv": Path(score_matrix_csv).name},
+        }
+
+    monkeypatch.setattr(model_factory, "build_model", fake_build_model)
+    monkeypatch.setattr(real_adapter, "prepare_run_manifest_context", fake_context)
+    monkeypatch.setattr(real_adapter, "build_run_manifest_payload", fake_manifest)
+
+    run_dir = tmp_path / "run"
+    artifacts = run_real_classifier_route(
+        route_config_path=route,
+        run_dir=run_dir,
+        run_mode="candidate",
+        command=["python", "scripts/train_route.py", "--data-root", data_root.as_posix()],
+        data_root=data_root,
+        device="cpu",
+    )
+
+    manifest = json.loads(artifacts.manifest_json.read_text(encoding="utf-8"))
+    assert manifest["prediction_scope"] == "test_only"
+    assert manifest["score_matrix_evidence"] == "genuine"
+
+    split = yaml.safe_load(artifacts.split_manifest.read_text(encoding="utf-8"))
+    test_subjects = set(split["test_subjects"])
+    with artifacts.prediction_csv.open(newline="", encoding="utf-8") as f:
+        prediction_subjects = {row["subject_id"] for row in csv.DictReader(f)}
+    assert prediction_subjects == test_subjects
+
+    dataset = yaml.safe_load(artifacts.dataset_manifest.read_text(encoding="utf-8"))
+    assert dataset["n_crops"] == FIXED_CANDIDATE_CROPS
+    assert dataset["raw_data_sources"]

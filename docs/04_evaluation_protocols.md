@@ -256,7 +256,7 @@ P3：
 
 当前仓库已有统一 runner manifest、toy end-to-end smoke，以及真实 HUST EEG `.mat` loader / `torch_classifier` candidate adapter。
 `plan_evaluation_protocol.py` 只生成计划，不训练，不读取标签，不生成结果。  
-`run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息；真实 candidate 结果应由 `run_candidate_route.py` 按 route 默认训练轮数生成，并由 `repo_doctor.py experiment --gate candidate` 审计。带 `--epochs-override` 的运行只用于链路验证，会被 candidate/promoted gate 阻止。
+`run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息；真实 candidate 结果应由 `run_candidate_route.py` 按 route 默认训练轮数生成，并由 `repo_doctor.py experiment --gate candidate` 审计。真实数据根目录通过 `--data-root` 或 `HUST_BCI_ER_DATA_ROOT` 提供，`.mat` 文件必须是 HDF5/v7.3 格式。带 `--epochs-override` 的运行只用于链路验证，会被 candidate/promoted gate 阻止。
 
 后续要提交真实 candidate 结论时，必须具备：
 

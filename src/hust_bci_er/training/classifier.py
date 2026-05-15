@@ -287,7 +287,7 @@ def fit_classifier(
         else:
             stale_epochs += 1
 
-        if config.early_stopping is not None and stale_epochs > monitor.patience:
+        if config.early_stopping is not None and stale_epochs > 0 and stale_epochs >= monitor.patience:
             stopped_early = True
             break
 

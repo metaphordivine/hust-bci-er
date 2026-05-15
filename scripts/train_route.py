@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--smoke-dep", type=int, default=4)
     parser.add_argument("--smoke-hc", type=int, default=8)
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--data-root", type=Path, help="Root directory containing HUST EEG .mat files for torch_classifier routes.")
     args = parser.parse_args(argv)
 
     route_data = yaml.safe_load(args.route.read_text(encoding="utf-8")) or {}
@@ -78,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     cmd.extend(["--smoke-dep", str(args.smoke_dep)])
     cmd.extend(["--smoke-hc", str(args.smoke_hc)])
     cmd.extend(["--device", args.device])
+    if args.data_root is not None:
+        cmd.extend(["--data-root", args.data_root.as_posix()])
 
     adapter = _resolve_adapter(adapter_name)
     artifacts = adapter(
@@ -91,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         smoke_n_dep=args.smoke_dep,
         smoke_n_hc=args.smoke_hc,
         device=args.device,
+        data_root=args.data_root,
     )
     print(
         json.dumps(

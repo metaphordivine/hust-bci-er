@@ -79,13 +79,14 @@ pip install -e ".[dev,models]"
 python scripts/model_smoke.py
 ```
 
-真实 HUST EEG route 可通过 `run_candidate_route.py` 运行。`candidate` 模式使用全部可用 subject，训练集只用于拟合，val 用于 checkpoint selection，prediction/score matrix 只写 held-out test subjects；脚本会在唯一阻塞项是缺少 route summary 时生成绑定 audit/manifest 的 summary 并重跑 candidate gate：
+真实 HUST EEG route 可通过 `run_candidate_route.py` 运行。`.mat` 文件需要是 `h5py` 可读取的 HDF5/v7.3 MATLAB 文件；本机数据根目录可用 `--data-root` 显式传入，也可设置 `HUST_BCI_ER_DATA_ROOT`。`candidate` 模式使用全部可用 subject，训练集只用于拟合，val 用于 checkpoint selection，prediction/score matrix 只写 held-out test subjects；脚本会在唯一阻塞项是缺少 route summary 时生成绑定 audit/manifest 的 summary 并重跑 candidate gate：
 
 ```bash
 python scripts/launch_reproducible.py --seed 42 -- \
   python scripts/run_candidate_route.py \
     --route configs/routes/models/sliding_window_eegnet.yaml \
-    --run-dir outputs/sliding_window_eegnet/<run_id>
+    --run-dir outputs/sliding_window_eegnet/<run_id> \
+    --data-root scratch/local_data/hust_bci_er_train/训练集
 ```
 
 `smoke` 和 `full_subjects` 都是诊断模式，不能作为 candidate 证据。

@@ -13,6 +13,7 @@ dev = [
   "pytest>=7.0",
 ]
 models = [
+  "h5py>=3.0",
   "torch>=2.0",
 ]
 tables = [

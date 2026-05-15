@@ -33,15 +33,33 @@ from hust_bci_er.preprocessing.whitening import channel_whiten
 SFREQ = 250
 KEY_TO_LABEL = {"EEG_data_neu": 0, "EEG_data_pos": 1}
 SOURCE_TRIALS_PER_CLASS = 4
+FIXED_CANDIDATE_CROPS = 5
+DATA_ROOT_ENV = "HUST_BCI_ER_DATA_ROOT"
 DATA_ROOT_DEFAULT = Path(__file__).resolve().parents[3] / "scratch" / "local_data" / "hust_bci_er_train" / "训练集"
+
+
+def _resolve_data_root(data_root: Path | None) -> Path:
+    if data_root is not None:
+        return data_root.resolve()
+    import os
+
+    env_root = os.environ.get(DATA_ROOT_ENV)
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return DATA_ROOT_DEFAULT.resolve()
 
 
 def _load_mat_trials(data_root: Path) -> list[dict[str, Any]]:
     """Load all .mat trials from the BCI emotion dataset."""
     trials: list[dict[str, Any]] = []
     for path in sorted(data_root.rglob("*timedata.mat")):
-        cohort = "DEP" if path.stem.startswith("DEP") else "HC"
         subject_id = path.stem.removesuffix("timedata")
+        if subject_id.startswith("DEP"):
+            cohort = "DEP"
+        elif subject_id.startswith("HC"):
+            cohort = "HC"
+        else:
+            raise ValueError(f"unknown HUST EEG subject prefix in {path.name}; expected DEP* or HC*")
         for key, label in KEY_TO_LABEL.items():
             mat = _read_mat(path, key)
             samples_per_trial = mat.shape[1] // SOURCE_TRIALS_PER_CLASS
@@ -61,9 +79,19 @@ def _load_mat_trials(data_root: Path) -> list[dict[str, Any]]:
 
 
 def _read_mat(path: Path, key: str) -> np.ndarray:
-    import h5py
-    with h5py.File(path, "r") as f:
-        data = np.asarray(f[key][()], dtype=np.float32)
+    try:
+        import h5py
+    except ImportError as exc:
+        raise ImportError(
+            "h5py is required for real HUST EEG .mat routes; install with `pip install -e \".[models]\"`."
+        ) from exc
+    try:
+        with h5py.File(path, "r") as f:
+            if key not in f:
+                raise KeyError(f"{path.name} is missing dataset {key}")
+            data = np.asarray(f[key][()], dtype=np.float32)
+    except OSError as exc:
+        raise ValueError(f"{path} is not an HDF5/v7.3 MATLAB .mat file readable by h5py") from exc
     if data.shape[0] == 30:
         return data
     if data.shape[1] == 30:
@@ -140,6 +168,15 @@ def _apply_preprocessing(x: np.ndarray, preproc_names: list[str], *, ea_transfor
             from hust_bci_er.preprocessing.normalization import common_average_reference
             x = common_average_reference(x)
     return x
+
+
+def _validate_adapter_preprocessing(preproc_names: list[str]) -> None:
+    unsupported = [name for name in preproc_names if name == "bandpass"]
+    if unsupported:
+        raise ValueError("torch_classifier adapter does not implement preprocessing step: bandpass")
+    unknown = [name for name in preproc_names if name not in KNOWN_PREPROC]
+    if unknown:
+        raise ValueError(f"unknown preprocessing step(s): {', '.join(sorted(set(unknown)))}")
 
 
 def _make_sliding_windows(
@@ -239,6 +276,26 @@ def _make_fixed_crops(
                 "window_start_sec": start / SFREQ,
             })
     return crops
+
+
+def _validate_fixed_crop_coverage(
+    trials: list[dict[str, Any]],
+    *,
+    window_sec: float,
+    n_crops: int,
+    split_name: str,
+) -> None:
+    required_samples = int(round(window_sec * SFREQ)) * n_crops
+    bad_trials = [
+        str(trial.get("trial_id", "<unknown>"))
+        for trial in trials
+        if np.asarray(trial["x"]).shape[1] < required_samples
+    ]
+    if bad_trials:
+        raise ValueError(
+            f"{split_name} fixed-crop evidence requires at least {required_samples} samples "
+            f"per trial for {n_crops} crops; too short: {', '.join(bad_trials[:5])}"
+        )
 
 
 def _fit_ea_on_windows(train_windows: list[dict[str, Any]], preproc: list[str]) -> np.ndarray | None:
@@ -429,6 +486,7 @@ def _write_evidence_manifests(
     train_subjects: set[str],
     val_subjects: set[str],
     test_subjects: set[str],
+    data_root: Path | None = None,
     run_mode: str = "smoke",
 ) -> tuple[Path, Path]:
     """Write dataset_manifest.yaml and split_manifest.yaml as run-local evidence."""
@@ -443,7 +501,11 @@ def _write_evidence_manifests(
         window_samples = int(round(float(aug["window_sec"]) * SFREQ))
         stride_samples = int(round(float(aug["stride_sec"]) * SFREQ))
         actual_n_crops = max(1, (source_samples - window_samples) // stride_samples + 1)
+    elif run_mode == "candidate":
+        stride_samples = int(round(window_sec * SFREQ))
+        actual_n_crops = FIXED_CANDIDATE_CROPS
     else:
+        stride_samples = int(round(window_sec * SFREQ))
         actual_n_crops = 1
 
     # Write one feature-anchor CSV per trial with channel-mean signal statistics.
@@ -488,15 +550,23 @@ def _write_evidence_manifests(
     # In full/candidate modes, record original .mat paths as primary data sources.
     raw_sources: list[dict[str, Any]] = []
     if run_mode in {"full_subjects", "candidate"}:
+        resolved_data_root = data_root.resolve() if data_root is not None else None
         mat_paths = sorted({t.get("_mat_path") for t in all_trials if isinstance(t.get("_mat_path"), str)})
         for mp in mat_paths:
             source_path = Path(mp)
-            raw_sources.append({
+            entry = {
                 "path": str(source_path),
                 "kind": "mat",
                 "sha256": sha256_file(source_path),
                 "exists": source_path.exists(),
-            })
+            }
+            if resolved_data_root is not None:
+                try:
+                    entry["root_relative_path"] = source_path.relative_to(resolved_data_root).as_posix()
+                    entry["root_env"] = DATA_ROOT_ENV
+                except ValueError:
+                    pass
+            raw_sources.append(entry)
 
     dataset_manifest = {
         "dataset_version": dataset_version,
@@ -631,7 +701,7 @@ def run_real_classifier_route(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Load and subset data
-    data_root = (data_root or DATA_ROOT_DEFAULT).resolve()
+    data_root = _resolve_data_root(data_root)
     all_trials = _load_mat_trials(data_root)
     if not all_trials:
         raise FileNotFoundError(f"no .mat files found under {data_root}")
@@ -674,6 +744,7 @@ def run_real_classifier_route(
     crop_policy = str(inference.get("crop_policy", "single")) if isinstance(inference, dict) else "single"
     input_window_sec = float(route_data.get("input_window_sec", 10))
     preproc = list(route_data.get("preprocessing", []) or [])
+    _validate_adapter_preprocessing(preproc)
 
     if has_aug:
         source_trial_sec = float(augmentation["source_trial_sec"])
@@ -683,6 +754,14 @@ def run_real_classifier_route(
         source_trial_sec = input_window_sec
         window_sec = input_window_sec
         stride_sec = input_window_sec
+
+    if run_mode == "candidate" and not has_aug:
+        _validate_fixed_crop_coverage(
+            trials,
+            window_sec=input_window_sec,
+            n_crops=FIXED_CANDIDATE_CROPS,
+            split_name="candidate",
+        )
 
     # Create raw windows first (skip preprocessing), fit EA on all training
     # windows if needed, then apply preprocessing to everything.
@@ -702,7 +781,7 @@ def run_real_classifier_route(
             raw_eval = _make_fixed_crops(
                 test_trials,
                 window_sec=input_window_sec,
-                n_crops=5,
+                n_crops=FIXED_CANDIDATE_CROPS,
                 preproc=preproc,
                 skip_preproc=True,
             )
@@ -840,6 +919,7 @@ def run_real_classifier_route(
         train_subjects=train_subjects,
         val_subjects=val_subjects,
         test_subjects=test_subjects,
+        data_root=data_root,
         run_mode=run_mode,
     )
 
