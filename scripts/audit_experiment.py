@@ -1667,6 +1667,64 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_RULES", severity="INFO", status="PASS", message="candidate audit report contains passing critical evidence rules")
 
 
+def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck], *, gate: str) -> None:
+    """Reject candidate/promoted gates for smoke runs, val-only predictions, or synthetic score matrices."""
+    strict_gates = {"candidate", "promoted"}
+    run_mode = manifest.get("run_mode")
+    prediction_scope = manifest.get("prediction_scope")
+    score_matrix_evidence = manifest.get("score_matrix_evidence")
+
+    promoted_only = {"promoted"}
+
+    # Absent fields → legacy manifest, skip (not produced by current adapter).
+    if run_mode is None:
+        pass
+    elif run_mode == "smoke":
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="RUN_MODE_SMOKE",
+            message="smoke runs cannot be used for candidate or promoted gates",
+            fix="Re-run with --mode full before attempting candidate audit.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="RUN_MODE_FULL", severity="INFO", status="PASS", message="run mode is full (candidate-eligible)")
+
+    if prediction_scope is None:
+        pass
+    elif prediction_scope == "val_only":
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="PREDICTION_SCOPE_VAL_ONLY",
+            message="val-only predictions cannot be used for candidate or promoted gates",
+            fix="Produce predictions for train/val/test splits before candidate audit.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="PREDICTION_SCOPE", severity="INFO", status="PASS", message="prediction scope covers required splits")
+
+    if score_matrix_evidence is None:
+        pass
+    elif score_matrix_evidence == "synthetic":
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="SCORE_MATRIX_SYNTHETIC",
+            message="synthetic score matrix (single-crop perturbation) cannot be used for candidate or promoted gates",
+            fix="Generate genuine 5-crop score evidence from sliding windows before candidate audit.",
+            decision_if_fail="BLOCKED",
+        )
+    elif score_matrix_evidence == "genuine":
+        add_check(checks, rule_id="SCORE_MATRIX_GENUINE", severity="INFO", status="PASS", message="score matrix evidence is genuine (sliding-window crops)")
+    else:
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="SCORE_MATRIX_EVIDENCE_UNKNOWN",
+            message="score matrix evidence type is unspecified",
+            fix="Declare score_matrix_evidence as genuine or synthetic in manifest.",
+            decision_if_fail="BLOCKED",
+        )
+
+
 def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir: Path | None = None, allow_run_local_summary: bool = False) -> dict[str, Any]:
     if gate not in GATES:
         raise ValueError(f"unknown gate: {gate}")
@@ -1737,6 +1795,7 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir:
                 add_check(checks, rule_id="MANIFEST_VALID", severity="INFO", status="PASS", message="manifest is valid")
                 manifest = load_manifest(manifest_path)
                 check_reproducibility_manifest(manifest, checks, gate=gate, root=ROOT)
+                check_run_gate_eligibility(manifest, checks, gate=gate)
                 check_run_dataset_split_evidence(manifest, route_data, run_dir, checks, gate=gate)
                 prediction_csv = manifest.get("prediction_csv")
                 if isinstance(prediction_csv, str) and prediction_csv:

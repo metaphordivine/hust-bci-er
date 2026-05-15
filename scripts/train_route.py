@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--split-id")
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--mode", choices=["smoke", "full"], default="smoke")
     parser.add_argument("--smoke-epochs", type=int)
     parser.add_argument("--smoke-dep", type=int, default=4)
     parser.add_argument("--smoke-hc", type=int, default=8)
@@ -63,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = args.run_dir or default_run_dir(args.route)
 
     # Build full command string for manifest provenance
-    cmd = ["python", "scripts/train_route.py", "--route", args.route.as_posix(), "--run-dir", run_dir.as_posix()]
+    cmd = ["python", "scripts/train_route.py", "--mode", args.mode, "--route", args.route.as_posix(), "--run-dir", run_dir.as_posix()]
     if args.split_id is not None:
         cmd.extend(["--split-id", args.split_id])
     if args.seed is not None:
@@ -78,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     artifacts = adapter(
         route_config_path=args.route,
         run_dir=run_dir,
+        run_mode=args.mode,
         split_id=args.split_id,
         seed=args.seed,
         command=cmd,

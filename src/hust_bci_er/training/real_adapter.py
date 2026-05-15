@@ -55,6 +55,7 @@ def _load_mat_trials(data_root: Path) -> list[dict[str, Any]]:
                     "subject_id": subject_id,
                     "cohort": cohort,
                     "trial_id": f"{subject_id}_{label_name}{idx + 1}",
+                    "_mat_path": str(path.resolve()),
                 })
     return trials
 
@@ -372,6 +373,7 @@ def _write_evidence_manifests(
     train_subjects: set[str],
     val_subjects: set[str],
     test_subjects: set[str],
+    run_mode: str = "smoke",
 ) -> tuple[Path, Path]:
     """Write dataset_manifest.yaml and split_manifest.yaml as run-local evidence."""
     data_dir = run_dir / "data"
@@ -421,6 +423,16 @@ def _write_evidence_manifests(
         })
         checksums.append({"path": rel, "sha256": sha256_file(path)})
 
+    # In full mode, record original .mat paths as primary data sources.
+    raw_sources: list[dict[str, Any]] = []
+    if run_mode == "full":
+        mat_paths = sorted({t.get("_mat_path") for t in all_trials if isinstance(t.get("_mat_path"), str)})
+        for mp in mat_paths:
+            try:
+                raw_sources.append({"path": mp, "kind": "mat", "sha256": sha256_file(Path(mp))})
+            except Exception:
+                raw_sources.append({"path": mp, "kind": "mat", "sha256": "unavailable"})
+
     dataset_manifest = {
         "dataset_version": dataset_version,
         "status": "ready",
@@ -440,6 +452,8 @@ def _write_evidence_manifests(
         "checksum_manifest": checksums,
         "trial_index": trial_index,
     }
+    if raw_sources:
+        dataset_manifest["raw_data_sources"] = raw_sources
     dataset_path = run_dir / "dataset_manifest.yaml"
     dataset_path.write_text(yaml.safe_dump(dataset_manifest, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
@@ -487,6 +501,7 @@ def run_real_classifier_route(
     *,
     route_config_path: Path,
     run_dir: Path,
+    run_mode: str = "smoke",
     split_id: str | None = None,
     seed: int | None = None,
     command: str | Sequence[str] = "python scripts/train_route.py",
@@ -501,6 +516,7 @@ def run_real_classifier_route(
     Args:
         route_config_path: Path to route YAML config.
         run_dir: Output directory for all artifacts.
+        run_mode: "smoke" (default, subset + val-only) or "full" (all subjects).
         split_id: Override split_id (default from route config).
         seed: Override seed (default from route config).
         command: Command string for manifest provenance.
@@ -540,18 +556,31 @@ def run_real_classifier_route(
     if not all_trials:
         raise FileNotFoundError(f"no .mat files found under {data_root}")
 
-    # Subset subjects for smoke (seeded random selection, not alphabetical)
     rng = np.random.default_rng(active_seed)
     dep_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "DEP"))
     hc_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "HC"))
-    subset_dep = list(rng.choice(dep_subjects, min(smoke_n_dep, len(dep_subjects)), replace=False))
-    subset_hc = list(rng.choice(hc_subjects, min(smoke_n_hc, len(hc_subjects)), replace=False))
-    subset_ids = set(subset_dep) | set(subset_hc)
-    trials = [t for t in all_trials if t["subject_id"] in subset_ids]
+
+    if run_mode == "full":
+        # Use all subjects with 20% val + 20% test per cohort
+        n_dep = len(dep_subjects)
+        n_hc = len(hc_subjects)
+        val_dep = max(1, n_dep // 5)
+        val_hc = max(1, n_hc // 5)
+        trials = all_trials
+    else:
+        # Smoke: subset subjects by seeded random selection
+        n_dep_avail = len(dep_subjects)
+        n_hc_avail = len(hc_subjects)
+        subset_dep = list(rng.choice(dep_subjects, min(smoke_n_dep, n_dep_avail), replace=False))
+        subset_hc = list(rng.choice(hc_subjects, min(smoke_n_hc, n_hc_avail), replace=False))
+        subset_ids = set(subset_dep) | set(subset_hc)
+        trials = [t for t in all_trials if t["subject_id"] in subset_ids]
+        val_dep = max(1, smoke_n_dep // 2)
+        val_hc = max(1, smoke_n_hc // 2)
 
     # Split subjects
     train_subjects, val_subjects, test_subjects = _split_subjects(
-        trials, val_dep=max(1, smoke_n_dep // 2), val_hc=max(1, smoke_n_hc // 2), seed=active_seed
+        trials, val_dep=val_dep, val_hc=val_hc, seed=active_seed
     )
 
     train_trials = [t for t in trials if t["subject_id"] in train_subjects]
@@ -699,6 +728,9 @@ def run_real_classifier_route(
     write_metric_report(metric_report, run_dir)
 
     # Write evidence manifests
+    score_matrix_evidence = "genuine" if crop_policy == "sliding_window_vote" else "synthetic"
+    prediction_scope = "val_only"
+
     dataset_path, split_path = _write_evidence_manifests(
         run_dir,
         route_data=route_data,
@@ -707,6 +739,7 @@ def run_real_classifier_route(
         train_subjects=train_subjects,
         val_subjects=val_subjects,
         test_subjects=test_subjects,
+        run_mode=run_mode,
     )
 
     # Write model state
@@ -718,6 +751,9 @@ def run_real_classifier_route(
             "best_metric": result.best_metric,
             "epochs_ran": len(result.history),
             "seed": active_seed,
+            "run_mode": run_mode,
+            "prediction_scope": prediction_scope,
+            "score_matrix_evidence": score_matrix_evidence,
         }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -740,6 +776,9 @@ def run_real_classifier_route(
         command=command,
         score_matrix_csv=score_matrix_path,
     )
+    manifest["run_mode"] = run_mode
+    manifest["prediction_scope"] = prediction_scope
+    manifest["score_matrix_evidence"] = score_matrix_evidence
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     return RealRunArtifacts(
