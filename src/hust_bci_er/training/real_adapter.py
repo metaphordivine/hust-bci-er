@@ -366,18 +366,17 @@ def _write_evidence_manifests(
     run_dir: Path,
     *,
     route_data: Mapping[str, Any],
+    active_split_id: str,
     all_trials: list[dict[str, Any]],
     train_subjects: set[str],
     val_subjects: set[str],
     test_subjects: set[str],
-    seed: int,
 ) -> tuple[Path, Path]:
     """Write dataset_manifest.yaml and split_manifest.yaml as run-local evidence."""
     data_dir = run_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_version = str(route_data["dataset_version"])
-    split_id = str(route_data["split_id"])
 
     # Write one feature-anchor CSV per trial with channel-mean signal statistics.
     # These are not model features — they serve as lightweight checksum anchors
@@ -406,7 +405,7 @@ def _write_evidence_manifests(
             "split": split,
             "sampling_rate_hz": 250,
             "n_channels": 30,
-            "n_samples": int(round(float(route_data.get("input_window_sec", 10)) * 250)),
+            "n_samples": int(x.shape[1]),
             "y_true": trial["y"],
             "label_available": True,
         })
@@ -439,10 +438,10 @@ def _write_evidence_manifests(
         for row in trial_index
     ]
     split_manifest = {
-        "split_id": split_id,
+        "split_id": active_split_id,
         "subject_group_split": True,
         "status": "ready",
-        "description": f"Subject holdout split for {split_id} (smoke subset).",
+        "description": f"Subject holdout split for {active_split_id} (smoke subset).",
         "train_subjects": sorted(train_subjects),
         "val_subjects": sorted(val_subjects),
         "test_subjects": sorted(test_subjects),
@@ -685,11 +684,11 @@ def run_real_classifier_route(
     dataset_path, split_path = _write_evidence_manifests(
         run_dir,
         route_data=route_data,
+        active_split_id=active_split_id,
         all_trials=trials,
         train_subjects=train_subjects,
         val_subjects=val_subjects,
         test_subjects=test_subjects,
-        seed=active_seed,
     )
 
     # Write model state

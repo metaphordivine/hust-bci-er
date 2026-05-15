@@ -10,14 +10,24 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
 from hust_bci_er.training.toy_adapter import run_toy_route  # noqa: E402
 
 
 SUPPORTED_ADAPTERS = {
     "toy_centroid": run_toy_route,
-    "torch_classifier": run_real_classifier_route,
+    "torch_classifier": None,  # lazy import to avoid h5py hard dependency for toy routes
 }
+
+
+def _resolve_adapter(name: str):
+    adapter = SUPPORTED_ADAPTERS.get(name)
+    if adapter is None and name == "torch_classifier":
+        from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
+        SUPPORTED_ADAPTERS["torch_classifier"] = run_real_classifier_route
+        return run_real_classifier_route
+    if adapter is None:
+        raise ValueError(f"unknown adapter: {name}")
+    return adapter
 
 
 def default_run_dir(route: Path) -> Path:
@@ -51,13 +61,26 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     run_dir = args.run_dir or default_run_dir(args.route)
-    adapter = SUPPORTED_ADAPTERS[adapter_name]
+
+    # Build full command string for manifest provenance
+    cmd = ["python", "scripts/train_route.py", "--route", args.route.as_posix(), "--run-dir", run_dir.as_posix()]
+    if args.split_id is not None:
+        cmd.extend(["--split-id", args.split_id])
+    if args.seed is not None:
+        cmd.extend(["--seed", str(args.seed)])
+    if args.smoke_epochs is not None:
+        cmd.extend(["--smoke-epochs", str(args.smoke_epochs)])
+    cmd.extend(["--smoke-dep", str(args.smoke_dep)])
+    cmd.extend(["--smoke-hc", str(args.smoke_hc)])
+    cmd.extend(["--device", args.device])
+
+    adapter = _resolve_adapter(adapter_name)
     artifacts = adapter(
         route_config_path=args.route,
         run_dir=run_dir,
         split_id=args.split_id,
         seed=args.seed,
-        command=["python", "scripts/train_route.py", "--route", args.route.as_posix(), "--run-dir", run_dir.as_posix()],
+        command=cmd,
         smoke_epochs=args.smoke_epochs,
         smoke_n_dep=args.smoke_dep,
         smoke_n_hc=args.smoke_hc,
