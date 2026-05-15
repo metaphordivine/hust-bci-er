@@ -10,11 +10,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
 from hust_bci_er.training.toy_adapter import run_toy_route  # noqa: E402
 
 
 SUPPORTED_ADAPTERS = {
     "toy_centroid": run_toy_route,
+    "torch_classifier": run_real_classifier_route,
 }
 
 
@@ -28,6 +30,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--split-id")
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--smoke-epochs", type=int)
+    parser.add_argument("--smoke-dep", type=int, default=4)
+    parser.add_argument("--smoke-hc", type=int, default=8)
+    parser.add_argument("--device", default="auto")
     args = parser.parse_args(argv)
 
     route_data = yaml.safe_load(args.route.read_text(encoding="utf-8")) or {}
@@ -46,13 +52,21 @@ def main(argv: list[str] | None = None) -> int:
 
     run_dir = args.run_dir or default_run_dir(args.route)
     adapter = SUPPORTED_ADAPTERS[adapter_name]
-    artifacts = adapter(
+    adapter_kwargs: dict = dict(
         route_config_path=args.route,
         run_dir=run_dir,
         split_id=args.split_id,
         seed=args.seed,
         command=["python", "scripts/train_route.py", "--route", args.route.as_posix(), "--run-dir", run_dir.as_posix()],
     )
+    if adapter_name == "torch_classifier":
+        adapter_kwargs.update(
+            smoke_epochs=args.smoke_epochs,
+            smoke_n_dep=args.smoke_dep,
+            smoke_n_hc=args.smoke_hc,
+            device=args.device,
+        )
+    artifacts = adapter(**adapter_kwargs)
     print(
         json.dumps(
             {
