@@ -10,8 +10,9 @@ Before code, experiment, or report changes:
 2. Read `docs/目录怎么用.md`.
 3. Read `docs/04_evaluation_protocols.md`.
 4. Read `agent_protocols/experiment_audit.md`.
-5. Read `agent_protocols/skill_router.md`.
-6. Read this file.
+5. Read `agent_protocols/foundation_usage.md`.
+6. Read `agent_protocols/skill_router.md`.
+7. Read this file.
 
 ## Skill Routing
 
@@ -25,6 +26,7 @@ Examples:
 - "can this run become candidate?" -> Experiment Audit Skill.
 - "compare P1/P2/P3 workload" -> Evaluation Protocol Planning Skill.
 - "assemble component scores" -> Score Route Assembly Skill.
+- "use the common foundations" -> Foundation Usage Skill.
 - "review this PR" -> Chinese Code Review Skill.
 
 ## Allowed
