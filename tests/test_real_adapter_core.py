@@ -183,7 +183,7 @@ def _random_window(seed: int = 0) -> np.ndarray:
 def test_apply_preprocessing_unknown_step_raises():
     x = _random_window()
     with pytest.raises(ValueError, match="unknown preprocessing step"):
-        _apply_preprocessing(x, ["whitening_eps1e-3"])  # hyphen instead of underscored
+        _apply_preprocessing(x, ["whitening_eps1e-3"])  # hyphen instead of underscore
 
 
 def test_apply_preprocessing_empty_list_noop():
@@ -192,7 +192,7 @@ def test_apply_preprocessing_empty_list_noop():
     np.testing.assert_array_equal(out, x)
 
 
-def test_apply_preprocessing_zscore_normalises_channels():
+def test_apply_preprocessing_zscore_normalizes_channels():
     x = _random_window()
     out = _apply_preprocessing(x.copy(), ["zscore"])
     means = out.mean(axis=1)
