@@ -10,6 +10,7 @@ from scripts.audit_experiment import (
     check_reproducibility_manifest,
     compare_metric,
     dataset_checksum_errors,
+    dataset_label_scope_errors,
     recompute_primary_metric_from_predictions,
     run_audit,
     split_evidence_consistency_errors,
@@ -774,6 +775,11 @@ def test_run_specific_dataset_and_split_evidence_can_override_repo_placeholders(
             [
                 "dataset_version: train_v1",
                 "status: ready",
+                "label_scope:",
+                "  train: available",
+                "  val: available",
+                "  test: available_for_audit_only",
+                "  pseudo_public: hidden_until_audit",
                 "data_sources:",
                 "  - path: data/train.csv",
                 "    kind: table",
@@ -1425,6 +1431,22 @@ def test_dataset_checksum_extra_paths_are_reported():
     assert not schema_errors
     assert not coverage_errors
     assert extra_errors
+
+
+def test_dataset_label_scope_rejects_publicly_available_test_labels():
+    errors = dataset_label_scope_errors(
+        {
+            "label_scope": {
+                "train": "available",
+                "val": "available",
+                "test": "available",
+                "pseudo_public": "available",
+            }
+        }
+    )
+
+    assert any("label_scope.test" in error for error in errors)
+    assert any("label_scope.pseudo_public" in error for error in errors)
 
 
 def test_promotion_audit_rejects_minimal_candidate_report(monkeypatch, tmp_path):

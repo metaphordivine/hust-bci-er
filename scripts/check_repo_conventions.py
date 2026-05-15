@@ -5,10 +5,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 ROUTE_NAME = re.compile(r"^[a-z0-9]+(_[a-z0-9]+)*\.yaml$")
 SUMMARY_NAME = re.compile(r"^[a-z0-9]+(_[a-z0-9]+)*_summary\.md$")
 BAD_SCRIPT = re.compile(r"(final_final|try_again|debug_|new_test|run\d+)", re.IGNORECASE)
+SLIDING_WINDOW_ROUTES = {
+    "sliding_window_conformer_lite": "conformer_lite",
+    "sliding_window_deformer_lite": "deformer_lite",
+    "sliding_window_eegnet": "eegnet",
+    "sliding_window_srfnet": "srfnet",
+}
 
 
 def tracked_files() -> list[Path] | None:
@@ -23,6 +31,47 @@ def tracked_files() -> list[Path] | None:
     except Exception:
         return None
     return [ROOT / line for line in result.stdout.splitlines() if line.strip()]
+
+
+def load_yaml(path: Path) -> dict:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def without_variant_fields(data: dict) -> dict:
+    clone = dict(data)
+    clone.pop("route_id", None)
+    model = clone.get("model")
+    if isinstance(model, dict):
+        model = dict(model)
+        model.pop("name", None)
+        clone["model"] = model
+    return clone
+
+
+def sliding_window_family_errors() -> list[str]:
+    errors: list[str] = []
+    routes = {}
+    for route_id, model_name in SLIDING_WINDOW_ROUTES.items():
+        path = ROOT / "configs" / "routes" / "models" / f"{route_id}.yaml"
+        if not path.exists():
+            errors.append(f"sliding-window family route is missing: {path.relative_to(ROOT)}")
+            continue
+        data = load_yaml(path)
+        routes[route_id] = data
+        model = data.get("model")
+        actual_model = model.get("name") if isinstance(model, dict) else None
+        if actual_model != model_name:
+            errors.append(f"{route_id} model.name must be {model_name}, got {actual_model}")
+    if len(routes) == len(SLIDING_WINDOW_ROUTES):
+        reference_id = "sliding_window_eegnet"
+        reference = without_variant_fields(routes[reference_id])
+        for route_id, data in sorted(routes.items()):
+            if route_id == reference_id:
+                continue
+            if without_variant_fields(data) != reference:
+                errors.append(f"{route_id} differs from sliding-window family baseline outside route_id/model.name")
+    return errors
 
 
 def main() -> int:
@@ -64,6 +113,8 @@ def main() -> int:
     for path in (ROOT / "scripts").glob("*.py"):
         if BAD_SCRIPT.search(path.name):
             errors.append(f"unstable script name is not allowed in scripts/: {path.name}")
+
+    errors.extend(sliding_window_family_errors())
 
     files = tracked_files()
     if files is not None:

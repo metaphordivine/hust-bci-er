@@ -106,6 +106,13 @@ def is_under(path: Path, parent: Path) -> bool:
         return False
 
 
+def display_path(path: Path, *, root: Path = ROOT) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
 def resolve_run_artifact(value: str, *, run_dir: Path, field: str) -> Path:
     resolved = (run_dir / value).resolve()
     if not is_under(resolved, run_dir):
@@ -547,6 +554,28 @@ def dataset_manifest_has_evidence(dataset_data: dict[str, Any]) -> bool:
     return has_data_sources and has_checksums
 
 
+def dataset_label_scope_errors(dataset_data: dict[str, Any]) -> list[str]:
+    scope = dataset_data.get("label_scope")
+    if not isinstance(scope, dict):
+        return ["label_scope must be a mapping"]
+    allowed = {"available", "available_for_audit_only", "hidden", "hidden_until_audit", "not_applicable"}
+    required = {"train", "val", "test", "pseudo_public"}
+    errors: list[str] = []
+    missing = sorted(required - set(scope))
+    if missing:
+        errors.append("label_scope missing keys: " + ", ".join(missing))
+    for key, value in sorted(scope.items()):
+        if key not in required:
+            errors.append(f"label_scope.{key} is not a known split scope")
+        elif value not in allowed:
+            errors.append(f"label_scope.{key} has unsupported value: {value}")
+    if scope.get("pseudo_public") == "available":
+        errors.append("label_scope.pseudo_public must not be available")
+    if scope.get("test") == "available":
+        errors.append("label_scope.test should be hidden or available_for_audit_only")
+    return errors
+
+
 def dataset_checksum_errors(dataset_data: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
     schema_errors: list[str] = []
     coverage_errors: list[str] = []
@@ -645,6 +674,22 @@ def add_dataset_checksum_checks(checks: list[AuditCheck], dataset_data: dict[str
         add_check(checks, rule_id="RUN_DATASET_CHECKSUM_EXTRA", severity="INFO", status="PASS", message="dataset checksum manifest has no extra paths")
 
 
+def add_dataset_label_scope_check(checks: list[AuditCheck], dataset_data: dict[str, Any], *, gate: str) -> None:
+    errors = dataset_label_scope_errors(dataset_data)
+    if errors:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RUN_DATASET_LABEL_SCOPE",
+            message="dataset label scope is invalid: " + "; ".join(errors[:5]),
+            fix="Declare label_scope for train/val/test/pseudo_public and keep public inference labels hidden or audit-only.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="RUN_DATASET_LABEL_SCOPE", severity="INFO", status="PASS", message="dataset label scope is explicit")
+
+
 def check_run_dataset_split_evidence(
     manifest: dict[str, Any],
     route_data: dict[str, Any],
@@ -712,6 +757,7 @@ def check_run_dataset_split_evidence(
             else:
                 add_check(checks, rule_id="RUN_DATASET_EVIDENCE_VALID", severity="INFO", status="PASS", message="run dataset evidence is verifiable")
             if dataset_data is not None:
+                add_dataset_label_scope_check(checks, dataset_data, gate=gate)
                 add_dataset_checksum_checks(checks, dataset_data, gate=gate)
 
     errors = []
@@ -1621,7 +1667,7 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_RULES", severity="INFO", status="PASS", message="candidate audit report contains passing critical evidence rules")
 
 
-def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str, Any]:
+def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir: Path | None = None) -> dict[str, Any]:
     if gate not in GATES:
         raise ValueError(f"unknown gate: {gate}")
     checks: list[AuditCheck] = []
@@ -1706,16 +1752,17 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str) -> dict[str,
                         decision_if_fail="BLOCKED",
                     )
 
-            summary_path = ROOT / "reports" / "route_summaries" / f"{route_id}_summary.md"
+            summary_root = summary_dir.resolve() if summary_dir is not None else ROOT / "reports" / "route_summaries"
+            summary_path = summary_root / f"{route_id}_summary.md"
             if summary_path.exists():
-                add_check(checks, rule_id="SUMMARY_EXISTS", severity="INFO", status="PASS", message=f"summary found: {summary_path.relative_to(ROOT)}")
+                add_check(checks, rule_id="SUMMARY_EXISTS", severity="INFO", status="PASS", message=f"summary found: {display_path(summary_path)}")
             else:
                 add_warn_or_fail(
                     checks,
                     gate=gate,
                     fail_gate={"diagnostic", "candidate", "promoted"},
                     rule_id="SUMMARY_EXISTS",
-                    message=f"route summary is missing: {summary_path.relative_to(ROOT)}",
+                    message=f"route summary is missing: {display_path(summary_path)}",
                     fix="Write one concise route summary before treating this as a finished experiment.",
                     decision_if_fail="BLOCKED",
                 )

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import sys
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -315,3 +317,105 @@ def materialize_protocol_run(
     }
     (run_dir / "protocol_run_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return manifest
+
+
+def execute_protocol_jobs(
+    manifest: Mapping[str, Any],
+    *,
+    protocol_run_manifest_path: Path,
+    gate: str = "smoke",
+    max_jobs: int | None = None,
+) -> list[dict[str, Any]]:
+    """Execute prediction-producing jobs through the stable route-job adapter."""
+    run_manifest = protocol_run_manifest_path.resolve()
+    root = next(
+        (
+            candidate
+            for candidate in (run_manifest.parent, *run_manifest.parent.parents)
+            if (candidate / "pyproject.toml").exists() and (candidate / "AGENTS.md").exists()
+        ),
+        None,
+    )
+    cwd = Path.cwd()
+    if root is None and (cwd / "pyproject.toml").exists() and (cwd / "AGENTS.md").exists():
+        root = cwd
+    if root is None:
+        raise ValueError(f"could not find repository root for protocol run: {protocol_run_manifest_path}")
+    jobs = [job for job in manifest.get("jobs", []) if isinstance(job, Mapping)]
+    runnable = [job for job in jobs if "predictions.csv" in job.get("expected_artifacts", [])]
+    artifact_only = [job for job in jobs if "predictions.csv" not in job.get("expected_artifacts", [])]
+    if max_jobs is not None:
+        runnable = runnable[: int(max_jobs)]
+    results: list[dict[str, Any]] = [
+        {
+            "job_id": str(job.get("job_id", "")),
+            "route_config": str(job.get("route_config", "")),
+            "run_dir": None,
+            "status": "SKIPPED_ARTIFACT_ONLY",
+            "reason": "--execute currently runs prediction-producing jobs only; this artifact-only job must be produced by the formal training/selection adapter.",
+            "command_returncode": None,
+            "audit_gate": gate,
+            "audit_returncode": None,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+        for job in artifact_only
+    ]
+    for job in runnable:
+        seed = int(job["seed"])
+        command = [
+            sys.executable,
+            "scripts/launch_reproducible.py",
+            "--seed",
+            str(seed),
+            "--",
+            sys.executable,
+            "scripts/run_route_job.py",
+            "--protocol-run",
+            str(protocol_run_manifest_path),
+            "--job-id",
+            str(job["job_id"]),
+        ]
+        route_config = str(job["route_config"])
+        run_dir = protocol_run_manifest_path.resolve().parent / "job_runs" / str(job["job_id"])
+        proc = subprocess.run(command, cwd=root, text=True, capture_output=True)
+        audit_code: int | None = None
+        if proc.returncode == 0:
+            audit = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/repo_doctor.py",
+                    "experiment",
+                    "--route",
+                    route_config,
+                    "--run",
+                    str(run_dir),
+                    "--gate",
+                    gate,
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+            )
+            audit_code = audit.returncode
+            proc_stdout = proc.stdout + audit.stdout
+            proc_stderr = proc.stderr + audit.stderr
+        else:
+            proc_stdout = proc.stdout
+            proc_stderr = proc.stderr
+        results.append(
+            {
+                "job_id": str(job["job_id"]),
+                "route_config": route_config,
+                "run_dir": str(run_dir),
+                "status": "EXECUTED",
+                "command_returncode": proc.returncode,
+                "audit_gate": gate,
+                "audit_returncode": audit_code,
+                "stdout_tail": proc_stdout[-4000:],
+                "stderr_tail": proc_stderr[-4000:],
+            }
+        )
+    results_path = protocol_run_manifest_path.resolve().parent / "protocol_execution_results.json"
+    results_path.write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return results

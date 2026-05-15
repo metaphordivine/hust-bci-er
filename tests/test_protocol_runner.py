@@ -10,7 +10,7 @@ import hust_bci_er.training.reproducibility as reproducibility_module
 from hust_bci_er.audit.manifest import sha256_file, validate_manifest
 from hust_bci_er.audit.run_manifest import write_run_manifest
 from hust_bci_er.evaluation.crop_policy import crop_policy_manifest, select_crop_matrix, worst_crop_score
-from hust_bci_er.evaluation.protocols.runner import build_protocol_jobs, materialize_protocol_run
+from hust_bci_er.evaluation.protocols.runner import build_protocol_jobs, execute_protocol_jobs, materialize_protocol_run
 from hust_bci_er.training.reproducibility import dataloader_worker_seed
 from scripts.audit_experiment import run_audit
 
@@ -67,6 +67,19 @@ def test_protocol_runner_materializes_p2_crop_jobs(tmp_path):
     split_contract = yaml.safe_load(split_path.read_text(encoding="utf-8"))
     assert len(split_contract["job_ids"]) == 8
     assert [policy["name"] for policy in split_contract["crop_policies"]] == ["crop1", "crop2", "crop3", "crop4", "crop5", "random", "worst"]
+
+
+def test_protocol_execute_results_list_artifact_only_skips(tmp_path):
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+
+    results = execute_protocol_jobs(manifest, protocol_run_manifest_path=run_dir / "protocol_run_manifest.json", max_jobs=0)
+
+    skipped = [item for item in results if item["status"] == "SKIPPED_ARTIFACT_ONLY"]
+    assert [item["job_id"] for item in skipped] == ["p2__ea_deformer__train_seed42"]
+    assert skipped[0]["command_returncode"] is None
+    assert "prediction-producing jobs only" in skipped[0]["reason"]
+    assert (run_dir / "protocol_execution_results.json").exists()
 
 
 def test_protocol_runner_counts_p1_and_p3_jobs():
@@ -181,6 +194,8 @@ def test_write_run_manifest_requires_locked_pythonhashseed_for_default_determini
 def test_write_run_manifest_reports_missing_route_fields(monkeypatch, tmp_path):
     lock_pythonhashseed(monkeypatch, 42)
     root = tmp_path
+    (root / "pyproject.toml").write_text("[project]\nname = 'tmp'\n", encoding="utf-8")
+    (root / "AGENTS.md").write_text("# tmp\n", encoding="utf-8")
     route = root / "configs" / "routes" / "models" / "bad.yaml"
     route.parent.mkdir(parents=True)
     route.write_text(
@@ -372,6 +387,28 @@ def test_reproducibility_rejects_missing_pythonhashseed():
 
     assert proc.returncode != 0
     assert "restart Python with PYTHONHASHSEED=123" in proc.stderr
+
+
+def test_launch_reproducible_sets_hash_seed_for_child():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/launch_reproducible.py",
+            "--seed",
+            "77",
+            "--",
+            sys.executable,
+            "-c",
+            "import os; print(os.environ['PYTHONHASHSEED'])",
+        ],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "77"
 
 
 def test_crop_policy_random_and_worst_are_deterministic():

@@ -7,7 +7,7 @@
 
 ```text
 已实现：协议配置、协议 plan/dry-run、runner manifest、审计口径说明、component trainer。
-未实现：数据集专用 loader 和真实训练 job adapter。
+未实现：真实 HUST EEG dataset loader 和真实训练 job adapter。
 原则：先生成计划和证据边界，再显式启动重训练；不能用 runner manifest 伪装 candidate 结果。
 ```
 
@@ -77,6 +77,22 @@ python scripts/run_evaluation_protocol.py \
 ```
 
 runner 会在 `outputs/protocol_runs/<run_id>/splits/` 里写每个 job 的 split contract，并在 `protocol_run_manifest.json` 中记录 `split_manifest_path` 和 `split_sha256`。这些 contract 只是 job-specific 占位锁；真实训练前必须把它们替换为包含 subject lists 和 `trial_rows` 的正式 evidence。
+
+当前 runner 还提供受限执行模式：
+
+```bash
+python scripts/run_evaluation_protocol.py \
+  --protocol p1 \
+  --route-config configs/routes/models/toy_eegnet.yaml \
+  --run-dir outputs/protocol_runs/toy_p1 \
+  --seed 42 \
+  --n-folds 2 \
+  --execute \
+  --execute-gate smoke \
+  --max-execute-jobs 1
+```
+
+`--execute` 只调用已支持的 route job adapter。当前用于 toy route 的端到端 smoke；真实 HUST EEG route 在 dataset loader 和 training adapter 完成前仍不能声称 candidate evidence。
 
 ## P2：pseudo-public holdout
 
@@ -238,7 +254,7 @@ P3：
 
 ## 当前限制
 
-当前仓库已有统一 runner manifest，但还没有数据集专用 loader 和真实训练 job adapter。  
+当前仓库已有统一 runner manifest 和 toy end-to-end smoke，但还没有真实 HUST EEG dataset loader 和真实训练 job adapter。
 `plan_evaluation_protocol.py` 只生成计划，不训练，不读取标签，不生成结果。  
 `run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息，不会生成 prediction、score matrix 或 candidate 结果。
 

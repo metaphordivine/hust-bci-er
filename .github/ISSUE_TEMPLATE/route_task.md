@@ -8,11 +8,19 @@ assignees: ""
 
 ## Goal
 
+## Ownership
+
+- Human owner:
+- Route owner:
+- Agent assistance expected: yes/no
+
 ## Scope
 
 - Route configs:
 - Components:
 - Audit/report outputs:
+- Intended write scope:
+- Paths to avoid:
 
 ## Required Evidence
 

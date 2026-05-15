@@ -231,6 +231,17 @@ def test_source_scanner_finds_id_feature_and_inference_label_leaks(tmp_path):
     assert sum(1 for finding in scan_no_leakage(root) if finding.pattern == "inference_label_reference") == 2
 
 
+def test_source_scanner_finds_indirect_label_feature_path(tmp_path):
+    root = tmp_path
+    training = root / "src" / "hust_bci_er" / "training"
+    training.mkdir(parents=True)
+    (training / "bad_join.py").write_text("features = table.merge(labels, on='row_key')\n", encoding="utf-8")
+
+    findings = scan_no_leakage(root)
+
+    assert any(finding.pattern == "indirect_label_feature" for finding in findings)
+
+
 def test_source_scanner_allows_score_route_assembly_audit_label_passthrough(tmp_path):
     root = tmp_path
     inference = root / "src" / "hust_bci_er" / "inference"

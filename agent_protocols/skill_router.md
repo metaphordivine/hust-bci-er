@@ -33,7 +33,8 @@ Every agent must read these before making code, experiment, Git, or report chang
 4. `agent_protocols/experiment_audit.md`
 5. `agent_protocols/foundation_usage.md`
 6. `agent_protocols/skill_router.md`
-7. `AGENTS.md`
+7. `docs/collaboration_workflow.md`
+8. `AGENTS.md`
 
 ## Skill Rules
 
@@ -46,23 +47,23 @@ Every agent must read these before making code, experiment, Git, or report chang
 - Do not touch unrelated directories when a skill has a narrow file scope.
 - Run `python scripts/repo_doctor.py fast` before final handoff unless the task is read-only.
 
-## Parallel Agent Work
+## Parallel Human Work With Agent Assistance
 
-Two agents can work in parallel only when their write scopes do not overlap.
+Multiple human collaborators may work in parallel with their own local AI assistants when their write scopes do not overlap. The human collaborator remains responsible for scope, validation, and final handoff.
 
 Safe examples:
 
 ```text
-Agent A: configs/datasets/, configs/splits/, src/hust_bci_er/data/
-Agent B: src/hust_bci_er/evaluation/protocols/, scripts/plan_evaluation_protocol.py
+Human A + assistant: configs/datasets/, configs/splits/, src/hust_bci_er/data/
+Human B + assistant: src/hust_bci_er/evaluation/protocols/, scripts/plan_evaluation_protocol.py
 ```
 
 ```text
-Agent A: src/hust_bci_er/inference/, scripts/assemble_score_route.py
-Agent B: src/hust_bci_er/training/, scripts/model_smoke.py
+Human A + assistant: src/hust_bci_er/inference/, scripts/assemble_score_route.py
+Human B + assistant: src/hust_bci_er/training/, scripts/model_smoke.py
 ```
 
-Avoid parallel edits to shared governance files unless one agent is explicitly assigned as the integrator:
+Avoid parallel edits to shared governance files unless a human owner explicitly coordinates the change. `reports/route_registry.yaml` lists the current shared guarded paths and route owners.
 
 ```text
 README.md

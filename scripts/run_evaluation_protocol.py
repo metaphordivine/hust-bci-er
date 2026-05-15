@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from hust_bci_er.evaluation.protocols.runner import materialize_protocol_run  # noqa: E402
+from hust_bci_er.evaluation.protocols.runner import execute_protocol_jobs, materialize_protocol_run  # noqa: E402
 from scripts.plan_evaluation_protocol import parse_grid_size  # noqa: E402
 
 
@@ -33,6 +33,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--outer-seed", type=int, default=42)
     parser.add_argument("--inner-seed", type=int, default=123)
     parser.add_argument("--grid-size", action="append", type=parse_grid_size, default=[], help="P3 route grid size, route_id=size.")
+    parser.add_argument("--execute", action="store_true", help="Execute prediction-producing jobs with the supported route adapter.")
+    parser.add_argument("--execute-gate", choices=["smoke", "candidate"], default="smoke")
+    parser.add_argument("--max-execute-jobs", type=int)
     args = parser.parse_args(argv)
 
     kwargs = {}
@@ -54,13 +57,33 @@ def main(argv: list[str] | None = None) -> int:
             "grid_sizes": dict(args.grid_size),
         }
 
+    run_dir = args.run_dir or default_run_dir(args.protocol)
     manifest = materialize_protocol_run(
         args.protocol,
         args.route_config,
-        run_dir=args.run_dir or default_run_dir(args.protocol),
+        run_dir=run_dir,
         **kwargs,
     )
-    print(json.dumps({"protocol": manifest["protocol"], "jobs": len(manifest["jobs"]), "run_dir": str((args.run_dir or default_run_dir(args.protocol)).resolve())}, ensure_ascii=False))
+    payload = {"protocol": manifest["protocol"], "jobs": len(manifest["jobs"]), "run_dir": str(run_dir.resolve())}
+    if args.execute:
+        results = execute_protocol_jobs(
+            manifest,
+            protocol_run_manifest_path=run_dir.resolve() / "protocol_run_manifest.json",
+            gate=args.execute_gate,
+            max_jobs=args.max_execute_jobs,
+        )
+        payload["executed_jobs"] = sum(1 for item in results if item.get("status") == "EXECUTED")
+        payload["skipped_artifact_only_jobs"] = sum(1 for item in results if item.get("status") == "SKIPPED_ARTIFACT_ONLY")
+        payload["failed_jobs"] = sum(
+            1
+            for item in results
+            if item.get("status") == "EXECUTED"
+            and (item["command_returncode"] != 0 or item["audit_returncode"] not in {0, None})
+        )
+        if payload["failed_jobs"]:
+            print(json.dumps(payload, ensure_ascii=False))
+            return 1
+    print(json.dumps(payload, ensure_ascii=False))
     return 0
 
 

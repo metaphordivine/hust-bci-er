@@ -49,6 +49,12 @@ ID_AS_FEATURE_PATTERNS = (
 MODEL_LABEL_PATTERNS = (
     re.compile(r"(?<![a-z0-9_])(y_true|ground_truth|label|labels)(?![a-z0-9_])"),
 )
+INDIRECT_LABEL_FEATURE_PATTERNS = (
+    re.compile(r"\b(features?|inputs?|x)\b.*\b(label_path|labels_path|target_path|ground_truth_path)\b"),
+    re.compile(r"\b(label_path|labels_path|target_path|ground_truth_path)\b.*\b(features?|inputs?|x)\b"),
+    re.compile(r"\bmerge\s*\([^)]*(y_true|label|labels|ground_truth)"),
+    re.compile(r"\bjoin\s*\([^)]*(y_true|label|labels|ground_truth)"),
+)
 
 
 @dataclass(frozen=True)
@@ -118,6 +124,8 @@ def scan_no_leakage(root: Path) -> list[SourceFinding]:
                 else:
                     if in_model_feature_path and any(regex.search(lowered) for regex in ID_AS_FEATURE_PATTERNS):
                         findings.append(SourceFinding(path.relative_to(root).as_posix(), "id_shortcut_as_feature", idx))
+                    if in_model_feature_path and any(regex.search(lowered) for regex in INDIRECT_LABEL_FEATURE_PATTERNS):
+                        findings.append(SourceFinding(path.relative_to(root).as_posix(), "indirect_label_feature", idx))
                     if in_inference and not allows_inference_label_reference(path, root) and any(regex.search(lowered) for regex in MODEL_LABEL_PATTERNS):
                         findings.append(SourceFinding(path.relative_to(root).as_posix(), "inference_label_reference", idx))
     return findings

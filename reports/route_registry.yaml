@@ -1,0 +1,55 @@
+schema_version: 1
+shared_guarded_paths:
+  - README.md
+  - AGENTS.md
+  - agent_protocols/
+  - docs/04_evaluation_protocols.md
+  - src/hust_bci_er/config/schema.py
+  - src/hust_bci_er/config/registry.py
+  - scripts/repo_doctor.py
+  - .github/workflows/
+  - reports/route_board.md
+routes:
+  - route_id: conformer_srfnet_score_average
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: conformer_srfnet_whitening_eps1e3_average
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: conformer_srfnet_whitening_eps1e3_handcrafted_weight25_average
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: conformer_srfnet_whitening_eps1e3_handcrafted_weight30_average
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: conformer_srfnet_whitening_eps1e3_handcrafted_weight40_average
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: conformer_srfnet_whitening_eps3e4_average
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: ea_deformer
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: sliding_window_conformer_lite
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: sliding_window_deformer_lite
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: sliding_window_eegnet
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: sliding_window_srfnet
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: toy_eegnet
+    owner: ci
+    blocker: toy_only_not_real_eeg
+  - route_id: whitening_eps1e3_query_eps3e4_srfnet_context_fusion
+    owner: unassigned
+    blocker: missing_real_candidate_run
+  - route_id: whitening_eps1e3_with_conformer_srfnet_reference_average
+    owner: unassigned
+    blocker: missing_real_candidate_run
+

@@ -1,0 +1,32 @@
+route_id: toy_eegnet
+status: IDEA
+dataset_version: toy_eeg_v1
+split_id: toy_subject_holdout_seed42
+seed: 42
+input_window_sec: 10
+preprocessing: [zscore]
+features: []
+model:
+  name: eegnet
+adaptation: none
+training:
+  trainer: torch_classifier
+  job_adapter: toy_centroid
+  epochs: 1
+  batch_size: 8
+  optimizer:
+    name: adam
+    lr: 0.001
+  loss: cross_entropy
+  early_stopping:
+    monitor: val_loss
+    mode: min
+    patience: 0
+inference:
+  top4: true
+  crop_policy: single
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: CI-only synthetic route. The job adapter exercises the dataset loader, model-fit adapter, prediction writer, metric report, run manifest, and candidate audit without claiming real EEG performance.
+
