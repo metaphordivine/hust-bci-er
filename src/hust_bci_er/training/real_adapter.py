@@ -818,8 +818,19 @@ def run_real_classifier_route(
     model_name = str(model_config.get("name", "")) if isinstance(model_config, dict) else str(model_config)
     if not model_name:
         raise ValueError("route config must specify model.name")
+    model_kwargs = (
+        {key: value for key, value in model_config.items() if key != "name"}
+        if isinstance(model_config, dict)
+        else {}
+    )
     n_times = int(round(window_sec * SFREQ))
-    model = build_model(model_name, n_channels=30, n_times=n_times, n_classes=2)
+    model = build_model(
+        model_name,
+        n_channels=30,
+        n_times=n_times,
+        n_classes=2,
+        **model_kwargs,
+    )
 
     # Build training config
     training_config = route_data.get("training")

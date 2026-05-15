@@ -10,6 +10,10 @@ import torch
 from torch import nn
 
 
+def _conv1d_output_length(length: int, *, kernel_size: int, stride: int, padding: int) -> int:
+    return ((length + 2 * padding - kernel_size) // stride) + 1
+
+
 class PatchEmbeddingCBraMod(nn.Module):
     """Time-domain + frequency-domain patch embedding with ACPE."""
 
@@ -29,6 +33,21 @@ class PatchEmbeddingCBraMod(nn.Module):
         super().__init__()
         self.patch_size = patch_size
         self.d_model = d_model
+
+        time_branch_width = patch_size
+        for kernel_size, stride, _, padding in conv_kernels:
+            time_branch_width = _conv1d_output_length(
+                time_branch_width,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+            )
+        time_branch_dim = conv_out_channels * time_branch_width
+        if time_branch_dim != d_model:
+            raise ValueError(
+                "CBraMod patch embedding requires conv_out_channels * temporal_width "
+                f"to equal d_model, got {time_branch_dim} vs {d_model}"
+            )
 
         # Time-domain conv branch: [B, 1, C*N, P] -> [B, 25, C*N, P']
         layers: list[nn.Module] = []

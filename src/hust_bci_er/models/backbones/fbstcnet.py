@@ -32,7 +32,7 @@ class FFTFilterBank(nn.Module):
     ) -> None:
         super().__init__()
         if bands is None:
-            bands = [(f, f + 4) for f in range(4, 52, 4)]
+            bands = [(float(f), float(f + 4)) for f in range(4, 52, 4)]
         self.sfreq = sfreq
         self.bands = bands
 
@@ -221,11 +221,19 @@ class FBSTCNet(nn.Module):
         self.variant = variant
         self.sfreq = sfreq
 
+        if bands is None:
+            bands = [(float(4 * idx), float(4 * idx + 4)) for idx in range(1, n_bands + 1)]
+        elif len(bands) != n_bands:
+            raise ValueError(
+                f"n_bands must match len(bands), got n_bands={n_bands} and len(bands)={len(bands)}"
+            )
+
         self.filterbank = FFTFilterBank(sfreq=sfreq, bands=bands)
+        n_filter_bands = len(self.filterbank.bands)
 
         if variant in ("P", "M"):
             self.st_p = FBSTC_STConvBlock(
-                n_bands=n_bands, n_chans=n_chans, sfreq=sfreq,
+                n_bands=n_filter_bands, n_chans=n_chans, sfreq=sfreq,
                 F1=F1, F2=F2, alpha=st_alpha,
             )
             self.power_head = FBSTC_PowerHead(
@@ -237,7 +245,7 @@ class FBSTCNet(nn.Module):
 
         if variant in ("C", "M"):
             self.st_c = FBSTC_STConvBlock(
-                n_bands=n_bands, n_chans=n_chans, sfreq=sfreq,
+                n_bands=n_filter_bands, n_chans=n_chans, sfreq=sfreq,
                 F1=F1, F2=F2, alpha=st_alpha,
             )
             self.conn_head = FBSTC_ConnectivityHead(
