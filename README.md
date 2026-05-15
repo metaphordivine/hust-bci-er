@@ -16,7 +16,8 @@
 2. `docs/04_evaluation_protocols.md`
 3. `AGENTS.md`
 4. `agent_protocols/experiment_audit.md`
-5. `agent_protocols/skill_router.md`
+5. `agent_protocols/foundation_usage.md`
+6. `agent_protocols/skill_router.md`
 
 然后运行仓库 fast gate：
 
@@ -45,6 +46,7 @@ python scripts/repo_doctor.py fast
 - deterministic runtime helpers、environment/requirements lock、run manifest writer。
 - P1/P2/P3 protocol runner manifest materialization。
 - score route 从 component score CSV 到 `score/pred_top4` prediction table 的最小执行入口。
+- Foundation Usage Skill，用于把 dataset/split evidence、prediction/report、run manifest、promotion、registry/cache/monitor 等公共基座路由成稳定 agent 工作流。
 
 仍属于预留或后续实现：
 

@@ -11,11 +11,15 @@ Humans do not need to name the exact skill. If the request describes a scenario,
 | "check the repo", "before PR", "make sure it is clean" | Repository Fast Gate | Run `python scripts/repo_doctor.py fast` | Command exits 0 |
 | "add a route", "change route config" | Route Config Skill | Edit only `configs/routes/models/` unless more scope is explicit | `python scripts/validate_route.py --all` and fast gate pass |
 | "which evaluation should I use", "plan P1/P2/P3" | Evaluation Protocol Planning Skill | Run `scripts/plan_evaluation_protocol.py` for the requested protocol(s) | Plan output explains jobs, use case, and guardrails |
-| "assemble this score route", "combine component scores" | Score Route Assembly Skill | Use `scripts/assemble_score_route.py` | Output prediction table has `route_id`, `subject_id`, `trial_id`, `score`, `pred_top4` |
+| "assemble this score route", "assemble component scores", "combine component scores" | Score Route Assembly Skill | Use `scripts/assemble_score_route.py` | Output prediction table has `route_id`, `subject_id`, `trial_id`, `score`, `pred_top4` |
 | "experiment is finished", "can this be candidate" | Experiment Audit Skill | Run `repo_doctor.py experiment --route ... --run ... --gate candidate` | Candidate gate exits 0; otherwise keep route status unchanged |
 | "just smoke this route" | Smoke Audit Skill | Run `repo_doctor.py experiment --route ... --gate smoke` | WARN is allowed; do not call it candidate evidence |
 | "changed model code", "changed Torch backbone" | Model Smoke Skill | Run `python scripts/model_smoke.py` in a models-capable environment | All registered Torch backbones forward successfully |
 | "changed dataset or split evidence" | Evidence and Leakage Guard Skill | Validate dataset/split manifests and run fast gate | No subject overlap, no original-trial split leakage, fast gate exits 0 |
+| "use the common foundations", "make the agent use the base modules", "wire reusable foundation artifacts" | Foundation Usage Skill | Read `agent_protocols/foundation_usage.md` and select the matching foundation map row | Narrow artifact validation and `python scripts/repo_doctor.py fast` pass |
+| "build dataset manifest", "build split manifest", "formal evidence", "dataset QA" | Foundation Evidence Skill | Use dataset/split builders and QA commands from `agent_protocols/foundation_usage.md` | Dataset/split evidence is auditable and fast gate passes |
+| "write predictions", "write metric report", "write run manifest", "combine artifact reports" | Foundation Artifact Skill | Use contracts, prediction writer, metric report builder, score route assembly, and run manifest writer | Artifact contract validates; experiment gate passes when run artifacts exist |
+| "track training", "cache derived features", "refresh component docs", "check registry consistency" | Foundation Maintenance Skill | Use training monitor, cache manager, registry checker, or docs generator from `agent_protocols/foundation_usage.md` | Generated maintenance artifact is local or concise, and fast gate passes |
 | "prepare promoted evidence" | Promotion Audit Skill | Fill `reports/promotion_audits/<route_id>_promotion.md` from template | Promoted gate references a passing candidate audit report |
 | "review this PR/code" | Chinese Code Review Skill | Inspect changes and lead with findings | All review summaries and comments are in Simplified Chinese |
 
@@ -27,8 +31,9 @@ Every agent must read these before making code, experiment, Git, or report chang
 2. `docs/目录怎么用.md`
 3. `docs/04_evaluation_protocols.md`
 4. `agent_protocols/experiment_audit.md`
-5. `agent_protocols/skill_router.md`
-6. `AGENTS.md`
+5. `agent_protocols/foundation_usage.md`
+6. `agent_protocols/skill_router.md`
+7. `AGENTS.md`
 
 ## Skill Rules
 
@@ -96,6 +101,12 @@ Route to Evaluation Protocol Planning Skill.
 ```
 
 Route to Score Route Assembly Skill.
+
+```text
+帮 agent 用公共基座把 dataset/split/run artifact 串起来。
+```
+
+Route to Foundation Usage Skill, then select the needed foundation rows.
 
 ```text
 中文 review 这个 PR。
