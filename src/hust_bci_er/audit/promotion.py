@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 
@@ -34,15 +35,15 @@ REQUIRED_TOP4_RULES = {
     "PREDICTION_TRIAL_ID_UNIQUE",
     "PREDICTION_TOP4_TRUTH_BALANCE",
 }
+PROMOTION_FIELD_LINE = re.compile(r"^\s*(?:-\s+)?(?P<key>[A-Za-z0-9_]+)\s*:\s*(?P<value>.*?)\s*$")
 
 
 def parse_key_value_markdown(path: Path) -> dict[str, str]:
     fields: dict[str, str] = {}
     for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip().lstrip("-").strip()
-        if ":" in line:
-            key, value = line.split(":", 1)
-            fields[key.strip()] = value.strip().strip("`")
+        match = PROMOTION_FIELD_LINE.match(raw)
+        if match:
+            fields[match.group("key")] = match.group("value").strip().strip("`")
     return fields
 
 

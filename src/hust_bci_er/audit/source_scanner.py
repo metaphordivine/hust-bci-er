@@ -21,7 +21,7 @@ BLOCKED_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("pseudo_public_gt", re.compile(r"(?<![a-z0-9_])pseudo_public_gt(?![a-z0-9_])")),
 )
 SCAN_SUFFIXES = {".py", ".yaml", ".yml", ".toml", ".json"}
-EXCLUDED_NAMES = {"source_scanner.py", "scan_no_leakage.py"}
+EXCLUDED_REL_PATHS = {"src/hust_bci_er/audit/source_scanner.py", "scripts/scan_no_leakage.py"}
 RUNTIME_REL_ROOTS = (
     "src/hust_bci_er/features",
     "src/hust_bci_er/inference",
@@ -59,12 +59,14 @@ class SourceFinding:
 
 
 def iter_scan_files(root: Path, rel_roots: tuple[str, ...] = ("src", "scripts", "configs")):
+    root = root.resolve()
     for rel in rel_roots:
         base = root / rel
         if not base.exists():
             continue
         for path in base.rglob("*"):
-            if path.is_file() and path.suffix.lower() in SCAN_SUFFIXES and path.name not in EXCLUDED_NAMES:
+            rel_path = path.relative_to(root).as_posix()
+            if path.is_file() and path.suffix.lower() in SCAN_SUFFIXES and rel_path not in EXCLUDED_REL_PATHS:
                 yield path
 
 

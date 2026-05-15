@@ -25,10 +25,13 @@ class CacheManager:
 
     def register(self, *, key: str, path: Path, kind: str, source_sha256: str | None = None) -> dict[str, Any]:
         resolved = path.resolve()
-        resolved.relative_to(self.cache_dir)
+        try:
+            relative_path = resolved.relative_to(self.cache_dir)
+        except ValueError as exc:
+            raise ValueError(f"cache artifact must stay under cache_dir: {path}") from exc
         entry = {
             "key": key,
-            "path": resolved.relative_to(self.cache_dir).as_posix(),
+            "path": relative_path.as_posix(),
             "kind": kind,
             "sha256": sha256_file(resolved),
             "source_sha256": source_sha256,

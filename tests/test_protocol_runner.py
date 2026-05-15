@@ -178,6 +178,42 @@ def test_write_run_manifest_requires_locked_pythonhashseed_for_default_determini
         raise AssertionError("default run manifest determinism should require a locked PYTHONHASHSEED")
 
 
+def test_write_run_manifest_reports_missing_route_fields(monkeypatch, tmp_path):
+    lock_pythonhashseed(monkeypatch, 42)
+    root = tmp_path
+    route = root / "configs" / "routes" / "models" / "bad.yaml"
+    route.parent.mkdir(parents=True)
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: bad",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    run_dir = root / "outputs" / "bad" / "run"
+    run_dir.mkdir(parents=True)
+    predictions = run_dir / "predictions.csv"
+    predictions.write_text("subject_id,trial_id,y_true,y_pred\ns1,t1,1,1\n", encoding="utf-8")
+
+    try:
+        write_run_manifest(
+            route_config_path=route,
+            run_dir=run_dir,
+            prediction_csv=predictions,
+            metrics={"no_top4_BA": 1.0},
+            command="test",
+        )
+    except ValueError as exc:
+        assert "route config missing required field: evaluation" in str(exc)
+    else:
+        raise AssertionError("write_run_manifest should reject route configs missing evaluation")
+
+
 def test_write_run_manifest_accepts_job_specific_split_and_seed(monkeypatch, tmp_path):
     protocol_run = tmp_path / "protocol"
     protocol_manifest = materialize_protocol_run("p1", [ROUTE], run_dir=protocol_run, seeds=[123], n_folds=2)

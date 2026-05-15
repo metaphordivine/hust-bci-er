@@ -16,6 +16,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from hust_bci_er.audit.manifest import load_manifest, resolve_repo_or_run_path, sha256_file, validate_manifest  # noqa: E402
+from hust_bci_er.audit.promotion import parse_key_value_markdown  # noqa: E402
 from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
@@ -127,17 +128,6 @@ def parse_binary(value: Any, *, field: str, context: str) -> int:
     if parsed not in {0.0, 1.0}:
         raise ValueError(f"{field} is not binary in {context}")
     return int(parsed)
-
-
-def parse_key_fields(text: str) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip().lstrip("-").strip()
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        fields[key.strip()] = value.strip().strip("`")
-    return fields
 
 
 def route_primary_metric(route_data: dict[str, Any]) -> str | None:
@@ -1524,8 +1514,7 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         return
 
     add_check(checks, rule_id="PROMOTION_AUDIT_EXISTS", severity="INFO", status="PASS", message=f"promotion audit found: {promotion_path.relative_to(ROOT)}")
-    text = promotion_path.read_text(encoding="utf-8", errors="ignore")
-    fields = parse_key_fields(text)
+    fields = parse_key_value_markdown(promotion_path)
     missing = sorted(field for field in PROMOTION_REQUIRED_FIELDS if not fields.get(field))
     if missing:
         add_check(

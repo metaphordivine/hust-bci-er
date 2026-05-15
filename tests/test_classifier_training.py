@@ -111,6 +111,22 @@ def test_fit_classifier_seed_resets_prebuilt_model_parameters():
         assert torch.allclose(left, right)
 
 
+def test_fit_classifier_rejects_val_monitor_without_val_loader():
+    loader = make_easy_loader()
+    model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+
+    with pytest.raises(ValueError, match="requires val_loader"):
+        fit_classifier(
+            model,
+            loader,
+            config=ClassifierTrainConfig(
+                epochs=2,
+                optimizer=OptimizerConfig(name="sgd", lr=0.01, momentum=0.0),
+                early_stopping=EarlyStoppingConfig(monitor="val_loss", mode="min", patience=1),
+            ),
+        )
+
+
 def test_build_optimizer_rejects_unknown_name():
     model = nn.Linear(2, 2)
     with pytest.raises(ValueError, match="unsupported optimizer"):

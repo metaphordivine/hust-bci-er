@@ -198,6 +198,21 @@ def test_source_scanner_finds_leakage_pattern(tmp_path):
     assert findings[0].pattern == "public_label"
 
 
+def test_source_scanner_excludes_only_canonical_scanner_paths(tmp_path):
+    root = tmp_path
+    other = root / "src" / "other"
+    canonical = root / "src" / "hust_bci_er" / "audit"
+    other.mkdir(parents=True)
+    canonical.mkdir(parents=True)
+    (other / "source_scanner.py").write_text("value = 'public_label'\n", encoding="utf-8")
+    (canonical / "source_scanner.py").write_text("value = 'public_label'\n", encoding="utf-8")
+
+    finding_paths = {finding.path for finding in scan_no_leakage(root)}
+
+    assert "src/other/source_scanner.py" in finding_paths
+    assert "src/hust_bci_er/audit/source_scanner.py" not in finding_paths
+
+
 def test_source_scanner_finds_id_feature_and_inference_label_leaks(tmp_path):
     root = tmp_path
     features = root / "src" / "hust_bci_er" / "features"
@@ -258,6 +273,22 @@ def test_summary_and_promotion_helpers(tmp_path):
     )
     fields = parse_key_value_markdown(promotion)
     assert check_promotion_fields(fields) == []
+
+    listed = tmp_path / "listed_promotion.md"
+    listed.write_text(
+        "\n".join(
+            [
+                "- route_id: r1",
+                "- comparison_baseline: https://example.test/a:b",
+                "- reviewer: test",
+                "-bad_key: should_not_strip",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    listed_fields = parse_key_value_markdown(listed)
+    assert listed_fields["comparison_baseline"] == "https://example.test/a:b"
+    assert "bad_key" not in listed_fields
     candidate = tmp_path / "candidate.json"
     critical_rules = [
         "MANIFEST_VALID",

@@ -1459,6 +1459,37 @@ def test_promotion_audit_rejects_minimal_candidate_report(monkeypatch, tmp_path)
     assert rules["PROMOTION_AUDIT_CANDIDATE_RULES"] == "FAIL"
 
 
+def test_promotion_audit_uses_strict_key_value_parser(monkeypatch, tmp_path):
+    monkeypatch.setattr("scripts.audit_experiment.ROOT", tmp_path)
+    promotion = tmp_path / "reports" / "promotion_audits" / "summary_route_promotion.md"
+    promotion.parent.mkdir(parents=True)
+    promotion.write_text(
+        "\n".join(
+            [
+                "-route_id: summary_route",
+                "promoted_from_run: outputs/summary_route/run",
+                "candidate_audit_report: reports/audits/candidate.json",
+                "primary_metric: top4_BA",
+                "comparison_baseline: baseline",
+                "risk_review: reviewed",
+                "no_leakage_review: reviewed",
+                "decision: promote",
+                "reviewer: test",
+                "date: 2026-05-14",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    checks = []
+    check_promotion_audit("summary_route", promotion, checks)
+
+    rule = next(check for check in checks if check["rule_id"] == "PROMOTION_AUDIT_FORMAT")
+    assert rule["status"] == "FAIL"
+    assert "route_id" in rule["message"]
+
+
 def test_promotion_audit_requires_top4_rules_from_route_policy(monkeypatch, tmp_path):
     monkeypatch.setattr("scripts.audit_experiment.ROOT", tmp_path)
     critical_rules = [

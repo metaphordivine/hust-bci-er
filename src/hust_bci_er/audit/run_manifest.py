@@ -23,6 +23,24 @@ def load_yaml_mapping(path: Path) -> dict[str, Any]:
     return data
 
 
+def require_route_value(data: Mapping[str, Any], *path: str) -> Any:
+    current: Any = data
+    traversed: list[str] = []
+    for key in path:
+        traversed.append(key)
+        if not isinstance(current, Mapping) or key not in current:
+            raise ValueError(f"route config missing required field: {'.'.join(traversed)}")
+        current = current[key]
+    return current
+
+
+def require_route_mapping(data: Mapping[str, Any], *path: str) -> Mapping[str, Any]:
+    value = require_route_value(data, *path)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"route config field must be a mapping: {'.'.join(path)}")
+    return value
+
+
 def repo_root_from_route(route_config_path: Path) -> Path:
     return route_config_path.resolve().parents[3]
 
@@ -121,15 +139,16 @@ def write_run_manifest(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     route_data = load_yaml_mapping(route_config_path)
-    route_id = str(route_data["route_id"])
-    source_seed = int(route_data["seed"] if source_seed is None else source_seed)
+    route_id = str(require_route_value(route_data, "route_id"))
+    source_seed = int(require_route_value(route_data, "seed") if source_seed is None else source_seed)
     seed = int(source_seed if seed is None else seed)
-    source_split_id = source_split_id or str(route_data["split_id"])
+    source_split_id = source_split_id or str(require_route_value(route_data, "split_id"))
     split_id = split_id or source_split_id
     snapshot_path = run_dir / "config_snapshot.yaml"
     shutil.copyfile(route_config_path, snapshot_path)
 
-    dataset_manifest_path = dataset_manifest_path or root / "configs" / "datasets" / f"{route_data['dataset_version']}.yaml"
+    dataset_version = str(require_route_value(route_data, "dataset_version"))
+    dataset_manifest_path = dataset_manifest_path or root / "configs" / "datasets" / f"{dataset_version}.yaml"
     if split_manifest_path is None:
         if split_id != source_split_id:
             raise ValueError("split_manifest_path is required when split_id overrides the route split_id")
@@ -138,7 +157,8 @@ def write_run_manifest(
     if not prediction_csv.exists():
         raise FileNotFoundError(f"prediction_csv not found: {prediction_csv}")
 
-    primary_metric = str(route_data["evaluation"]["primary_metric"])
+    require_route_mapping(route_data, "evaluation")
+    primary_metric = str(require_route_value(route_data, "evaluation", "primary_metric"))
     manifest: dict[str, Any] = {
         "audit_schema_version": 2,
         "route_id": route_id,

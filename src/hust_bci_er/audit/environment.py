@@ -30,7 +30,7 @@ def torch_environment() -> dict[str, Any]:
     }
     try:
         import torch
-    except Exception:
+    except ImportError:
         return info
 
     info.update(
@@ -60,7 +60,7 @@ def nvidia_driver_version() -> str | None:
             text=True,
             timeout=3,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode != 0:
         return None
@@ -77,7 +77,7 @@ def pip_freeze() -> list[str]:
             text=True,
             timeout=10,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return []
     if result.returncode != 0:
         return []

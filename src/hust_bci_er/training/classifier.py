@@ -251,6 +251,10 @@ def fit_classifier(
     stopped_early = False
     stale_epochs = 0
 
+    monitor = config.early_stopping or EarlyStoppingConfig(monitor="val_loss" if val_loader is not None else "train_loss")
+    if config.early_stopping is not None and val_loader is None and monitor.monitor in {"val_loss", "val_accuracy"}:
+        raise ValueError(f"early_stopping monitor {monitor.monitor} requires val_loader")
+
     for epoch in range(1, config.epochs + 1):
         train_metrics = train_one_epoch(
             model,
@@ -272,10 +276,9 @@ def fit_classifier(
         )
         history.append(epoch_metrics)
 
-        monitor = config.early_stopping or EarlyStoppingConfig(monitor="val_loss" if val_loader is not None else "train_loss")
         metric = monitored_value(epoch_metrics, monitor.monitor)
         if metric is None:
-            continue
+            raise ValueError(f"early_stopping monitor {monitor.monitor} is unavailable for this training run")
         if is_improvement(metric, best_metric, mode=monitor.mode, min_delta=monitor.min_delta):
             best_metric = metric
             best_epoch = epoch
