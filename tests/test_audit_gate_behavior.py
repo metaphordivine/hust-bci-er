@@ -6,12 +6,16 @@ from hust_bci_er.audit.manifest import sha256_file
 from hust_bci_er.contracts.prediction import prediction_schema
 from hust_bci_er.evaluation.report import build_metric_report
 from scripts.audit_experiment import (
+    add_raw_data_source_dataset_match,
+    check_prediction_scope_against_split,
     check_promotion_audit,
     check_reproducibility_manifest,
+    check_run_gate_eligibility,
     compare_metric,
     dataset_checksum_errors,
     dataset_label_scope_errors,
     recompute_primary_metric_from_predictions,
+    recompute_exact_metric_from_matrix,
     run_audit,
     split_evidence_consistency_errors,
     split_manifest_has_formal_evidence,
@@ -20,6 +24,7 @@ from scripts.audit_experiment import (
 
 
 ROUTE = Path("configs/routes/models/ea_deformer.yaml")
+TORCH_ROUTE_DATA = {"training": {"job_adapter": "torch_classifier"}}
 
 
 def reproducibility_metadata():
@@ -66,6 +71,325 @@ def test_candidate_gate_blocks_missing_run_artifacts():
 def test_smoke_gate_keeps_missing_run_as_warn():
     report = run_audit(ROUTE, None, gate="smoke")
     assert report["overall"] == "WARN"
+
+
+def test_candidate_run_gate_accepts_test_scope_and_verified_raw_source(tmp_path):
+    raw = tmp_path / "sample.mat"
+    raw.write_bytes(b"raw-eeg")
+    checks = []
+    check_run_gate_eligibility(
+        {
+            "run_mode": "candidate",
+            "prediction_scope": "test_only",
+            "score_matrix_evidence": "genuine",
+            "training_epochs": 80,
+            "source_training_epochs": 80,
+            "training_epochs_overridden": False,
+            "raw_data_sources": [{"path": str(raw), "kind": "mat", "sha256": sha256_file(raw)}],
+        },
+        checks,
+        gate="candidate",
+        route_data=TORCH_ROUTE_DATA,
+    )
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["RUN_MODE_CANDIDATE"] == "PASS"
+    assert rules["PREDICTION_SCOPE_TEST_ONLY"] == "PASS"
+    assert rules["TRAINING_EPOCHS_MATCH_ROUTE"] == "PASS"
+    assert rules["SCORE_MATRIX_GENUINE"] == "PASS"
+    assert rules["RAW_DATA_SOURCES_VALID"] == "PASS"
+    assert "FAIL" not in rules.values()
+
+
+def test_candidate_run_gate_blocks_malformed_raw_sources_without_crashing():
+    checks = []
+    check_run_gate_eligibility(
+        {
+            "run_mode": "candidate",
+            "prediction_scope": "test_only",
+            "score_matrix_evidence": "genuine",
+            "training_epochs": 80,
+            "source_training_epochs": 80,
+            "training_epochs_overridden": False,
+            "raw_data_sources": ["not-a-mapping"],
+        },
+        checks,
+        gate="candidate",
+        route_data=TORCH_ROUTE_DATA,
+    )
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["RAW_DATA_SOURCES_FORMAT"] == "FAIL"
+
+
+def test_candidate_run_gate_rejects_non_hex_raw_sha(tmp_path):
+    raw = tmp_path / "sample.mat"
+    raw.write_bytes(b"raw-eeg")
+    checks = []
+    check_run_gate_eligibility(
+        {
+            "run_mode": "candidate",
+            "prediction_scope": "test_only",
+            "score_matrix_evidence": "genuine",
+            "training_epochs": 80,
+            "source_training_epochs": 80,
+            "training_epochs_overridden": False,
+            "raw_data_sources": [{"path": str(raw), "kind": "mat", "sha256": "z" * 64}],
+        },
+        checks,
+        gate="candidate",
+        route_data=TORCH_ROUTE_DATA,
+    )
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["RAW_DATA_SOURCES_SHA256"] == "FAIL"
+
+
+def test_candidate_run_gate_blocks_epoch_override(tmp_path):
+    raw = tmp_path / "sample.mat"
+    raw.write_bytes(b"raw-eeg")
+    checks = []
+    check_run_gate_eligibility(
+        {
+            "run_mode": "candidate",
+            "prediction_scope": "test_only",
+            "score_matrix_evidence": "genuine",
+            "training_epochs": 1,
+            "source_training_epochs": 80,
+            "training_epochs_overridden": True,
+            "raw_data_sources": [{"path": str(raw), "kind": "mat", "sha256": sha256_file(raw)}],
+        },
+        checks,
+        gate="candidate",
+        route_data=TORCH_ROUTE_DATA,
+    )
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["TRAINING_EPOCH_OVERRIDE"] == "FAIL"
+
+
+def test_torch_classifier_candidate_requires_current_run_gate_metadata():
+    checks = []
+    check_run_gate_eligibility({}, checks, gate="candidate", route_data=TORCH_ROUTE_DATA)
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["RUN_GATE_METADATA_REQUIRED"] == "FAIL"
+
+
+def test_torch_classifier_trainer_candidate_requires_current_run_gate_metadata():
+    checks = []
+    check_run_gate_eligibility({}, checks, gate="candidate", route_data={"training": {"trainer": "torch_classifier"}})
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["RUN_GATE_METADATA_REQUIRED"] == "FAIL"
+
+
+def test_prediction_scope_must_match_split_subjects(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "split_manifest.yaml").write_text(
+        "\n".join(
+            [
+                "split_id: s1",
+                "train_subjects: [S1]",
+                "val_subjects: [S2]",
+                "test_subjects: [S3]",
+                "trial_rows:",
+                "  - subject_id: S1",
+                "    original_trial_id: S1::t1",
+                "    split: train",
+                "  - subject_id: S2",
+                "    original_trial_id: S2::t1",
+                "    split: val",
+                "  - subject_id: S3",
+                "    original_trial_id: S3::t1",
+                "    split: test",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    checks = []
+    fields = {"subject_id"}
+    check_prediction_scope_against_split(
+        [{"subject_id": "S2"}],
+        fields,
+        prediction_schema(fields),
+        {"prediction_scope": "test_only", "split_manifest_path": "split_manifest.yaml"},
+        checks,
+        run_dir=run_dir,
+        gate="candidate",
+    )
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["PREDICTION_SCOPE_SPLIT_MATCH"] == "FAIL"
+
+
+def test_prediction_scope_must_match_split_trial_keys(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "split_manifest.yaml").write_text(
+        "\n".join(
+            [
+                "split_id: s1",
+                "train_subjects: [S1]",
+                "val_subjects: [S2]",
+                "test_subjects: [S3]",
+                "trial_rows:",
+                "  - subject_id: S3",
+                "    original_trial_id: S3::expected_trial",
+                "    split: test",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    checks = []
+    fields = {"subject_id", "trial_id"}
+    check_prediction_scope_against_split(
+        [{"subject_id": "S3", "trial_id": "wrong_trial"}],
+        fields,
+        prediction_schema(fields),
+        {
+            "prediction_scope": "test_only",
+            "split_manifest_path": "split_manifest.yaml",
+            "evaluation_subjects": ["S3"],
+        },
+        checks,
+        run_dir=run_dir,
+        gate="candidate",
+    )
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["PREDICTION_SCOPE_SPLIT_MATCH"] == "PASS"
+    assert rules["PREDICTION_SCOPE_TRIAL_MATCH"] == "FAIL"
+
+
+def test_raw_data_sources_must_match_dataset_evidence(tmp_path):
+    raw_a = tmp_path / "a.mat"
+    raw_b = tmp_path / "b.mat"
+    raw_a.write_bytes(b"a")
+    raw_b.write_bytes(b"b")
+    checks = []
+    add_raw_data_source_dataset_match(
+        checks,
+        {
+            "run_mode": "candidate",
+            "raw_data_sources": [{"path": str(raw_a), "kind": "mat", "sha256": sha256_file(raw_a), "exists": True}],
+        },
+        {
+            "raw_data_sources": [
+                {"path": str(raw_a), "kind": "mat", "sha256": sha256_file(raw_a), "exists": True},
+                {"path": str(raw_b), "kind": "mat", "sha256": sha256_file(raw_b), "exists": True},
+            ]
+        },
+        gate="candidate",
+    )
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["RAW_DATA_SOURCES_DATASET_MATCH"] == "FAIL"
+
+
+def test_raw_data_sources_kind_must_match_dataset_evidence(tmp_path):
+    raw = tmp_path / "a.mat"
+    raw.write_bytes(b"a")
+    checks = []
+    add_raw_data_source_dataset_match(
+        checks,
+        {
+            "run_mode": "candidate",
+            "raw_data_sources": [{"path": str(raw), "kind": "wrong", "sha256": sha256_file(raw), "exists": True}],
+        },
+        {
+            "raw_data_sources": [{"path": str(raw), "kind": "mat", "sha256": sha256_file(raw), "exists": True}]
+        },
+        gate="candidate",
+    )
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["RAW_DATA_SOURCES_DATASET_MATCH"] == "FAIL"
+
+
+def test_genuine_score_matrix_requires_crop_provenance(tmp_path):
+    matrix = tmp_path / "score_matrix.csv"
+    fieldnames = ["subject_id", "trial_id", "y_true", "crop_0", "crop_1", "crop_2", "crop_3", "crop_4"]
+    with matrix.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for idx in range(8):
+            writer.writerow(
+                {
+                    "subject_id": "S1",
+                    "trial_id": f"t{idx}",
+                    "y_true": 1 if idx < 4 else 0,
+                    "crop_0": "0.9",
+                    "crop_1": "0.8",
+                    "crop_2": "0.7",
+                    "crop_3": "0.2",
+                    "crop_4": "0.1",
+                }
+            )
+    checks = []
+    try:
+        recompute_exact_metric_from_matrix(
+            matrix,
+            metric_name="exact_single_crop_expected_BA",
+            manifest={"score_matrix_evidence": "genuine", "metric_group_keys": ["subject_id"]},
+            checks=checks,
+        )
+    except ValueError:
+        pass
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["SCORE_MATRIX_CROP_PROVENANCE"] == "FAIL"
+
+
+def test_score_matrix_scope_must_match_split_trial_keys(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "split_manifest.yaml").write_text(
+        "\n".join(
+            [
+                "split_id: s1",
+                "train_subjects: [S1]",
+                "val_subjects: [S2]",
+                "test_subjects: [S3]",
+                "trial_rows:",
+                "  - subject_id: S3",
+                "    original_trial_id: S3::test0",
+                "    split: test",
+                "  - subject_id: S2",
+                "    original_trial_id: S2::val0",
+                "    split: val",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    matrix = run_dir / "score_matrix.csv"
+    fieldnames = ["subject_id", "trial_id", "y_true", "crop_0", "crop_1", "crop_2", "crop_3", "crop_4"]
+    with matrix.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for idx in range(8):
+            writer.writerow(
+                {
+                    "subject_id": "S2",
+                    "trial_id": f"val{idx}",
+                    "y_true": 1 if idx < 4 else 0,
+                    "crop_0": "0.9",
+                    "crop_1": "0.8",
+                    "crop_2": "0.7",
+                    "crop_3": "0.2",
+                    "crop_4": "0.1",
+                }
+            )
+    checks = []
+    try:
+        recompute_exact_metric_from_matrix(
+            matrix,
+            metric_name="exact_single_crop_expected_BA",
+            manifest={
+                "prediction_scope": "test_only",
+                "split_manifest_path": "split_manifest.yaml",
+                "metric_group_keys": ["subject_id"],
+            },
+            checks=checks,
+            run_dir=run_dir,
+        )
+    except ValueError:
+        pass
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["SCORE_MATRIX_SCOPE_SPLIT_MATCH"] == "FAIL"
 
 
 def test_candidate_gate_blocks_placeholder_run_split_evidence(tmp_path):

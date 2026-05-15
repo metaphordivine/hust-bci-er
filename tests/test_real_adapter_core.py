@@ -16,6 +16,7 @@ from hust_bci_er.training.real_adapter import (
     _apply_preprocessing,
     _build_score_matrix,
     _fit_ea_on_windows,
+    _make_fixed_crops,
     _split_subjects,
 )
 
@@ -102,6 +103,7 @@ def _make_window_rows(trial_id: str, n_windows: int, subject_id: str = "S01",
             "subject_id": subject_id,
             "trial_id": trial_id,
             "crop_id": i,
+            "window_start_sec": float(i),
             "y_true": y_true,
             "y_score": base_score + i * 0.01,
             "y_pred": 1,
@@ -134,6 +136,17 @@ def test_build_score_matrix_sliding_window_uses_real_scores():
     for i in range(5):
         expected = f"{0.5 + i * 0.01:.8f}"
         assert result[0][f"crop_{i}"] == expected
+        assert result[0][f"crop_{i}_source_crop_id"] == str(i)
+        assert result[0][f"crop_{i}_window_start_sec"] == f"{float(i):.8f}"
+
+
+def test_build_score_matrix_five_fixed_crops_are_genuine():
+    rows = _make_window_rows("t1", n_windows=5, base_score=0.55)
+    result, evidence = _build_score_matrix(rows, crop_policy="single", seed=42)
+    assert evidence == "genuine"
+    assert len(result) == 1
+    for i in range(5):
+        assert result[0][f"crop_{i}"] == f"{0.55 + i * 0.01:.8f}"
 
 
 def test_build_score_matrix_preserves_y_true():
@@ -160,6 +173,15 @@ def test_build_score_matrix_sliding_window_few_windows_fallback_synthetic():
     assert evidence == "synthetic"
     assert len(result) == 1
     assert all(f"crop_{i}" in result[0] for i in range(5))
+
+
+def test_build_score_matrix_duplicate_crop_ids_fallback_synthetic():
+    rows = _make_window_rows("t1", n_windows=5, base_score=0.5)
+    for row in rows:
+        row["crop_id"] = 0
+    result, evidence = _build_score_matrix(rows, crop_policy="sliding_window_vote", seed=42)
+    assert evidence == "synthetic"
+    assert len(result) == 1
 
 
 def test_build_score_matrix_seed_deterministic():
@@ -241,3 +263,24 @@ def test_fit_ea_on_windows_returns_matrix_with_ea():
     assert result is not None
     assert isinstance(result, np.ndarray)
     assert result.shape == (30, 30)
+
+
+# ---------------------------------------------------------------------------
+# _make_fixed_crops
+# ---------------------------------------------------------------------------
+
+
+def test_make_fixed_crops_returns_non_overlapping_crops():
+    x = np.arange(30 * 2500 * 5, dtype=np.float32).reshape(30, 2500 * 5)
+    trials = [{
+        "x": x,
+        "y": 1,
+        "subject_id": "S01",
+        "trial_id": "S01_pos1",
+        "cohort": "HC",
+    }]
+    crops = _make_fixed_crops(trials, window_sec=10, n_crops=5, preproc=[], skip_preproc=True)
+    assert len(crops) == 5
+    assert [crop["crop_id"] for crop in crops] == [0, 1, 2, 3, 4]
+    assert [crop["window_start_sec"] for crop in crops] == [0.0, 10.0, 20.0, 30.0, 40.0]
+    np.testing.assert_array_equal(crops[1]["x"], x[:, 2500:5000])

@@ -1,7 +1,7 @@
 """Real EEG classifier job adapter for .mat dataset routes.
 
-Wires route config → .mat loading → preprocessing → augmentation → torch
-training → inference → prediction & score_matrix artifacts → audit manifests.
+Wires route config -> .mat loading -> preprocessing -> augmentation -> torch
+training -> inference -> prediction & score_matrix artifacts -> audit manifests.
 """
 
 from __future__ import annotations
@@ -207,6 +207,40 @@ def _make_single_crops(
     return crops
 
 
+def _make_fixed_crops(
+    trials: list[dict[str, Any]],
+    *,
+    window_sec: float,
+    n_crops: int,
+    preproc: list[str],
+    ea_transform: np.ndarray | None = None,
+    skip_preproc: bool = False,
+) -> list[dict[str, Any]]:
+    """Create non-overlapping fixed crops from each source trial."""
+    window_samples = int(round(window_sec * SFREQ))
+    crops: list[dict[str, Any]] = []
+    for trial in trials:
+        x_full = trial["x"].astype(np.float32)
+        for crop_id in range(n_crops):
+            start = crop_id * window_samples
+            stop = start + window_samples
+            if stop > x_full.shape[1]:
+                break
+            x = x_full[:, start:stop].copy()
+            if not skip_preproc:
+                x = _apply_preprocessing(x, preproc, ea_transform=ea_transform)
+            crops.append({
+                "x": x,
+                "y": trial["y"],
+                "subject_id": trial["subject_id"],
+                "cohort": trial["cohort"],
+                "trial_id": trial["trial_id"],
+                "crop_id": crop_id,
+                "window_start_sec": start / SFREQ,
+            })
+    return crops
+
+
 def _fit_ea_on_windows(train_windows: list[dict[str, Any]], preproc: list[str]) -> np.ndarray | None:
     """Fit Euclidean Alignment on training windows if EA is in the preprocessing list.
 
@@ -326,8 +360,8 @@ def _build_score_matrix(
     """Build score_matrix rows with exactly 5 crops per trial.
 
     Returns (rows, evidence_type) where evidence_type is "genuine" if every trial
-    contributed >=5 real sliding windows, or "synthetic" if any trial fell back to
-    single-score perturbation.
+    contributed >=5 real crop/window scores, or "synthetic" if any trial fell back
+    to single-score perturbation.
     """
     from collections import defaultdict
 
@@ -340,9 +374,24 @@ def _build_score_matrix(
     for (subject_id, trial_id), trial_rows in sorted(by_trial.items()):
         trial_rows = sorted(trial_rows, key=lambda r: r.get("crop_id", 0))
         y_true = trial_rows[0]["y_true"]
+        unique_crop_rows: list[dict[str, Any]] = []
+        seen_crop_ids: set[str] = set()
+        seen_window_starts: set[str] = set()
+        for row_item in trial_rows:
+            crop_id = row_item.get("crop_id")
+            window_start = row_item.get("window_start_sec")
+            if crop_id is None or window_start is None:
+                continue
+            crop_key = str(crop_id)
+            start_key = f"{float(window_start):.8f}"
+            if crop_key in seen_crop_ids or start_key in seen_window_starts:
+                continue
+            seen_crop_ids.add(crop_key)
+            seen_window_starts.add(start_key)
+            unique_crop_rows.append(row_item)
 
-        if crop_policy == "sliding_window_vote" and len(trial_rows) >= 5:
-            crops = trial_rows[:5]
+        if len(unique_crop_rows) >= 5:
+            crops = unique_crop_rows[:5]
             row = {
                 "subject_id": subject_id,
                 "trial_id": trial_id,
@@ -350,10 +399,14 @@ def _build_score_matrix(
             }
             for i in range(5):
                 row[f"crop_{i}"] = f"{crops[i]['y_score']:.8f}"
+                row[f"crop_{i}_source_crop_id"] = str(crops[i]["crop_id"])
+                row[f"crop_{i}_window_start_sec"] = f"{float(crops[i]['window_start_sec']):.8f}"
             rows.append(row)
         else:
             all_genuine = False
-            # single crop or insufficient windows: generate 5 deterministically perturbed scores
+            # Single crop or insufficient windows: generate 5 deterministic
+            # perturbations for smoke/diagnostic compatibility. Candidate audit
+            # rejects this evidence type.
             base = trial_rows[0]["y_score"]
             row = {
                 "subject_id": subject_id,
@@ -417,6 +470,12 @@ def _write_evidence_manifests(
             "subject_id": trial["subject_id"],
             "trial_id": trial["trial_id"],
             "crop_id": 0,
+            "n_crops": actual_n_crops,
+            "crop_ids": list(range(actual_n_crops)),
+            "window_start_secs": [
+                (idx * stride_samples / SFREQ) if isinstance(aug, dict) and aug.get("name") == "split_first_sliding_window" else (idx * window_sec)
+                for idx in range(actual_n_crops)
+            ],
             "split": split,
             "sampling_rate_hz": 250,
             "n_channels": 30,
@@ -426,15 +485,18 @@ def _write_evidence_manifests(
         })
         checksums.append({"path": rel, "sha256": sha256_file(path)})
 
-    # In full mode, record original .mat paths as primary data sources.
+    # In full/candidate modes, record original .mat paths as primary data sources.
     raw_sources: list[dict[str, Any]] = []
-    if run_mode == "full_subjects":
+    if run_mode in {"full_subjects", "candidate"}:
         mat_paths = sorted({t.get("_mat_path") for t in all_trials if isinstance(t.get("_mat_path"), str)})
         for mp in mat_paths:
-            try:
-                raw_sources.append({"path": mp, "kind": "mat", "sha256": sha256_file(Path(mp))})
-            except Exception:
-                raw_sources.append({"path": mp, "kind": "mat", "sha256": "unavailable"})
+            source_path = Path(mp)
+            raw_sources.append({
+                "path": str(source_path),
+                "kind": "mat",
+                "sha256": sha256_file(source_path),
+                "exists": source_path.exists(),
+            })
 
     dataset_manifest = {
         "dataset_version": dataset_version,
@@ -500,12 +562,16 @@ class RealRunArtifacts:
     metric_report: Mapping[str, Any]
 
 
-VALID_RUN_MODES = frozenset({"smoke", "full_subjects"})
-"""Known run modes. ``smoke`` uses a seeded subset; ``full_subjects`` uses all subjects.
-Neither mode produces candidate-eligible test predictions — both are val-only."""
+VALID_RUN_MODES = frozenset({"smoke", "full_subjects", "candidate"})
+"""Known run modes.
 
-VALID_PREDICTION_SCOPES = frozenset({"val_only"})
-"""Known prediction scopes. Currently only val_only is supported."""
+``smoke`` uses a seeded subset and val-only predictions.
+``full_subjects`` uses all subjects but remains a val-only diagnostic run.
+``candidate`` uses all subjects and writes held-out test predictions.
+"""
+
+VALID_PREDICTION_SCOPES = frozenset({"val_only", "test_only"})
+"""Known prediction scopes."""
 
 
 def run_real_classifier_route(
@@ -527,7 +593,8 @@ def run_real_classifier_route(
     Args:
         route_config_path: Path to route YAML config.
         run_dir: Output directory for all artifacts.
-        run_mode: "smoke" (default, subset + val-only) or "full_subjects" (all subjects, still val-only).
+        run_mode: "smoke" (subset + val-only), "full_subjects" (all subjects + val-only),
+            or "candidate" (all subjects + held-out test predictions).
         split_id: Override split_id (default from route config).
         seed: Override seed (default from route config).
         command: Command string for manifest provenance.
@@ -573,7 +640,7 @@ def run_real_classifier_route(
     dep_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "DEP"))
     hc_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "HC"))
 
-    if run_mode == "full_subjects":
+    if run_mode in {"full_subjects", "candidate"}:
         # Use all subjects with 20% val + 20% test per cohort
         n_dep = len(dep_subjects)
         n_hc = len(hc_subjects)
@@ -598,6 +665,7 @@ def run_real_classifier_route(
 
     train_trials = [t for t in trials if t["subject_id"] in train_subjects]
     val_trials = [t for t in trials if t["subject_id"] in val_subjects]
+    test_trials = [t for t in trials if t["subject_id"] in test_subjects]
 
     # Determine window configuration
     augmentation = route_data.get("augmentation")
@@ -625,11 +693,30 @@ def run_real_classifier_route(
     )
     raw_train = make_windows(train_trials, preproc=preproc, skip_preproc=True, **window_kwargs)
     raw_val = make_windows(val_trials, preproc=preproc, skip_preproc=True, **window_kwargs)
+    if run_mode == "candidate":
+        if not test_trials:
+            raise ValueError("candidate mode requires non-empty test subjects")
+        if has_aug:
+            raw_eval = make_windows(test_trials, preproc=preproc, skip_preproc=True, **window_kwargs)
+        else:
+            raw_eval = _make_fixed_crops(
+                test_trials,
+                window_sec=input_window_sec,
+                n_crops=5,
+                preproc=preproc,
+                skip_preproc=True,
+            )
+        eval_split = "test"
+    else:
+        raw_eval = raw_val
+        eval_split = "val"
 
     if not raw_train:
         raise ValueError("no training windows created")
     if not raw_val:
         raise ValueError("no validation windows created")
+    if not raw_eval:
+        raise ValueError(f"no {eval_split} windows created")
 
     # Fit EA on all raw training windows
     ea_transform = _fit_ea_on_windows(raw_train, preproc)
@@ -641,8 +728,11 @@ def run_real_classifier_route(
 
     _apply_preproc_to_windows(raw_train, ea_transform)
     _apply_preproc_to_windows(raw_val, ea_transform)
+    if raw_eval is not raw_val:
+        _apply_preproc_to_windows(raw_eval, ea_transform)
     train_windows = raw_train
     val_windows = raw_val
+    eval_windows = raw_eval
 
     # Build model
     model_config = route_data.get("model") or {}
@@ -654,7 +744,8 @@ def run_real_classifier_route(
 
     # Build training config
     training_config = route_data.get("training")
-    epochs = smoke_epochs if smoke_epochs is not None else (int(training_config["epochs"]) if isinstance(training_config, dict) else 80)
+    source_epochs = int(training_config["epochs"]) if isinstance(training_config, dict) else 80
+    epochs = smoke_epochs if smoke_epochs is not None else source_epochs
     batch_size = int(training_config["batch_size"]) if isinstance(training_config, dict) else 32
 
     opt_data = training_config.get("optimizer") if isinstance(training_config, dict) else None
@@ -691,11 +782,9 @@ def run_real_classifier_route(
 
     result: TrainResult = fit_classifier(model, train_loader, val_loader=val_loader, config=train_config)
 
-    # Predict on val set (per-window).
-    # NOTE: predictions/score_matrix/metrics are val-only for smoke.
-    # Full-candidate runs must also produce test predictions and lock test labels
-    # under available_for_audit_only before running protocol evaluation.
-    val_window_rows = _predict_scores(model, val_windows, batch_size=batch_size, device=device_str)
+    # Predict on the audited split. Smoke/full_subjects are val-only diagnostics;
+    # candidate mode evaluates held-out test subjects.
+    eval_window_rows = _predict_scores(model, eval_windows, batch_size=batch_size, device=device_str)
 
     # Aggregate to trial level for predictions.csv
     aug_config = route_data.get("augmentation")
@@ -706,10 +795,10 @@ def run_real_classifier_route(
     else:
         method = "mean_score"
         tie_break = "mean_score"
-    val_trial_rows = _aggregate_to_trials(val_window_rows, method=method, tie_break=tie_break)
+    eval_trial_rows = _aggregate_to_trials(eval_window_rows, method=method, tie_break=tie_break)
 
     # Build score matrix (5 crops per trial) from window rows
-    score_matrix_rows, score_matrix_evidence = _build_score_matrix(val_window_rows, crop_policy=crop_policy, seed=active_seed)
+    score_matrix_rows, score_matrix_evidence = _build_score_matrix(eval_window_rows, crop_policy=crop_policy, seed=active_seed)
     score_matrix_path = run_dir / "score_matrix.csv"
     _write_score_matrix(score_matrix_path, score_matrix_rows)
 
@@ -725,7 +814,7 @@ def run_real_classifier_route(
             y_true=int(row["y_true"]),
             seed=active_seed,
         )
-        for row in val_trial_rows
+        for row in eval_trial_rows
     ]
     prediction_path = run_dir / "predictions.csv"
     write_predictions(prediction_records, prediction_path, group_keys=("subject_id",))
@@ -741,7 +830,7 @@ def run_real_classifier_route(
     write_metric_report(metric_report, run_dir)
 
     # Write evidence manifests
-    prediction_scope = "val_only"
+    prediction_scope = "test_only" if run_mode == "candidate" else "val_only"
 
     dataset_path, split_path = _write_evidence_manifests(
         run_dir,
@@ -762,9 +851,13 @@ def run_real_classifier_route(
             "best_epoch": result.best_epoch,
             "best_metric": result.best_metric,
             "epochs_ran": len(result.history),
+            "training_epochs": epochs,
+            "source_training_epochs": source_epochs,
+            "training_epochs_overridden": epochs != source_epochs,
             "seed": active_seed,
             "run_mode": run_mode,
             "prediction_scope": prediction_scope,
+            "evaluation_split": eval_split,
             "score_matrix_evidence": score_matrix_evidence,
         }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -790,8 +883,18 @@ def run_real_classifier_route(
     )
     manifest["run_mode"] = run_mode
     manifest["prediction_scope"] = prediction_scope
+    manifest["evaluation_split"] = eval_split
+    manifest["evaluation_subjects"] = sorted(test_subjects if eval_split == "test" else val_subjects)
+    manifest["split_subject_counts"] = {
+        "train": len(train_subjects),
+        "val": len(val_subjects),
+        "test": len(test_subjects),
+    }
+    manifest["training_epochs"] = epochs
+    manifest["source_training_epochs"] = source_epochs
+    manifest["training_epochs_overridden"] = epochs != source_epochs
     manifest["score_matrix_evidence"] = score_matrix_evidence
-    if run_mode == "full_subjects":
+    if run_mode in {"full_subjects", "candidate"}:
         ds = yaml.safe_load(dataset_path.read_text(encoding="utf-8")) or {}
         manifest["raw_data_sources"] = ds.get("raw_data_sources") or []
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -808,7 +911,9 @@ def run_real_classifier_route(
 
 
 def _write_score_matrix(path: Path, rows: list[dict[str, Any]]) -> None:
-    fieldnames = ["subject_id", "trial_id", "y_true", "crop_0", "crop_1", "crop_2", "crop_3", "crop_4"]
+    fieldnames = ["subject_id", "trial_id", "y_true"]
+    for idx in range(5):
+        fieldnames.extend([f"crop_{idx}", f"crop_{idx}_source_crop_id", f"crop_{idx}_window_start_sec"])
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

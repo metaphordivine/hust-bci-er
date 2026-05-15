@@ -49,13 +49,13 @@ python scripts/repo_doctor.py fast
 - score route 从 component score CSV 到 `score/pred_top4` prediction table 的最小执行入口。
 - Foundation Usage Skill，用于把 dataset/split evidence、prediction/report、run manifest、promotion、registry/cache/monitor 等公共基座路由成稳定 agent 工作流。
 - toy end-to-end audit smoke：`toy_eegnet` 可生成 synthetic dataset/split、prediction、score matrix、metric report、run manifest，并通过 candidate audit，用于 CI 和新人环境验证。
+- 真实 HUST EEG `.mat` dataset loader 和 `torch_classifier` job adapter；支持 `smoke`、`full_subjects` 诊断模式和 held-out test `candidate` 模式。
 - route registry / route board：`reports/route_registry.yaml` 记录 route owner/blocker 和共享谨慎修改路径，`reports/route_board.md` 从 route config 与 registry 生成。
 
 仍属于预留或后续实现：
 
-- 真实 HUST EEG dataset loader 和真实训练 job adapter。
 - 图模型、heads、复杂训练 callback。
-- candidate 级真实实验结果。
+- 按 route 默认训练轮数完成并提交绑定 summary 的 candidate 级真实实验结果。
 
 P1/P2/P3 当前已迁入为 protocol 配置、dry-run plan 和统一 runner manifest。plan 只看工作量；runner 会锁定 route/config/dataset/source split、job-specific split contract、seed、environment 和 job artifact contract，但不会伪造训练结果：
 
@@ -66,7 +66,7 @@ python scripts/plan_evaluation_protocol.py --protocol p3 --route-config configs/
 python scripts/run_evaluation_protocol.py --protocol p2 --route-config configs/routes/models/ea_deformer.yaml --run-dir outputs/protocol_runs/<run_id>
 ```
 
-协议 runner 可用 `--execute` 驱动当前支持的 job adapter。当前只保证 toy route：
+协议 runner 可用 `--execute` 驱动当前支持的 job adapter。toy route 用于 CI 级平台 smoke：
 
 ```bash
 python scripts/run_evaluation_protocol.py --protocol p1 --route-config configs/routes/models/toy_eegnet.yaml --run-dir outputs/protocol_runs/toy_p1 --seed 42 --n-folds 2 --execute --execute-gate smoke --max-execute-jobs 1
@@ -78,6 +78,18 @@ Torch 模型 forward smoke 不在默认 fast gate 中运行；改动模型路径
 pip install -e ".[dev,models]"
 python scripts/model_smoke.py
 ```
+
+真实 HUST EEG route 可通过 `run_candidate_route.py` 运行。`candidate` 模式使用全部可用 subject，训练集只用于拟合，val 用于 checkpoint selection，prediction/score matrix 只写 held-out test subjects；脚本会在唯一阻塞项是缺少 route summary 时生成绑定 audit/manifest 的 summary 并重跑 candidate gate：
+
+```bash
+python scripts/launch_reproducible.py --seed 42 -- \
+  python scripts/run_candidate_route.py \
+    --route configs/routes/models/sliding_window_eegnet.yaml \
+    --run-dir outputs/sliding_window_eegnet/<run_id>
+```
+
+`smoke` 和 `full_subjects` 都是诊断模式，不能作为 candidate 证据。
+带 `--epochs-override` 的 candidate run 只适合验证链路，candidate/promoted gate 会阻止它作为正式证据。
 
 ## 实验审计
 

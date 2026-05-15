@@ -40,7 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--split-id")
     parser.add_argument("--seed", type=int)
-    parser.add_argument("--mode", choices=["smoke", "full_subjects"], default="smoke")
+    parser.add_argument("--mode", choices=["smoke", "full_subjects", "candidate"], default="smoke")
+    parser.add_argument("--epochs-override", type=int, help="Override route training epochs for bounded local validation.")
     parser.add_argument("--smoke-epochs", type=int)
     parser.add_argument("--smoke-dep", type=int, default=4)
     parser.add_argument("--smoke-hc", type=int, default=8)
@@ -69,7 +70,10 @@ def main(argv: list[str] | None = None) -> int:
         cmd.extend(["--split-id", args.split_id])
     if args.seed is not None:
         cmd.extend(["--seed", str(args.seed)])
-    if args.smoke_epochs is not None:
+    epochs_override = args.epochs_override if args.epochs_override is not None else args.smoke_epochs
+    if args.epochs_override is not None:
+        cmd.extend(["--epochs-override", str(args.epochs_override)])
+    elif args.smoke_epochs is not None:
         cmd.extend(["--smoke-epochs", str(args.smoke_epochs)])
     cmd.extend(["--smoke-dep", str(args.smoke_dep)])
     cmd.extend(["--smoke-hc", str(args.smoke_hc)])
@@ -83,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         split_id=args.split_id,
         seed=args.seed,
         command=cmd,
-        smoke_epochs=args.smoke_epochs,
+        smoke_epochs=epochs_override,
         smoke_n_dep=args.smoke_dep,
         smoke_n_hc=args.smoke_hc,
         device=args.device,

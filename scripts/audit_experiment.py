@@ -690,6 +690,81 @@ def add_dataset_label_scope_check(checks: list[AuditCheck], dataset_data: dict[s
         add_check(checks, rule_id="RUN_DATASET_LABEL_SCOPE", severity="INFO", status="PASS", message="dataset label scope is explicit")
 
 
+def _raw_source_entries(raw_sources: Any) -> tuple[list[tuple[str, str, str, bool]], list[str]]:
+    entries: list[tuple[str, str, str, bool]] = []
+    errors: list[str] = []
+    if not isinstance(raw_sources, list) or not raw_sources:
+        return entries, ["raw_data_sources is missing or empty"]
+    for idx, source in enumerate(raw_sources):
+        if not isinstance(source, dict):
+            errors.append(f"#{idx} is not a mapping")
+            continue
+        path_value = source.get("path")
+        sha_value = source.get("sha256")
+        kind_value = source.get("kind")
+        exists_value = source.get("exists")
+        if not isinstance(path_value, str) or not path_value:
+            errors.append(f"#{idx} missing path")
+            continue
+        if not isinstance(kind_value, str) or not kind_value:
+            errors.append(f"{path_value} missing kind")
+            continue
+        if type(exists_value) is not bool:
+            errors.append(f"{path_value} missing exists boolean")
+            continue
+        if not isinstance(sha_value, str) or SHA256_RE.fullmatch(sha_value) is None:
+            errors.append(f"{path_value} has invalid sha256")
+            continue
+        entries.append((path_value, kind_value, sha_value, exists_value))
+    if len(entries) != len(set(entries)):
+        errors.append("raw_data_sources has duplicate entries")
+    return entries, errors
+
+
+def add_raw_data_source_dataset_match(
+    checks: list[AuditCheck],
+    manifest: dict[str, Any],
+    dataset_data: dict[str, Any],
+    *,
+    gate: str,
+) -> None:
+    if manifest.get("run_mode") not in {"full_subjects", "candidate"}:
+        return
+    manifest_entries, manifest_errors = _raw_source_entries(manifest.get("raw_data_sources"))
+    dataset_entries, dataset_errors = _raw_source_entries(dataset_data.get("raw_data_sources"))
+    if manifest_errors or dataset_errors:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RAW_DATA_SOURCES_DATASET_MATCH",
+            message="raw_data_sources cannot be matched to dataset evidence: " + "; ".join((manifest_errors + dataset_errors)[:5]),
+            fix="Regenerate manifest and dataset evidence with matching raw_data_sources entries.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    if sorted(manifest_entries) != sorted(dataset_entries):
+        missing = sorted(set(dataset_entries) - set(manifest_entries))
+        extra = sorted(set(manifest_entries) - set(dataset_entries))
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RAW_DATA_SOURCES_DATASET_MATCH",
+            message=f"manifest raw_data_sources do not match dataset evidence exactly: missing={len(missing)}, extra={len(extra)}",
+            fix="Keep manifest raw_data_sources identical to dataset evidence raw_data_sources.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(
+            checks,
+            rule_id="RAW_DATA_SOURCES_DATASET_MATCH",
+            severity="INFO",
+            status="PASS",
+            message=f"manifest raw_data_sources match dataset evidence ({len(manifest_entries)} files)",
+        )
+
+
 def check_run_dataset_split_evidence(
     manifest: dict[str, Any],
     route_data: dict[str, Any],
@@ -759,6 +834,7 @@ def check_run_dataset_split_evidence(
             if dataset_data is not None:
                 add_dataset_label_scope_check(checks, dataset_data, gate=gate)
                 add_dataset_checksum_checks(checks, dataset_data, gate=gate)
+                add_raw_data_source_dataset_match(checks, manifest, dataset_data, gate=gate)
 
     errors = []
     if isinstance(split_path_value, str):
@@ -1123,6 +1199,104 @@ def metric_group_columns(fields: set[str], schema: dict[str, str | None], manife
     return columns
 
 
+def target_split_from_prediction_scope(scope: Any) -> str | None:
+    return {"val_only": "val", "test_only": "test"}.get(scope)
+
+
+def split_trial_keys_for_scope(manifest: dict[str, Any], run_dir: Path, *, errors: list[str]) -> tuple[str | None, set[str], set[tuple[str, str]]]:
+    target_split = target_split_from_prediction_scope(manifest.get("prediction_scope"))
+    if target_split is None:
+        return None, set(), set()
+    split_path_value = manifest.get("split_manifest_path")
+    if not isinstance(split_path_value, str):
+        errors.append("split_manifest_path is absent")
+        return target_split, set(), set()
+    split_path = resolve_repo_or_run_path(
+        run_dir,
+        ROOT,
+        split_path_value,
+        field="split_manifest_path",
+        repo_subdir="configs/splits",
+        errors=errors,
+    )
+    if split_path is None or not split_path.exists():
+        errors.append("split evidence is invalid")
+        return target_split, set(), set()
+    split_data, parse_error = load_yaml_for_audit(split_path)
+    if split_data is None:
+        errors.append(f"split evidence could not be parsed: {parse_error}")
+        return target_split, set(), set()
+
+    split_key = f"{target_split}_subjects"
+    expected_subjects = {str(item) for item in split_data.get(split_key, []) if isinstance(item, (str, int))}
+    expected_trial_keys: set[tuple[str, str]] = set()
+    trial_rows = split_data.get("trial_rows")
+    if isinstance(trial_rows, list):
+        for row in trial_rows:
+            if not isinstance(row, dict) or row.get("split") != target_split:
+                continue
+            subject_id = row.get("subject_id")
+            if subject_id is None:
+                continue
+            trial_id = row.get("trial_id")
+            if trial_id is None:
+                original_trial_id = row.get("original_trial_id")
+                if isinstance(original_trial_id, str) and "::" in original_trial_id:
+                    trial_id = original_trial_id.split("::", 1)[1]
+                else:
+                    trial_id = original_trial_id
+            if trial_id is not None:
+                expected_trial_keys.add((str(subject_id), str(trial_id)))
+    if not expected_subjects:
+        expected_subjects = {subject_id for subject_id, _trial_id in expected_trial_keys}
+    return target_split, expected_subjects, expected_trial_keys
+
+
+def dataset_crop_provenance_keys(manifest: dict[str, Any], run_dir: Path, *, errors: list[str]) -> set[tuple[str, str, str, str]]:
+    dataset_path_value = manifest.get("dataset_manifest_path")
+    if not isinstance(dataset_path_value, str):
+        errors.append("dataset_manifest_path is absent")
+        return set()
+    dataset_path = resolve_repo_or_run_path(
+        run_dir,
+        ROOT,
+        dataset_path_value,
+        field="dataset_manifest_path",
+        repo_subdir="configs/datasets",
+        errors=errors,
+    )
+    if dataset_path is None or not dataset_path.exists():
+        errors.append("dataset evidence is invalid")
+        return set()
+    dataset_data, parse_error = load_yaml_for_audit(dataset_path)
+    if dataset_data is None:
+        errors.append(f"dataset evidence could not be parsed: {parse_error}")
+        return set()
+    keys: set[tuple[str, str, str, str]] = set()
+    trial_index = dataset_data.get("trial_index")
+    if not isinstance(trial_index, list):
+        errors.append("dataset trial_index is missing")
+        return keys
+    for row in trial_index:
+        if not isinstance(row, dict):
+            continue
+        subject_id = row.get("subject_id")
+        trial_id = row.get("trial_id")
+        crop_ids = row.get("crop_ids")
+        window_starts = row.get("window_start_secs")
+        if subject_id is None or trial_id is None or not isinstance(crop_ids, list) or not isinstance(window_starts, list):
+            continue
+        for crop_id, window_start in zip(crop_ids, window_starts):
+            try:
+                start_value = f"{float(window_start):.8f}"
+            except (TypeError, ValueError):
+                continue
+            keys.add((str(subject_id), str(trial_id), str(crop_id), start_value))
+    if not keys:
+        errors.append("dataset crop provenance keys are empty")
+    return keys
+
+
 def crop_score_columns(fields: set[str]) -> list[str]:
     candidates = [f"crop_{idx}" for idx in range(5)]
     if all(col in fields for col in candidates):
@@ -1148,7 +1322,7 @@ def add_group_check(checks: list[AuditCheck], *, rule_id: str, bad: list[str], m
         add_check(checks, rule_id=rule_id, severity="INFO", status="PASS", message=f"{rule_id} passed")
 
 
-def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest: dict[str, Any], checks: list[AuditCheck]) -> float:
+def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest: dict[str, Any], checks: list[AuditCheck], run_dir: Path | None = None) -> float:
     try:
         with path.open(newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
@@ -1163,6 +1337,49 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
     trial_col = schema["trial_id"]
     if group_cols is None or truth_col is None or trial_col is None or len(score_cols) != 5:
         raise ValueError("score matrix CSV must include group keys, trial_id, y_true, and crop_0..crop_4 columns")
+    subject_col = schema["subject_id"]
+    if subject_col is None:
+        raise ValueError("score matrix CSV must include subject_id")
+    if run_dir is not None:
+        scope_errors: list[str] = []
+        target_split, expected_subjects, expected_trial_keys = split_trial_keys_for_scope(manifest, run_dir, errors=scope_errors)
+        if scope_errors:
+            add_check(
+                checks,
+                rule_id="SCORE_MATRIX_SCOPE_SPLIT_MATCH",
+                severity="ERROR",
+                status="FAIL",
+                message="score matrix scope cannot be checked: " + "; ".join(scope_errors[:5]),
+                fix="Point manifest.split_manifest_path to valid split evidence.",
+                decision_if_fail="BLOCKED",
+            )
+            raise ValueError("score matrix scope check failed")
+        if target_split is not None:
+            observed_subjects = {str(row[subject_col]) for row in rows}
+            observed_trial_keys = [(str(row[subject_col]), str(row[trial_col])) for row in rows]
+            observed_trial_key_set = set(observed_trial_keys)
+            bad_subjects = not expected_subjects or observed_subjects != expected_subjects
+            bad_trials = not expected_trial_keys or len(observed_trial_keys) != len(observed_trial_key_set) or observed_trial_key_set != expected_trial_keys
+            if bad_subjects or bad_trials:
+                missing = sorted(expected_trial_keys - observed_trial_key_set)
+                extra = sorted(observed_trial_key_set - expected_trial_keys)
+                add_check(
+                    checks,
+                    rule_id="SCORE_MATRIX_SCOPE_SPLIT_MATCH",
+                    severity="ERROR",
+                    status="FAIL",
+                    message=f"score matrix rows do not match split {target_split}: missing={missing[:5]}, extra={extra[:5]}",
+                    fix="Write score_matrix rows only for the split declared by prediction_scope.",
+                    decision_if_fail="BLOCKED",
+                )
+                raise ValueError("score matrix scope check failed")
+            add_check(
+                checks,
+                rule_id="SCORE_MATRIX_SCOPE_SPLIT_MATCH",
+                severity="INFO",
+                status="PASS",
+                message=f"score matrix rows match split {target_split}",
+            )
     groups = group_prediction_rows(rows, group_cols)
     values: list[float] = []
     bad_group_size: list[str] = []
@@ -1170,6 +1387,21 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
     bad_label_binary: list[str] = []
     bad_truth_balance: list[str] = []
     bad_score_numeric: list[str] = []
+    bad_crop_provenance: list[str] = []
+    require_crop_provenance = manifest.get("score_matrix_evidence") == "genuine"
+    dataset_provenance_keys: set[tuple[str, str, str, str]] = set()
+    if require_crop_provenance and run_dir is not None:
+        provenance_errors: list[str] = []
+        dataset_provenance_keys = dataset_crop_provenance_keys(manifest, run_dir, errors=provenance_errors)
+        if provenance_errors:
+            bad_crop_provenance.extend(provenance_errors)
+    provenance_columns = [
+        (f"crop_{idx}_source_crop_id", f"crop_{idx}_window_start_sec")
+        for idx in range(5)
+    ]
+    has_provenance_columns = all(crop_col in fields and start_col in fields for crop_col, start_col in provenance_columns)
+    if require_crop_provenance and not has_provenance_columns:
+        bad_crop_provenance.append("missing_provenance_columns")
     for group_id, group in groups.items():
         if len(group) != 8:
             bad_group_size.append(group_id)
@@ -1180,6 +1412,27 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
 
         score_rows: list[list[float]] = []
         for row in group:
+            if require_crop_provenance and has_provenance_columns:
+                crop_ids: list[str] = []
+                window_starts: list[float] = []
+                for crop_col, start_col in provenance_columns:
+                    crop_id = str(row.get(crop_col, "")).strip()
+                    try:
+                        start_sec = parse_finite_float(row.get(start_col), field=start_col, context=group_id)
+                    except ValueError:
+                        bad_crop_provenance.append(group_id)
+                        crop_keys = []
+                        break
+                    if not crop_id:
+                        bad_crop_provenance.append(group_id)
+                        crop_ids = []
+                        break
+                    crop_ids.append(crop_id)
+                    window_starts.append(start_sec)
+                    if dataset_provenance_keys and (str(row[subject_col]), str(row[trial_col]), crop_id, f"{start_sec:.8f}") not in dataset_provenance_keys:
+                        bad_crop_provenance.append(group_id)
+                if crop_ids and (len(set(crop_ids)) != 5 or len(set(window_starts)) != 5):
+                    bad_crop_provenance.append(group_id)
             parsed_row: list[float] = []
             for col in score_cols:
                 try:
@@ -1220,7 +1473,15 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
     add_group_check(checks, rule_id="SCORE_MATRIX_LABEL_BINARY", bad=bad_label_binary, message="score matrix y_true contains non-binary values", fix="Encode score matrix y_true as 0 or 1.")
     add_group_check(checks, rule_id="SCORE_MATRIX_TRUTH_BALANCE", bad=bad_truth_balance, message="score matrix groups do not contain 4 positive labels", fix="Ensure every 8-trial score matrix group has exactly 4 positives.")
     add_group_check(checks, rule_id="SCORE_MATRIX_SCORE_NUMERIC", bad=bad_score_numeric, message="score matrix contains non-numeric or non-finite crop scores", fix="Encode crop scores as finite numeric values.")
-    if bad_group_size or bad_trial_unique or bad_label_binary or bad_truth_balance or bad_score_numeric:
+    if require_crop_provenance:
+        add_group_check(
+            checks,
+            rule_id="SCORE_MATRIX_CROP_PROVENANCE",
+            bad=bad_crop_provenance,
+            message="genuine score matrix rows must record five distinct crop provenance keys",
+            fix="Write crop source crop_id and window_start_sec columns for every score matrix crop.",
+        )
+    if bad_group_size or bad_trial_unique or bad_label_binary or bad_truth_balance or bad_score_numeric or bad_crop_provenance:
         raise ValueError("score matrix semantic checks failed")
     if not values:
         raise ValueError("score matrix CSV has no metric groups")
@@ -1276,6 +1537,108 @@ def recompute_primary_metric_from_predictions(
     raise ValueError(f"primary metric requires metric_inputs: {metric_name}")
 
 
+def check_prediction_scope_against_split(
+    rows: list[dict[str, str]],
+    fields: set[str],
+    schema: dict[str, str | None],
+    manifest: dict[str, Any],
+    checks: list[AuditCheck],
+    *,
+    run_dir: Path,
+    gate: str,
+) -> None:
+    scope = manifest.get("prediction_scope")
+    split_key_by_scope = {"val_only": "val_subjects", "test_only": "test_subjects"}
+    split_key = split_key_by_scope.get(scope)
+    if split_key is None:
+        return
+    subject_col = schema["subject_id"]
+    trial_col = schema["trial_id"]
+    if subject_col is None or trial_col is None:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="PREDICTION_SCOPE_SPLIT_MATCH",
+            message="prediction scope cannot be checked because subject_id or trial_id is absent",
+            fix="Include subject_id and trial_id in prediction CSV.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+
+    errors: list[str] = []
+    target_split, expected_subjects, expected_trial_keys = split_trial_keys_for_scope(manifest, run_dir, errors=errors)
+    if errors or target_split is None:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="PREDICTION_SCOPE_SPLIT_MATCH",
+            message="prediction scope cannot be checked because split evidence is invalid: " + "; ".join(errors),
+            fix="Point manifest.split_manifest_path to valid split evidence.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    observed_subjects = {str(row[subject_col]) for row in rows}
+    observed_trial_keys = [(str(row[subject_col]), str(row[trial_col])) for row in rows]
+    observed_trial_key_set = set(observed_trial_keys)
+    manifest_subjects_raw = manifest.get("evaluation_subjects")
+    manifest_subjects = {str(item) for item in manifest_subjects_raw} if isinstance(manifest_subjects_raw, list) else set()
+    if not expected_subjects or observed_subjects != expected_subjects:
+        missing = sorted(expected_subjects - observed_subjects)
+        extra = sorted(observed_subjects - expected_subjects)
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="PREDICTION_SCOPE_SPLIT_MATCH",
+            message=f"prediction subjects do not match {split_key}: missing={missing[:5]}, extra={extra[:5]}",
+            fix="Write predictions only for the split declared by prediction_scope.",
+            decision_if_fail="BLOCKED",
+        )
+    elif manifest_subjects and manifest_subjects != expected_subjects:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="PREDICTION_SCOPE_SPLIT_MATCH",
+            message=f"manifest evaluation_subjects do not match {split_key}",
+            fix="Regenerate manifest evaluation_subjects from the audited split.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(
+            checks,
+            rule_id="PREDICTION_SCOPE_SPLIT_MATCH",
+            severity="INFO",
+            status="PASS",
+            message=f"prediction rows match {split_key}",
+        )
+
+    duplicate_prediction_keys = len(observed_trial_keys) != len(observed_trial_key_set)
+    if not expected_trial_keys or duplicate_prediction_keys or observed_trial_key_set != expected_trial_keys:
+        missing = sorted(expected_trial_keys - observed_trial_key_set)
+        extra = sorted(observed_trial_key_set - expected_trial_keys)
+        duplicate_msg = "duplicates present" if duplicate_prediction_keys else "no duplicates"
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="PREDICTION_SCOPE_TRIAL_MATCH",
+            message=f"prediction trial keys do not match split {target_split}: {duplicate_msg}, missing={missing[:5]}, extra={extra[:5]}",
+            fix="Write exactly one prediction row for each trial in the split declared by prediction_scope.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(
+            checks,
+            rule_id="PREDICTION_SCOPE_TRIAL_MATCH",
+            severity="INFO",
+            status="PASS",
+            message=f"prediction trial keys match split {target_split}",
+        )
+
+
 def check_primary_metric(
     checks: list[AuditCheck],
     *,
@@ -1294,7 +1657,7 @@ def check_primary_metric(
         metric_inputs = manifest.get("metric_inputs")
         if isinstance(metric_inputs, dict) and isinstance(metric_inputs.get("score_matrix_csv"), str):
             score_matrix_path = resolve_run_artifact(metric_inputs["score_matrix_csv"], run_dir=run_dir, field="metric_inputs.score_matrix_csv")
-            recomputed = recompute_exact_metric_from_matrix(score_matrix_path, metric_name=metric_name, manifest=manifest, checks=checks)
+            recomputed = recompute_exact_metric_from_matrix(score_matrix_path, metric_name=metric_name, manifest=manifest, checks=checks, run_dir=run_dir)
         else:
             recomputed = recompute_primary_metric_from_predictions(metric_name=metric_name, rows=rows, fields=fields, schema=schema, manifest=manifest)
     except Exception as exc:
@@ -1324,7 +1687,7 @@ def check_primary_metric(
     compare_metric(checks, metric_name=metric_name, recomputed=recomputed, manifest=manifest)
 
 
-def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: dict[str, Any], gate: str, manifest: dict[str, Any]) -> None:
+def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: dict[str, Any], gate: str, manifest: dict[str, Any], run_dir: Path) -> None:
     if not path.exists():
         add_check(
             checks,
@@ -1368,6 +1731,7 @@ def check_prediction_csv(path: Path, checks: list[AuditCheck], *, route_data: di
     add_check(checks, rule_id="PREDICTION_NONEMPTY", severity="INFO", status="PASS", message=f"prediction rows: {len(rows)}")
 
     schema = prediction_schema(fields)
+    check_prediction_scope_against_split(rows, fields, schema, manifest, checks, run_dir=run_dir, gate=gate)
     metric_name = route_primary_metric(route_data)
     if schema["score"] is None:
         if route_uses_top4(route_data):
@@ -1667,19 +2031,50 @@ def check_promotion_audit(route_id: str, promotion_path: Path, checks: list[Audi
         add_check(checks, rule_id="PROMOTION_AUDIT_CANDIDATE_RULES", severity="INFO", status="PASS", message="candidate audit report contains passing critical evidence rules")
 
 
-VALID_RUN_MODES = frozenset({"smoke", "full_subjects"})
-VALID_PREDICTION_SCOPES = frozenset({"val_only"})
+VALID_RUN_MODES = frozenset({"smoke", "full_subjects", "candidate"})
+VALID_PREDICTION_SCOPES = frozenset({"val_only", "test_only"})
 VALID_SCORE_MATRIX_EVIDENCE = frozenset({"genuine", "synthetic"})
 
 
-def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck], *, gate: str) -> None:
-    """Reject candidate/promoted gates for smoke runs, val-only predictions, or synthetic score matrices."""
+def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck], *, gate: str, route_data: dict[str, Any] | None = None) -> None:
+    """Reject candidate/promoted gates for non-candidate modes or weak evidence."""
     strict_gates = {"candidate", "promoted"}
     run_mode = manifest.get("run_mode")
     prediction_scope = manifest.get("prediction_scope")
     score_matrix_evidence = manifest.get("score_matrix_evidence")
+    training = route_data.get("training") if isinstance(route_data, dict) else None
+    adapter_name = training.get("job_adapter") if isinstance(training, dict) else None
+    trainer_name = training.get("trainer") if isinstance(training, dict) else None
+    uses_real_torch_adapter = adapter_name == "torch_classifier" or (
+        trainer_name == "torch_classifier" and adapter_name in {None, ""}
+    )
+    require_current_metadata = uses_real_torch_adapter and gate in strict_gates
 
-    # Absent fields → legacy manifest, skip (not produced by current adapter).
+    if require_current_metadata:
+        missing_current_fields = [
+            field
+            for field in [
+                "run_mode",
+                "prediction_scope",
+                "score_matrix_evidence",
+                "training_epochs",
+                "source_training_epochs",
+                "training_epochs_overridden",
+            ]
+            if field not in manifest
+        ]
+        if missing_current_fields:
+            add_check(
+                checks,
+                rule_id="RUN_GATE_METADATA_REQUIRED",
+                severity="ERROR",
+                status="FAIL",
+                message="torch_classifier candidate manifest is missing run gate metadata: " + ", ".join(missing_current_fields),
+                fix="Regenerate the run with the current real adapter so candidate eligibility metadata is present.",
+                decision_if_fail="BLOCKED",
+            )
+
+    # Absent fields are tolerated only for legacy non-torch_classifier manifests.
     if run_mode is None:
         pass
     elif run_mode not in VALID_RUN_MODES:
@@ -1695,12 +2090,20 @@ def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck
             checks, gate=gate, fail_gate=strict_gates,
             rule_id="RUN_MODE_SMOKE",
             message="smoke runs cannot be used for candidate or promoted gates",
-            fix="Re-run with --mode full_subjects to use all subjects.",
+            fix="Re-run with --mode candidate to use all subjects and held-out test predictions.",
+            decision_if_fail="BLOCKED",
+        )
+    elif run_mode == "full_subjects":
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="RUN_MODE_FULL_SUBJECTS_DIAGNOSTIC",
+            message="full_subjects is an all-subject diagnostic mode and is not candidate-eligible",
+            fix="Re-run with --mode candidate to produce held-out test predictions.",
             decision_if_fail="BLOCKED",
         )
     else:
-        add_check(checks, rule_id="RUN_MODE_FULL_SUBJECTS", severity="INFO", status="PASS",
-                  message="run mode uses all subjects")
+        add_check(checks, rule_id="RUN_MODE_CANDIDATE", severity="INFO", status="PASS",
+                  message="run mode is candidate")
 
     if prediction_scope is None:
         pass
@@ -1717,9 +2120,50 @@ def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck
             checks, gate=gate, fail_gate=strict_gates,
             rule_id="PREDICTION_SCOPE_VAL_ONLY",
             message="val-only predictions cannot be used for candidate or promoted gates",
-            fix="Produce predictions for train/val/test splits before candidate audit.",
+            fix="Produce held-out test predictions before candidate audit.",
             decision_if_fail="BLOCKED",
         )
+    elif prediction_scope == "test_only":
+        add_check(checks, rule_id="PREDICTION_SCOPE_TEST_ONLY", severity="INFO", status="PASS",
+                  message="prediction scope is held-out test only")
+
+    if run_mode == "candidate" and prediction_scope != "test_only":
+        add_warn_or_fail(
+            checks, gate=gate, fail_gate=strict_gates,
+            rule_id="RUN_MODE_SCOPE_MISMATCH",
+            message="candidate mode must declare prediction_scope=test_only",
+            fix="Regenerate manifest with held-out test predictions for candidate mode.",
+            decision_if_fail="BLOCKED",
+        )
+
+    if run_mode == "candidate":
+        source_epochs = manifest.get("source_training_epochs")
+        training_epochs = manifest.get("training_epochs")
+        overridden = manifest.get("training_epochs_overridden")
+        if type(source_epochs) is not int or type(training_epochs) is not int or type(overridden) is not bool:
+            add_warn_or_fail(
+                checks, gate=gate, fail_gate=strict_gates,
+                rule_id="TRAINING_EPOCH_METADATA",
+                message="candidate run must record training_epochs, source_training_epochs, and training_epochs_overridden",
+                fix="Regenerate manifest with explicit candidate training epoch metadata.",
+                decision_if_fail="BLOCKED",
+            )
+        elif overridden is True or training_epochs != source_epochs:
+            add_warn_or_fail(
+                checks, gate=gate, fail_gate=strict_gates,
+                rule_id="TRAINING_EPOCH_OVERRIDE",
+                message="candidate run used a training epoch override",
+                fix="Run candidate mode with the route config training.epochs value before candidate audit.",
+                decision_if_fail="BLOCKED",
+            )
+        else:
+            add_check(
+                checks,
+                rule_id="TRAINING_EPOCHS_MATCH_ROUTE",
+                severity="INFO",
+                status="PASS",
+                message="candidate training epochs match the route config",
+            )
 
     if score_matrix_evidence is None:
         pass
@@ -1741,10 +2185,10 @@ def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck
         )
     else:
         add_check(checks, rule_id="SCORE_MATRIX_GENUINE", severity="INFO", status="PASS",
-                  message="score matrix evidence is genuine (sliding-window crops)")
+                  message="score matrix evidence is genuine (real crop/window scores)")
 
-    # raw_data_sources: full_subjects runs must have raw .mat evidence
-    if run_mode == "full_subjects":
+    # raw_data_sources: full_subjects/candidate runs must have raw .mat evidence.
+    if run_mode in {"full_subjects", "candidate"}:
         raw_sources = manifest.get("raw_data_sources")
         if not isinstance(raw_sources, list) or not raw_sources:
             add_warn_or_fail(
@@ -1755,18 +2199,70 @@ def check_run_gate_eligibility(manifest: dict[str, Any], checks: list[AuditCheck
                 decision_if_fail="BLOCKED",
             )
         else:
-            bad = [s for s in raw_sources if not isinstance(s.get("sha256"), str) or len(s["sha256"]) != 64]
-            if bad:
+            bad_format: list[str] = []
+            bad_sha: list[str] = []
+            missing_files: list[str] = []
+            mismatched_hashes: list[str] = []
+            for idx, source in enumerate(raw_sources):
+                if not isinstance(source, dict):
+                    bad_format.append(f"#{idx}")
+                    continue
+                path_value = source.get("path")
+                sha_value = source.get("sha256")
+                if not isinstance(path_value, str) or not path_value:
+                    bad_format.append(f"#{idx}")
+                    continue
+                if not isinstance(sha_value, str) or SHA256_RE.fullmatch(sha_value) is None:
+                    bad_sha.append(path_value)
+                    continue
+                source_path = Path(path_value)
+                if not source_path.is_absolute():
+                    source_path = ROOT / source_path
+                if not source_path.exists():
+                    missing_files.append(path_value)
+                    continue
+                try:
+                    actual_sha = sha256_file(source_path)
+                except Exception:
+                    missing_files.append(path_value)
+                    continue
+                if actual_sha != sha_value:
+                    mismatched_hashes.append(path_value)
+            if bad_format:
+                add_warn_or_fail(
+                    checks, gate=gate, fail_gate=strict_gates,
+                    rule_id="RAW_DATA_SOURCES_FORMAT",
+                    message=f"{len(bad_format)} raw_data_sources entries are not valid mappings",
+                    fix="Regenerate manifest with path/kind/sha256 fields for each raw .mat source.",
+                    decision_if_fail="BLOCKED",
+                )
+            elif bad_sha:
                 add_warn_or_fail(
                     checks, gate=gate, fail_gate=strict_gates,
                     rule_id="RAW_DATA_SOURCES_SHA256",
-                    message=f"{len(bad)} raw_data_sources entries have invalid sha256",
-                    fix="Regenerate manifest with valid raw .mat sha256 values.",
+                    message=f"{len(bad_sha)} raw_data_sources entries have invalid sha256",
+                    fix="Regenerate manifest with lowercase sha256 values for raw .mat sources.",
+                    decision_if_fail="BLOCKED",
+                )
+            elif missing_files:
+                add_warn_or_fail(
+                    checks, gate=gate, fail_gate=strict_gates,
+                    rule_id="RAW_DATA_SOURCES_AVAILABLE",
+                    message=f"{len(missing_files)} raw_data_sources files are missing or unreadable",
+                    fix="Keep the raw .mat files available at the recorded paths when running candidate audit.",
+                    decision_if_fail="BLOCKED",
+                )
+            elif mismatched_hashes:
+                add_warn_or_fail(
+                    checks, gate=gate, fail_gate=strict_gates,
+                    rule_id="RAW_DATA_SOURCES_SHA256_MATCH",
+                    message=f"{len(mismatched_hashes)} raw_data_sources hashes do not match file contents",
+                    fix="Regenerate manifest after confirming the raw .mat files are unchanged.",
                     decision_if_fail="BLOCKED",
                 )
             else:
                 add_check(checks, rule_id="RAW_DATA_SOURCES_VALID", severity="INFO", status="PASS",
-                          message=f"raw_data_sources records {len(raw_sources)} .mat files with valid sha256")
+                          message=f"raw_data_sources records {len(raw_sources)} .mat files with verified sha256")
 
 
 def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir: Path | None = None, allow_run_local_summary: bool = False) -> dict[str, Any]:
@@ -1839,11 +2335,18 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir:
                 add_check(checks, rule_id="MANIFEST_VALID", severity="INFO", status="PASS", message="manifest is valid")
                 manifest = load_manifest(manifest_path)
                 check_reproducibility_manifest(manifest, checks, gate=gate, root=ROOT)
-                check_run_gate_eligibility(manifest, checks, gate=gate)
+                check_run_gate_eligibility(manifest, checks, gate=gate, route_data=route_data)
                 check_run_dataset_split_evidence(manifest, route_data, run_dir, checks, gate=gate)
                 prediction_csv = manifest.get("prediction_csv")
                 if isinstance(prediction_csv, str) and prediction_csv:
-                    check_prediction_csv(resolve_run_artifact(prediction_csv, run_dir=run_dir, field="prediction_csv"), checks, route_data=route_data, gate=gate, manifest=manifest)
+                    check_prediction_csv(
+                        resolve_run_artifact(prediction_csv, run_dir=run_dir, field="prediction_csv"),
+                        checks,
+                        route_data=route_data,
+                        gate=gate,
+                        manifest=manifest,
+                        run_dir=run_dir,
+                    )
                 else:
                     add_warn_or_fail(
                         checks,
