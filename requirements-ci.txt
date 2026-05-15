@@ -1,0 +1,5 @@
+# Minimal CPU-only audit environment for repository gates and toy CI smoke.
+numpy>=1.23
+PyYAML>=6.0
+pytest>=7.0
+

@@ -18,6 +18,7 @@
 4. `agent_protocols/experiment_audit.md`
 5. `agent_protocols/foundation_usage.md`
 6. `agent_protocols/skill_router.md`
+7. `docs/collaboration_workflow.md`
 
 然后运行仓库 fast gate：
 
@@ -47,10 +48,12 @@ python scripts/repo_doctor.py fast
 - P1/P2/P3 protocol runner manifest materialization。
 - score route 从 component score CSV 到 `score/pred_top4` prediction table 的最小执行入口。
 - Foundation Usage Skill，用于把 dataset/split evidence、prediction/report、run manifest、promotion、registry/cache/monitor 等公共基座路由成稳定 agent 工作流。
+- toy end-to-end audit smoke：`toy_eegnet` 可生成 synthetic dataset/split、prediction、score matrix、metric report、run manifest，并通过 candidate audit，用于 CI 和新人环境验证。
+- route registry / route board：`reports/route_registry.yaml` 记录 route owner/blocker 和共享谨慎修改路径，`reports/route_board.md` 从 route config 与 registry 生成。
 
 仍属于预留或后续实现：
 
-- 数据集专用 loader 和真实训练 job adapter。
+- 真实 HUST EEG dataset loader 和真实训练 job adapter。
 - 图模型、heads、复杂训练 callback。
 - candidate 级真实实验结果。
 
@@ -61,6 +64,12 @@ python scripts/plan_evaluation_protocol.py --protocol p1 --route-config configs/
 python scripts/plan_evaluation_protocol.py --protocol p2 --route-config configs/routes/models/ea_deformer.yaml
 python scripts/plan_evaluation_protocol.py --protocol p3 --route-config configs/routes/models/ea_deformer.yaml --grid-size ea_deformer=6
 python scripts/run_evaluation_protocol.py --protocol p2 --route-config configs/routes/models/ea_deformer.yaml --run-dir outputs/protocol_runs/<run_id>
+```
+
+协议 runner 可用 `--execute` 驱动当前支持的 job adapter。当前只保证 toy route：
+
+```bash
+python scripts/run_evaluation_protocol.py --protocol p1 --route-config configs/routes/models/toy_eegnet.yaml --run-dir outputs/protocol_runs/toy_p1 --seed 42 --n-folds 2 --execute --execute-gate smoke --max-execute-jobs 1
 ```
 
 Torch 模型 forward smoke 不在默认 fast gate 中运行；改动模型路径时由 `.github/workflows/model_smoke.yml` 触发，也可以手动运行：

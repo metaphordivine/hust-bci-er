@@ -547,6 +547,28 @@ def dataset_manifest_has_evidence(dataset_data: dict[str, Any]) -> bool:
     return has_data_sources and has_checksums
 
 
+def dataset_label_scope_errors(dataset_data: dict[str, Any]) -> list[str]:
+    scope = dataset_data.get("label_scope")
+    if not isinstance(scope, dict):
+        return ["label_scope must be a mapping"]
+    allowed = {"available", "available_for_audit_only", "hidden", "hidden_until_audit", "not_applicable"}
+    required = {"train", "val", "test", "pseudo_public"}
+    errors: list[str] = []
+    missing = sorted(required - set(scope))
+    if missing:
+        errors.append("label_scope missing keys: " + ", ".join(missing))
+    for key, value in sorted(scope.items()):
+        if key not in required:
+            errors.append(f"label_scope.{key} is not a known split scope")
+        elif value not in allowed:
+            errors.append(f"label_scope.{key} has unsupported value: {value}")
+    if scope.get("pseudo_public") == "available":
+        errors.append("label_scope.pseudo_public must not be available")
+    if scope.get("test") == "available":
+        errors.append("label_scope.test should be hidden or available_for_audit_only")
+    return errors
+
+
 def dataset_checksum_errors(dataset_data: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
     schema_errors: list[str] = []
     coverage_errors: list[str] = []
@@ -645,6 +667,22 @@ def add_dataset_checksum_checks(checks: list[AuditCheck], dataset_data: dict[str
         add_check(checks, rule_id="RUN_DATASET_CHECKSUM_EXTRA", severity="INFO", status="PASS", message="dataset checksum manifest has no extra paths")
 
 
+def add_dataset_label_scope_check(checks: list[AuditCheck], dataset_data: dict[str, Any], *, gate: str) -> None:
+    errors = dataset_label_scope_errors(dataset_data)
+    if errors:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="RUN_DATASET_LABEL_SCOPE",
+            message="dataset label scope is invalid: " + "; ".join(errors[:5]),
+            fix="Declare label_scope for train/val/test/pseudo_public and keep public inference labels hidden or audit-only.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(checks, rule_id="RUN_DATASET_LABEL_SCOPE", severity="INFO", status="PASS", message="dataset label scope is explicit")
+
+
 def check_run_dataset_split_evidence(
     manifest: dict[str, Any],
     route_data: dict[str, Any],
@@ -712,6 +750,7 @@ def check_run_dataset_split_evidence(
             else:
                 add_check(checks, rule_id="RUN_DATASET_EVIDENCE_VALID", severity="INFO", status="PASS", message="run dataset evidence is verifiable")
             if dataset_data is not None:
+                add_dataset_label_scope_check(checks, dataset_data, gate=gate)
                 add_dataset_checksum_checks(checks, dataset_data, gate=gate)
 
     errors = []

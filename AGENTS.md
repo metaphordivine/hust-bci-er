@@ -12,7 +12,8 @@ Before code, experiment, or report changes:
 4. Read `agent_protocols/experiment_audit.md`.
 5. Read `agent_protocols/foundation_usage.md`.
 6. Read `agent_protocols/skill_router.md`.
-7. Read this file.
+7. Read `docs/collaboration_workflow.md`.
+8. Read this file.
 
 ## Skill Routing
 

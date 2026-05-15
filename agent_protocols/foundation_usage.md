@@ -27,6 +27,7 @@ right foundation pieces, then calls the repository gates.
 | Subject split becomes evidence | Split Manifest Builder | `scripts/build_split_manifest.py` / `hust_bci_er.data.split_builder` | `configs/splits/<split_id>.yaml` with subject lists and `trial_rows` | No subject/original-trial leakage plus fast gate |
 | Dataset evidence needs sanity check | Lightweight Data QA | `scripts/data_qa_report.py` / `hust_bci_er.data.qa` | Markdown/JSON QA summary for subject, trial, crop, label, checksum gaps | QA report has no blocking gaps for the intended gate |
 | P1/P2/P3 should become runnable jobs | Protocol Runner Skeleton | `scripts/plan_evaluation_protocol.py`, `scripts/run_evaluation_protocol.py` | `protocol_run_manifest.json` and job split contracts | Runner manifest exists; do not call it candidate evidence |
+| Toy end-to-end platform smoke | Toy Route Job Adapter | `scripts/launch_reproducible.py`, `scripts/train_route.py`, `scripts/toy_experiment_audit.py` | synthetic dataset/split evidence, predictions, score matrix, metric report, run manifest, candidate audit report under `outputs/` | toy candidate audit passes; do not call it real EEG evidence |
 | Real run needs reproducibility lock | Deterministic Utilities + Run Manifest Writer | `hust_bci_er.training.reproducibility`, `hust_bci_er.audit.run_manifest.write_run_manifest` | `manifest.json` with git commit, config snapshot hash, dataset/split hash, command, seed, environment, artifact hashes | `repo_doctor.py experiment --gate candidate` when run artifacts exist |
 | Model/component output needs a contract | Component Artifact Contract | `hust_bci_er.contracts.artifacts` | component score CSV with `component_id`, subject/trial/crop metadata, score, optional `y_true` | Contract validator passes |
 | Prediction output needs a contract | Prediction Writer | `hust_bci_er.evaluation.prediction_writer` | prediction CSV with `subject_id`, `trial_id`, optional `crop_id`, `score`, `pred_top4`, `y_true`/`y_pred` as appropriate | Audit can recompute the declared primary metric |
@@ -82,6 +83,12 @@ route config -> plan_evaluation_protocol.py -> run_evaluation_protocol.py -> run
 
 The runner manifest is a job plan and lock. It is not a prediction table, score
 matrix, or candidate audit report.
+
+For the toy route only, the runner can execute one or more supported jobs:
+
+```bash
+python scripts/run_evaluation_protocol.py --protocol p1 --route-config configs/routes/models/toy_eegnet.yaml --run-dir outputs/protocol_runs/toy_p1 --seed 42 --n-folds 2 --execute --execute-gate smoke --max-execute-jobs 1
+```
 
 ### Artifact First
 

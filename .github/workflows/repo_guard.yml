@@ -24,3 +24,6 @@ jobs:
 
       - name: Run fast repository doctor
         run: python scripts/repo_doctor.py fast
+
+      - name: Check whitespace
+        run: git diff --check

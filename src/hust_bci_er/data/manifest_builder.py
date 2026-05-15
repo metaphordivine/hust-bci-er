@@ -92,6 +92,7 @@ def build_dataset_manifest(
     base_dir: Path,
     description: str = "",
     require_files: bool = True,
+    label_scope: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     trial_rows, checksums, missing_sources = trial_index_rows(rows, base_dir=base_dir, require_files=require_files)
     checksum_paths = {item["path"] for item in checksums}
@@ -110,6 +111,15 @@ def build_dataset_manifest(
         "dataset_version": dataset_version,
         "status": status,
         "description": description or "Built from raw data index.",
+        "label_scope": dict(
+            label_scope
+            or {
+                "train": "available",
+                "val": "available",
+                "test": "available_for_audit_only",
+                "pseudo_public": "hidden_until_audit",
+            }
+        ),
         "subject_ids": subjects,
         "n_subjects": len(subjects),
         "n_trials": len(trials),

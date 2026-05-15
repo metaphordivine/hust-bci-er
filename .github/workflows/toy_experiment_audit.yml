@@ -1,0 +1,41 @@
+name: toy-experiment-audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "configs/datasets/toy_eeg_v1.yaml"
+      - "configs/routes/models/toy_eegnet.yaml"
+      - "configs/splits/toy_subject_holdout_seed42.yaml"
+      - "scripts/train_route.py"
+      - "scripts/run_route_job.py"
+      - "scripts/toy_experiment_audit.py"
+      - "scripts/launch_reproducible.py"
+      - "scripts/audit_experiment.py"
+      - "src/hust_bci_er/audit/**"
+      - "src/hust_bci_er/data/**"
+      - "src/hust_bci_er/evaluation/**"
+      - "src/hust_bci_er/training/**"
+      - ".github/workflows/toy_experiment_audit.yml"
+
+jobs:
+  toy-experiment-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install CPU audit environment
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run toy candidate audit
+        run: |
+          python scripts/launch_reproducible.py --seed 42 -- python scripts/toy_experiment_audit.py --run-dir outputs/toy_eegnet/ci
+

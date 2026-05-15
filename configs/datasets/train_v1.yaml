@@ -1,5 +1,10 @@
 dataset_version: train_v1
 status: declared_without_raw_data_index
 description: Dataset manifest placeholder. Fill data index and checksum evidence before candidate review.
+label_scope:
+  train: available
+  val: available
+  test: available_for_audit_only
+  pseudo_public: hidden_until_audit
 data_sources: []
 checksum_manifest: []

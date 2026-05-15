@@ -1,0 +1,12 @@
+dataset_version: toy_eeg_v1
+status: generated_by_toy_adapter
+description: Synthetic two-subject EEG-like dataset generated under each run directory by scripts/train_route.py.
+label_scope:
+  train: available
+  val: available
+  test: available_for_audit_only
+  pseudo_public: hidden_until_audit
+data_sources: []
+checksum_manifest: []
+trial_index: []
+

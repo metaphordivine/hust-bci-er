@@ -43,7 +43,12 @@ def require_route_mapping(data: Mapping[str, Any], *path: str) -> Mapping[str, A
 
 
 def repo_root_from_route(route_config_path: Path) -> Path:
-    return route_config_path.resolve().parents[3]
+    current = route_config_path.resolve().parent
+    markers = ("pyproject.toml", "AGENTS.md")
+    for candidate in (current, *current.parents):
+        if all((candidate / marker).exists() for marker in markers) and (candidate / "configs" / "routes" / "models").is_dir():
+            return candidate
+    raise ValueError(f"could not find repository root for route config: {route_config_path}")
 
 
 def git_commit(root: Path) -> str:

@@ -29,6 +29,7 @@ def test_required_first_reads_keep_foundation_protocol_in_order():
         "agent_protocols/experiment_audit.md",
         "agent_protocols/foundation_usage.md",
         "agent_protocols/skill_router.md",
+        "docs/collaboration_workflow.md",
         "AGENTS.md",
     ]
     section = read("agent_protocols/skill_router.md").split("## Required Documents", 1)[1].split("## Skill Rules", 1)[0]

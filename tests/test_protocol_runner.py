@@ -181,6 +181,8 @@ def test_write_run_manifest_requires_locked_pythonhashseed_for_default_determini
 def test_write_run_manifest_reports_missing_route_fields(monkeypatch, tmp_path):
     lock_pythonhashseed(monkeypatch, 42)
     root = tmp_path
+    (root / "pyproject.toml").write_text("[project]\nname = 'tmp'\n", encoding="utf-8")
+    (root / "AGENTS.md").write_text("# tmp\n", encoding="utf-8")
     route = root / "configs" / "routes" / "models" / "bad.yaml"
     route.parent.mkdir(parents=True)
     route.write_text(
@@ -372,6 +374,28 @@ def test_reproducibility_rejects_missing_pythonhashseed():
 
     assert proc.returncode != 0
     assert "restart Python with PYTHONHASHSEED=123" in proc.stderr
+
+
+def test_launch_reproducible_sets_hash_seed_for_child():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/launch_reproducible.py",
+            "--seed",
+            "77",
+            "--",
+            sys.executable,
+            "-c",
+            "import os; print(os.environ['PYTHONHASHSEED'])",
+        ],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "77"
 
 
 def test_crop_policy_random_and_worst_are_deterministic():

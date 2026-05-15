@@ -4,4 +4,8 @@ description: HUST BCI emotion-recognition dataset schema placeholder.
 raw_data_required: true
 labels_required_for_training: true
 public_private_labels_allowed: false
-
+label_scope:
+  train: available
+  val: available
+  test: available_for_audit_only
+  pseudo_public: hidden_until_audit
