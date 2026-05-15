@@ -1,0 +1,18 @@
+# Coarse-to-fine hyperparameter search space for sliding-window route family.
+# All sliding-window models share identical training config, so this
+# search space applies to eegnet, deformer_lite, conformer_lite, srfnet.
+
+parameters:
+  training.optimizer.lr:
+    # log-scale sweep: wide coverage with just 3 points
+    coarse: [0.0001, 0.001, 0.01]
+    fine: [0.0005, 0.00075, 0.001, 0.0025, 0.005]
+  training.optimizer.weight_decay:
+    coarse: [0.0, 0.01, 0.1]
+    fine: [0.0, 0.005, 0.01, 0.02, 0.05]
+  training.batch_size:
+    coarse: [16, 32]
+    fine: [16, 32]
+  training.grad_clip_norm:
+    coarse: [0.5, 1.0]
+    fine: [0.5, 1.0, 1.5]
