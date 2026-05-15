@@ -165,6 +165,7 @@ def run_toy_route(
     split_id: str | None = None,
     seed: int | None = None,
     command: str | list[str] = "python scripts/train_route.py",
+    **__,
 ) -> ToyRunArtifacts:
     route_config_path = route_config_path.resolve()
     route_data = load_mapping(route_config_path)

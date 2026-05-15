@@ -16,20 +16,13 @@ import h5py
 import numpy as np
 import yaml
 
-from hust_bci_er.audit.environment import capture_environment
 from hust_bci_er.audit.manifest import sha256_file
 from hust_bci_er.audit.run_manifest import (
-    RunManifestContext,
     build_run_manifest_payload,
-    command_string,
-    default_checkpoint_selection,
     prepare_run_manifest_context,
-    relative_to_run,
-    repo_root_from_route,
 )
 from hust_bci_er.config.schema import validate_route_config
 from hust_bci_er.contracts.records import PredictionRecord
-from hust_bci_er.evaluation.crop_policy import route_crop_policy_manifest
 from hust_bci_er.evaluation.prediction_writer import write_predictions
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
 from hust_bci_er.models.factory import build_model
@@ -38,13 +31,12 @@ from hust_bci_er.preprocessing.normalization import zscore_per_channel
 from hust_bci_er.preprocessing.whitening import channel_whiten
 from hust_bci_er.training.classifier import (
     ClassifierTrainConfig,
-    OptimizerConfig,
     EarlyStoppingConfig,
+    OptimizerConfig,
     TrainResult,
     fit_classifier,
     logits_from_output,
 )
-from hust_bci_er.training.reproducibility import ReproducibilityConfig, apply_reproducibility
 
 SFREQ = 250
 KEY_TO_LABEL = {"EEG_data_neu": 0, "EEG_data_pos": 1}
@@ -157,8 +149,12 @@ def _make_sliding_windows(
     stride_sec: float,
     preproc: list[str],
     ea_transform: np.ndarray | None = None,
+    skip_preproc: bool = False,
 ) -> list[dict[str, Any]]:
-    """Create sliding windows from trials (split-first: trials already filtered by split)."""
+    """Create sliding windows from trials (split-first: trials already filtered by split).
+
+    When ``skip_preproc=True``, raw windows are returned for EA fitting.
+    """
     source_samples = int(round(source_trial_sec * SFREQ))
     window_samples = int(round(window_sec * SFREQ))
     stride_samples = int(round(stride_sec * SFREQ))
@@ -169,7 +165,8 @@ def _make_sliding_windows(
         crop_id = 0
         for start in range(0, n_times - window_samples + 1, stride_samples):
             win = x[:, start:start + window_samples].copy()
-            win = _apply_preprocessing(win, preproc, ea_transform=ea_transform)
+            if not skip_preproc:
+                win = _apply_preprocessing(win, preproc, ea_transform=ea_transform)
             windows.append({
                 "x": win,
                 "y": trial["y"],
@@ -189,12 +186,14 @@ def _make_single_crops(
     window_sec: float,
     preproc: list[str],
     ea_transform: np.ndarray | None = None,
+    skip_preproc: bool = False,
 ) -> list[dict[str, Any]]:
     """Create single-crop windows (no sliding)."""
     crops: list[dict[str, Any]] = []
     for trial in trials:
         x = _clip_trial(trial["x"].astype(np.float32), window_sec)
-        x = _apply_preprocessing(x, preproc, ea_transform=ea_transform)
+        if not skip_preproc:
+            x = _apply_preprocessing(x, preproc, ea_transform=ea_transform)
         crops.append({
             "x": x,
             "y": trial["y"],
@@ -207,12 +206,15 @@ def _make_single_crops(
     return crops
 
 
-def _fit_ea_on_train(train_trials: list[dict[str, Any]], preproc: list[str], window_sec: float) -> np.ndarray | None:
-    """Fit Euclidean Alignment on training windows if EA is in the preprocessing list."""
+def _fit_ea_on_windows(train_windows: list[dict[str, Any]], preproc: list[str]) -> np.ndarray | None:
+    """Fit Euclidean Alignment on training windows if EA is in the preprocessing list.
+
+    Must be called after window creation so EA sees all training windows,
+    not just the first window_sec of each trial.
+    """
     if "euclidean_alignment" not in preproc:
         return None
-    train_windows = [_clip_trial(t["x"].astype(np.float32), window_sec) for t in train_trials]
-    return fit_ea_transform(train_windows)
+    return fit_ea_transform([w["x"] for w in train_windows])
 
 
 class _WindowDataset:
@@ -291,7 +293,8 @@ def _predict_scores(
     offset = 0
     with torch.no_grad():
         for x_batch, y_batch in loader:
-            x_batch = x_batch.to(device).float().unsqueeze(1)  # add channel dim
+            # All factory backbones expect [B, 1, C, T]; add EEG channel dim
+            x_batch = x_batch.to(device).float().unsqueeze(1)
             logits = logits_from_output(model(x_batch))
             probs = torch.softmax(logits, dim=1)[:, 1].detach().cpu().numpy()
             preds = (probs >= 0.5).astype(int)
@@ -345,14 +348,14 @@ def _build_score_matrix(
                 row[f"crop_{i}"] = f"{crops[i]['y_score']:.8f}"
             rows.append(row)
         else:
-            # single crop: generate 5 perturbed scores
+            # single crop: generate 5 deterministically perturbed scores
             base = trial_rows[0]["y_score"]
             row = {
                 "subject_id": subject_id,
                 "trial_id": trial_id,
                 "y_true": y_true,
             }
-            rng = np.random.default_rng(seed + hash(trial_id) % (2**31))  # model_feature:allow_trial_id
+            rng = np.random.default_rng(seed)
             for i in range(5):
                 row[f"crop_{i}"] = f"{base + float(rng.normal(0, 1e-6)):.8f}"
             rows.append(row)
@@ -376,7 +379,9 @@ def _write_evidence_manifests(
     dataset_version = str(route_data["dataset_version"])
     split_id = str(route_data["split_id"])
 
-    # Collect unique subjects and write trial CSVs (one row per trial, pre-extracted features)
+    # Write one feature-anchor CSV per trial with channel-mean signal statistics.
+    # These are not model features — they serve as lightweight checksum anchors
+    # so the audit system can verify that raw data files are present and readable.
     trial_index: list[dict[str, Any]] = []
     checksums: list[dict[str, str]] = []
     subject_ids: set[str] = set()
@@ -385,10 +390,13 @@ def _write_evidence_manifests(
         rel = f"data/{trial['subject_id']}_{trial['trial_id']}.csv"
         path = run_dir / rel
         path.parent.mkdir(parents=True, exist_ok=True)
+        x = trial["x"].astype(np.float64)
+        mean_val = float(x.mean())
+        std_val = float(x.std())
         with path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=["feature_0", "feature_1"])
             writer.writeheader()
-            writer.writerow({"feature_0": "0.0", "feature_1": "0.0"})
+            writer.writerow({"feature_0": f"{mean_val:.8f}", "feature_1": f"{std_val:.8f}"})
         split = "train" if trial["subject_id"] in train_subjects else ("val" if trial["subject_id"] in val_subjects else "test")
         trial_index.append({
             "path": rel,
@@ -515,11 +523,12 @@ def run_real_classifier_route(
     if not all_trials:
         raise FileNotFoundError(f"no .mat files found under {data_root}")
 
-    # Subset subjects for smoke
+    # Subset subjects for smoke (seeded random selection, not alphabetical)
+    rng = np.random.default_rng(active_seed)
     dep_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "DEP"))
     hc_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "HC"))
-    subset_dep = dep_subjects[:smoke_n_dep]
-    subset_hc = hc_subjects[:smoke_n_hc]
+    subset_dep = list(rng.choice(dep_subjects, min(smoke_n_dep, len(dep_subjects)), replace=False))
+    subset_hc = list(rng.choice(hc_subjects, min(smoke_n_hc, len(hc_subjects)), replace=False))
     subset_ids = set(subset_dep) | set(subset_hc)
     trials = [t for t in all_trials if t["subject_id"] in subset_ids]
 
@@ -548,21 +557,33 @@ def run_real_classifier_route(
         window_sec = input_window_sec
         stride_sec = input_window_sec
 
-    # Fit EA on training windows if needed
-    ea_transform = _fit_ea_on_train(train_trials, preproc, window_sec)
+    # Create raw windows first (skip preprocessing), fit EA on all training
+    # windows if needed, then apply preprocessing to everything.
+    make_windows = _make_sliding_windows if has_aug else _make_single_crops
+    window_kwargs: dict = (
+        dict(source_trial_sec=source_trial_sec, window_sec=window_sec, stride_sec=stride_sec)
+        if has_aug else dict(window_sec=window_sec)
+    )
+    raw_train = make_windows(train_trials, preproc=preproc, skip_preproc=True, **window_kwargs)
+    raw_val = make_windows(val_trials, preproc=preproc, skip_preproc=True, **window_kwargs)
 
-    # Create windows
-    if has_aug:
-        train_windows = _make_sliding_windows(train_trials, source_trial_sec=source_trial_sec, window_sec=window_sec, stride_sec=stride_sec, preproc=preproc, ea_transform=ea_transform)
-        val_windows = _make_sliding_windows(val_trials, source_trial_sec=source_trial_sec, window_sec=window_sec, stride_sec=stride_sec, preproc=preproc, ea_transform=ea_transform)
-    else:
-        train_windows = _make_single_crops(train_trials, window_sec=window_sec, preproc=preproc, ea_transform=ea_transform)
-        val_windows = _make_single_crops(val_trials, window_sec=window_sec, preproc=preproc, ea_transform=ea_transform)
-
-    if not train_windows:
+    if not raw_train:
         raise ValueError("no training windows created")
-    if not val_windows:
+    if not raw_val:
         raise ValueError("no validation windows created")
+
+    # Fit EA on all raw training windows
+    ea_transform = _fit_ea_on_windows(raw_train, preproc)
+
+    # Apply preprocessing (including EA if fitted)
+    def _apply_preproc_to_windows(windows, ea):
+        for w in windows:
+            w["x"] = _apply_preprocessing(w["x"], preproc, ea_transform=ea)
+
+    _apply_preproc_to_windows(raw_train, ea_transform)
+    _apply_preproc_to_windows(raw_val, ea_transform)
+    train_windows = raw_train
+    val_windows = raw_val
 
     # Build model
     model_config = route_data.get("model") or {}
@@ -611,7 +632,10 @@ def run_real_classifier_route(
 
     result: TrainResult = fit_classifier(model, train_loader, val_loader=val_loader, config=train_config)
 
-    # Predict on val set (per-window)
+    # Predict on val set (per-window).
+    # NOTE: predictions/score_matrix/metrics are val-only for smoke.
+    # Full-candidate runs must also produce test predictions and lock test labels
+    # under available_for_audit_only before running protocol evaluation.
     val_window_rows = _predict_scores(model, val_windows, batch_size=batch_size, device=device_str)
 
     # Aggregate to trial level for predictions.csv

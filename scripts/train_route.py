@@ -52,21 +52,17 @@ def main(argv: list[str] | None = None) -> int:
 
     run_dir = args.run_dir or default_run_dir(args.route)
     adapter = SUPPORTED_ADAPTERS[adapter_name]
-    adapter_kwargs: dict = dict(
+    artifacts = adapter(
         route_config_path=args.route,
         run_dir=run_dir,
         split_id=args.split_id,
         seed=args.seed,
         command=["python", "scripts/train_route.py", "--route", args.route.as_posix(), "--run-dir", run_dir.as_posix()],
+        smoke_epochs=args.smoke_epochs,
+        smoke_n_dep=args.smoke_dep,
+        smoke_n_hc=args.smoke_hc,
+        device=args.device,
     )
-    if adapter_name == "torch_classifier":
-        adapter_kwargs.update(
-            smoke_epochs=args.smoke_epochs,
-            smoke_n_dep=args.smoke_dep,
-            smoke_n_hc=args.smoke_hc,
-            device=args.device,
-        )
-    artifacts = adapter(**adapter_kwargs)
     print(
         json.dumps(
             {
