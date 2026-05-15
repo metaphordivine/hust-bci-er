@@ -258,6 +258,8 @@ P3：
 `plan_evaluation_protocol.py` 只生成计划，不训练，不读取标签，不生成结果。  
 `run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息；真实 candidate 结果应由 `run_candidate_route.py` 按 route 默认训练轮数生成，并由 `repo_doctor.py experiment --gate candidate` 审计。真实数据根目录通过 `--data-root` 或 `HUST_BCI_ER_DATA_ROOT` 提供，`.mat` 文件必须是 HDF5/v7.3 格式。带 `--epochs-override` 的运行只用于链路验证，会被 candidate/promoted gate 阻止。
 
+无 sliding-window augmentation 的 exact-metric route（例如 `ea_deformer`）在 candidate 模式下不是普通单 crop 证据：adapter 会为 held-out test trial 生成 5 个不重叠 fixed crops 写入 `score_matrix.csv`，并要求 dataset manifest 中的 `crop_ids/window_start_secs` 与之对齐。原始 trial 必须至少覆盖 `5 * input_window_sec` 秒；`predictions.csv` 的 trial-level score 是这些 fixed crops 的均值，审计主指标以 score matrix 复算为准。
+
 后续要提交真实 candidate 结论时，必须具备：
 
 ```text

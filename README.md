@@ -91,6 +91,7 @@ python scripts/launch_reproducible.py --seed 42 -- \
 
 `smoke` 和 `full_subjects` 都是诊断模式，不能作为 candidate 证据。
 带 `--epochs-override` 的 candidate run 只适合验证链路，candidate/promoted gate 会阻止它作为正式证据。
+对 `ea_deformer` 这类无 sliding-window augmentation、但主指标为 `exact_single_crop_expected_BA` 的真实 candidate route，adapter 会为 score matrix evidence 从每个 held-out test trial 切出 5 个不重叠固定 crop。因此原始 trial 至少需要 `5 * input_window_sec` 秒；`ea_deformer` 的 `input_window_sec: 10` 对应每个 trial 至少 50 秒。此时 `predictions.csv` 的 trial-level `y_score` 是这 5 个 fixed crops 的 `mean_score` 聚合，主指标仍由 `score_matrix.csv` 复算。
 
 ## 实验审计
 
