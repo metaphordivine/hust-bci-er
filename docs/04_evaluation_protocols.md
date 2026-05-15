@@ -196,6 +196,23 @@ P3
 
 P3 是最贵的，不是默认入口。
 
+## 滑动窗口路线家族
+
+`sliding_window_conformer_lite`、`sliding_window_deformer_lite`、`sliding_window_eegnet`、`sliding_window_srfnet` 共享同一套 split-first 滑动窗口基线：
+
+```text
+augmentation.name: split_first_sliding_window
+source_trial_sec: 10
+window_sec: 6
+stride_sec: 1
+apply_to_splits: [train, val, test]
+aggregate_to_trial.method: majority_vote
+aggregate_to_trial.tie_break: mean_score
+inference.crop_policy: sliding_window_vote
+```
+
+这组 route 只应该在 `route_id` 和 `model.name` 上不同；如果窗口长度、stride、聚合方式或 tie-break 变化，应作为整个家族基线变更同步更新四个 route config。
+
 ## 输出应该怎么解释
 
 P1：
