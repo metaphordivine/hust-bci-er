@@ -24,18 +24,11 @@ from hust_bci_er.config.schema import validate_route_config
 from hust_bci_er.contracts.records import PredictionRecord
 from hust_bci_er.evaluation.prediction_writer import write_predictions
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
-from hust_bci_er.models.factory import build_model
+# build_model and classifier imports are lazy (inside run_real_classifier_route / _predict_scores)
+# so that importing this module does not require torch to be installed.
 from hust_bci_er.preprocessing.euclidean_alignment import apply_ea_transform, fit_ea_transform
 from hust_bci_er.preprocessing.normalization import zscore_per_channel
 from hust_bci_er.preprocessing.whitening import channel_whiten
-from hust_bci_er.training.classifier import (
-    ClassifierTrainConfig,
-    EarlyStoppingConfig,
-    OptimizerConfig,
-    TrainResult,
-    fit_classifier,
-    logits_from_output,
-)
 
 SFREQ = 250
 KEY_TO_LABEL = {"EEG_data_neu": 0, "EEG_data_pos": 1}
@@ -293,6 +286,7 @@ def _predict_scores(
     """Run inference and return per-window scores."""
     import torch
     from torch.utils.data import DataLoader
+    from hust_bci_er.training.classifier import logits_from_output
 
     loader = DataLoader(_WindowDataset(windows), batch_size=batch_size, shuffle=False, num_workers=0)
     model.eval()
@@ -518,6 +512,14 @@ def run_real_classifier_route(
     """
     import torch
     from torch.utils.data import DataLoader
+    from hust_bci_er.models.factory import build_model
+    from hust_bci_er.training.classifier import (
+        ClassifierTrainConfig,
+        EarlyStoppingConfig,
+        OptimizerConfig,
+        TrainResult,
+        fit_classifier,
+    )
 
     route_config_path = route_config_path.resolve()
     route_data = yaml.safe_load(route_config_path.read_text(encoding="utf-8")) or {}
