@@ -348,7 +348,7 @@ def materialize_protocol_run(
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     plan, jobs = build_protocol_jobs(protocol, route_config_paths, **kwargs)
-    trial_rows = hust_mat_trial_index(data_root) if data_root is not None else None
+    trial_rows = hust_mat_trial_index(data_root) if (data_root is not None and protocol == "p1") else None
     jobs = materialize_job_splits(jobs, run_dir=run_dir, trial_rows=trial_rows)
     experiment_gate_job_ids = [job.job_id for job in jobs if "predictions.csv" in job.expected_artifacts]
     artifact_only_job_ids = [job.job_id for job in jobs if job.job_id not in set(experiment_gate_job_ids)]
@@ -373,6 +373,66 @@ def materialize_protocol_run(
     return manifest
 
 
+def _mode_for_gate(gate: str, epochs_override: int | None) -> str:
+    """Derive the route-job run_mode from the execution gate.
+
+    Smoke gate uses ``full_subjects`` mode to avoid candidate-only
+    constraints (test-only prediction scope, epoch override rejection).
+    Candidate gate always uses ``candidate`` mode.
+    """
+    if gate == "smoke":
+        return "full_subjects"
+    return "candidate"
+
+
+def _execute_artifact_job(
+    job: Mapping[str, Any],
+    *,
+    root: Path,
+    run_manifest: Path,
+    effective_device: str,
+    data_root: Path | None,
+    epochs_override: int | None,
+) -> dict[str, Any]:
+    """Execute an artifact-only protocol job through the artifact-job adapter."""
+    job_id = str(job.get("job_id", ""))
+    run_dir = run_manifest.parent / "job_runs" / job_id
+
+    command = [
+        sys.executable,
+        "scripts/launch_reproducible.py",
+        "--seed",
+        str(job["seed"]),
+        "--",
+        sys.executable,
+        "scripts/run_artifact_job.py",
+        "--protocol-run",
+        str(run_manifest),
+        "--job-id",
+        job_id,
+        "--device",
+        effective_device,
+    ]
+    if data_root:
+        command.extend(["--data-root", str(data_root)])
+    if epochs_override is not None:
+        command.extend(["--epochs-override", str(int(epochs_override))])
+
+    proc = subprocess.run(command, cwd=root, text=True, capture_output=True)
+    return {
+        "job_id": job_id,
+        "route_config": str(job.get("route_config", "")),
+        "run_dir": str(run_dir),
+        "status": "EXECUTED_ARTIFACT" if proc.returncode == 0 else "FAILED_ARTIFACT",
+        "command_returncode": proc.returncode,
+        "audit_gate": None,
+        "audit_returncode": None,
+        "requested_device": effective_device,
+        "stdout_tail": proc.stdout[-4000:] if proc.stdout else "",
+        "stderr_tail": proc.stderr[-4000:] if proc.stderr else "",
+    }
+
+
 def execute_protocol_jobs(
     manifest: Mapping[str, Any],
     *,
@@ -382,8 +442,15 @@ def execute_protocol_jobs(
     data_root: Path | None = None,
     device: str = "auto",
     epochs_override: int | None = None,
+    allow_artifact_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """Execute prediction-producing jobs through the stable route-job adapter."""
+    """Execute prediction-producing jobs through the stable route-job adapter.
+
+    When *allow_artifact_only* is True, P2/P3 artifact-only jobs
+    (train_holdout_model, inner_select) are executed through the
+    artifact-job adapter.  Candidate-grade P2/P3 evidence still needs
+    formal adapter review before promotion.
+    """
     if gate == "candidate" and epochs_override is not None:
         raise ValueError("epochs_override cannot be used with candidate gate")
     effective_device = str(device if str(device) != "auto" else manifest.get("default_execute_device") or "auto")
@@ -404,31 +471,36 @@ def execute_protocol_jobs(
     jobs = [job for job in manifest.get("jobs", []) if isinstance(job, Mapping)]
     runnable = [job for job in jobs if "predictions.csv" in job.get("expected_artifacts", [])]
     artifact_only = [job for job in jobs if "predictions.csv" not in job.get("expected_artifacts", [])]
-    if gate == "candidate" and artifact_only:
+    if gate == "candidate" and artifact_only and not allow_artifact_only:
         skipped = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
         raise ValueError(
             "candidate protocol execution cannot skip artifact-only training/selection jobs; "
-            "P2/P3 candidate execution needs a formal adapter for these protocol stages first: "
+            "P2/P3 candidate execution needs a formal adapter for these protocol stages first "
+            "(or use --allow-artifact-only for diagnostic execution): "
             f"{skipped}"
         )
     if max_jobs is not None:
         runnable = runnable[: int(max_jobs)]
-    results: list[dict[str, Any]] = [
-        {
-            "job_id": str(job.get("job_id", "")),
-            "route_config": str(job.get("route_config", "")),
-            "run_dir": None,
-            "status": "SKIPPED_ARTIFACT_ONLY",
-            "reason": "--execute currently runs prediction-producing jobs only; this artifact-only job must be produced by the formal training/selection adapter.",
-            "command_returncode": None,
-            "audit_gate": gate,
-            "audit_returncode": None,
-            "stdout_tail": "",
-            "stderr_tail": "",
-            "requested_device": effective_device,
-        }
-        for job in artifact_only
-    ]
+
+    results: list[dict[str, Any]] = []
+    for job in artifact_only:
+        if allow_artifact_only:
+            result = _execute_artifact_job(job, root=root, run_manifest=run_manifest, effective_device=effective_device, data_root=data_root, epochs_override=epochs_override)
+        else:
+            result = {
+                "job_id": str(job.get("job_id", "")),
+                "route_config": str(job.get("route_config", "")),
+                "run_dir": None,
+                "status": "SKIPPED_ARTIFACT_ONLY",
+                "reason": "--execute currently runs prediction-producing jobs only; this artifact-only job must be produced by the formal training/selection adapter.",
+                "command_returncode": None,
+                "audit_gate": gate,
+                "audit_returncode": None,
+                "stdout_tail": "",
+                "stderr_tail": "",
+                "requested_device": effective_device,
+            }
+        results.append(result)
     for job in runnable:
         seed = int(job["seed"])
         command = [
@@ -444,7 +516,7 @@ def execute_protocol_jobs(
             "--job-id",
             str(job["job_id"]),
             "--mode",
-            "candidate",
+            _mode_for_gate(gate, epochs_override),
             "--device",
             effective_device,
         ]

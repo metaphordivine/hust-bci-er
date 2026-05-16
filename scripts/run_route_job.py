@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--protocol-run", type=Path, required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--output-root", type=Path)
-    parser.add_argument("--mode", choices=["candidate"], default="candidate")
+    parser.add_argument("--mode", choices=["smoke", "full_subjects", "candidate"], default="candidate")
     parser.add_argument("--device")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--epochs-override", type=int, help="Diagnostic-only epoch override for protocol job smoke execution.")

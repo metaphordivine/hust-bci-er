@@ -39,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute-gate", choices=["smoke", "candidate"], default="smoke")
     parser.add_argument("--execute-epochs-override", type=int, help="Bound executed jobs for diagnostic runs. Do not use with candidate evidence.")
     parser.add_argument("--max-execute-jobs", type=int)
+    parser.add_argument("--allow-artifact-only", action="store_true", help="Execute P2/P3 artifact-only jobs (train_holdout, inner_select) through the minimal artifact adapter. Candidate-grade evidence still needs formal adapter review.")
     args = parser.parse_args(argv)
     if args.execute_gate == "candidate" and args.execute_epochs_override is not None:
         parser.error("--execute-epochs-override cannot be used with --execute-gate candidate")
@@ -81,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             data_root=args.data_root,
             device=args.device,
             epochs_override=args.execute_epochs_override,
+            allow_artifact_only=args.allow_artifact_only,
         )
         payload["executed_jobs"] = sum(1 for item in results if item.get("status") == "EXECUTED")
         payload["skipped_artifact_only_jobs"] = sum(1 for item in results if item.get("status") == "SKIPPED_ARTIFACT_ONLY")
