@@ -383,7 +383,11 @@ def check_evidence_lineage(
         return
 
     route_bytes = git_file_bytes_at_commit(ROOT, commit, route_rel)
-    missing_paths = [path for path in route_implementation_paths(route_data, route_rel) if git_file_bytes_at_commit(ROOT, commit, path) is None]
+    missing_paths = []
+    for path in route_implementation_paths(route_data, route_rel):
+        path_bytes = route_bytes if path == route_rel else git_file_bytes_at_commit(ROOT, commit, path)
+        if path_bytes is None:
+            missing_paths.append(path)
     if route_bytes is None or missing_paths:
         add_check(
             checks,

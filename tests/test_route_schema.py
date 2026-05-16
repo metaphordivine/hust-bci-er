@@ -126,6 +126,24 @@ def test_sliding_window_search_space_rejects_input_window_mismatch():
     assert any("SEARCH_SPACE_CROSS_PRODUCT_VALID" in err for err in errors)
 
 
+def test_sliding_window_search_space_reports_missing_base_field():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"].pop("source_trial_sec")
+    data["augmentation"]["search_space"] = {
+        "source_trial_sec": [10],
+        "window_sec": [6],
+        "stride_sec": [1],
+    }
+
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+
+    assert any(
+        "SEARCH_SPACE_CROSS_PRODUCT_VALID: augmentation.source_trial_sec" in err
+        for err in errors
+    )
+
+
 def test_augmentation_search_space_rejects_fields_for_other_augmentation_type():
     data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
     data["augmentation"] = dict(data["augmentation"])

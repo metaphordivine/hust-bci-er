@@ -276,6 +276,11 @@ def validate_augmentation_search_space(data: dict[str, Any], augmentation: dict[
     else:
         allowed = {"source_trial_sec", "window_sec", "stride_sec", "n_crops"}
 
+    source_trial_sec_base = (
+        float(augmentation["source_trial_sec"])
+        if isinstance(augmentation.get("source_trial_sec"), (int, float))
+        else None
+    )
     parsed_search: dict[str, list[float | int]] = {}
     for key, values in search_space.items():
         if key not in allowed:
@@ -291,18 +296,21 @@ def validate_augmentation_search_space(data: dict[str, Any], augmentation: dict[
             parsed_number = [validate_positive_number(value, f"augmentation.search_space.{key}", errors) for value in values]
             parsed = [value for value in parsed_number if value is not None]
         parsed_search[key] = parsed
-        source_trial_sec = float(augmentation.get("source_trial_sec")) if isinstance(augmentation.get("source_trial_sec"), (int, float)) else None
-        if key in {"window_sec", "stride_sec"} and source_trial_sec is not None:
-            if any(float(value) > source_trial_sec for value in parsed):
+        if key in {"window_sec", "stride_sec"} and source_trial_sec_base is not None:
+            if any(float(value) > source_trial_sec_base for value in parsed):
                 errors.append(f"augmentation.search_space.{key} values must be <= augmentation.source_trial_sec")
-        if key == "n_crops" and source_trial_sec is not None and isinstance(augmentation.get("window_sec"), (int, float)):
+        if key == "n_crops" and source_trial_sec_base is not None and isinstance(augmentation.get("window_sec"), (int, float)):
             window_sec = float(augmentation["window_sec"])
-            if any(float(value) * window_sec > source_trial_sec + 1e-9 for value in parsed):
+            if any(float(value) * window_sec > source_trial_sec_base + 1e-9 for value in parsed):
                 errors.append("augmentation.search_space.n_crops values must fit inside augmentation.source_trial_sec")
 
     def numeric_candidates(key: str) -> list[float] | None:
         base_value = augmentation.get(key)
         if not isinstance(base_value, (int, float)) or base_value <= 0:
+            errors.append(
+                f"SEARCH_SPACE_CROSS_PRODUCT_VALID: augmentation.{key} must be a positive base value "
+                "before validating augmentation.search_space"
+            )
             return None
         candidates = [float(base_value)]
         candidates.extend(float(value) for value in parsed_search.get(key, []))
@@ -311,6 +319,10 @@ def validate_augmentation_search_space(data: dict[str, Any], augmentation: dict[
     def integer_candidates(key: str) -> list[int] | None:
         base_value = augmentation.get(key)
         if not isinstance(base_value, int) or base_value <= 0:
+            errors.append(
+                f"SEARCH_SPACE_CROSS_PRODUCT_VALID: augmentation.{key} must be a positive base value "
+                "before validating augmentation.search_space"
+            )
             return None
         candidates = [base_value]
         candidates.extend(int(value) for value in parsed_search.get(key, []))
