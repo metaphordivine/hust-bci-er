@@ -2030,6 +2030,7 @@ def test_promotion_audit_requires_new_candidate_evidence_rules(monkeypatch, tmp_
     assert rule["status"] == "FAIL"
     assert "EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE" in rule["message"]
     assert "ROUTE_MODEL_KWARGS_PASSTHROUGH" in rule["message"]
+    assert "RUN_AUDIT_SCHEMA_VERSION" in rule["message"]
 
 
 def test_promotion_audit_requires_top4_rules_from_route_policy(monkeypatch, tmp_path):
