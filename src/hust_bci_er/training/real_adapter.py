@@ -35,7 +35,10 @@ def _route_model_info(route_config_path: Path) -> tuple[str, dict[str, Any], int
         else {}
     )
     augmentation = route_data.get("augmentation")
-    if isinstance(augmentation, dict) and augmentation.get("name") == "split_first_sliding_window":
+    if isinstance(augmentation, dict) and augmentation.get("name") in {
+        "split_first_fixed_crops",
+        "split_first_sliding_window",
+    }:
         window_sec = float(augmentation["window_sec"])
     else:
         window_sec = float(route_data.get("input_window_sec", 10))

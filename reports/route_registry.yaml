@@ -31,6 +31,21 @@ routes:
   - route_id: ea_deformer
     owner: metaphordivine
     blocker:
+  - route_id: fixed_crop_ea_cbramod
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_deformer
+    owner: metaphordivine
+    blocker:
+  - route_id: fixed_crop_ea_fbstcnet
+    owner: metaphordivine
+    blocker:
+  - route_id: fixed_crop_pure_deformer_lite
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_shallow_conv_net
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: sliding_window_conformer_lite
     owner: metaphordivine
     blocker:
@@ -52,6 +67,21 @@ routes:
   - route_id: sliding_window_srfnet
     owner: metaphordivine
     blocker:
+  - route_id: sparse_sliding_window_shallow_conv_net
+    owner: metaphordivine
+    blocker:
+  - route_id: tuned_sliding_window_cbramod
+    owner: metaphordivine
+    blocker:
+  - route_id: tuned_sliding_window_deformer_lite
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: tuned_sliding_window_fbstcnet
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: tuned_sliding_window_shallow_conv_net
+    owner: metaphordivine
+    blocker: underperformed_reference_candidate
   - route_id: toy_eegnet
     owner: ci
     blocker: toy_only_not_real_eeg

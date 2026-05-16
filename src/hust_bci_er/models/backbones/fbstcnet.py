@@ -324,6 +324,8 @@ class FBSTCNet(nn.Module):
         del n_times
         if variant not in ("P", "C", "M"):
             raise ValueError(f"variant must be P, C, or M, got {variant}")
+        if F2 % F1 != 0:
+            raise ValueError(f"F2 must be divisible by F1 for grouped spatial conv, got F1={F1}, F2={F2}")
         self.variant = variant
         self.sfreq = sfreq
         self.filterbank_type = filterbank_type

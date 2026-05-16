@@ -205,8 +205,12 @@ class CBraMod(nn.Module):
         nhead: int = 8,
         dim_feedforward: int = 800,
         drop_prob: float = 0.1,
+        classifier_pooling: str = "flatten",
     ) -> None:
         super().__init__()
+        if classifier_pooling not in {"flatten", "mean"}:
+            raise ValueError(f"classifier_pooling must be flatten or mean, got {classifier_pooling}")
+        self.classifier_pooling = classifier_pooling
 
         # Pad to a multiple of patch_size when n_times is not exact
         n_patch = (n_times + patch_size - 1) // patch_size
@@ -237,10 +241,16 @@ class CBraMod(nn.Module):
 
         self.proj_out = nn.Linear(d_model, emb_dim)
 
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(n_chans * self.n_patch * emb_dim, n_outputs),
-        )
+        if classifier_pooling == "mean":
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(emb_dim),
+                nn.Linear(emb_dim, n_outputs),
+            )
+        else:
+            self.classifier = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(n_chans * self.n_patch * emb_dim, n_outputs),
+            )
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         # Accept [B, C, T] or [B, 1, C, T]
@@ -265,6 +275,8 @@ class CBraMod(nn.Module):
             x = layer(x)                                  # [B, C, N, D]
 
         x = self.proj_out(x)                              # [B, C, N, emb_dim]
+        if self.classifier_pooling == "mean":
+            x = x.mean(dim=(1, 2))                         # [B, emb_dim]
         return self.classifier(x)                         # [B, K]
 
 
@@ -285,4 +297,5 @@ def build_cbramod(
         nhead=int(kwargs.get("nhead", 8)),
         dim_feedforward=int(kwargs.get("dim_feedforward", 800)),
         drop_prob=float(kwargs.get("drop_prob", 0.1)),
+        classifier_pooling=str(kwargs.get("classifier_pooling", "flatten")),
     )

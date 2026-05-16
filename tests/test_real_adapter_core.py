@@ -28,6 +28,7 @@ from hust_bci_er.training.real_adapter import (
     _make_fixed_crops,
     _read_mat,
     _split_subjects,
+    _validate_fixed_crop_coverage,
     _write_evidence_manifests,
     run_real_classifier_route,
 )
@@ -291,11 +292,31 @@ def test_make_fixed_crops_returns_non_overlapping_crops():
         "trial_id": "S01_pos1",
         "cohort": "HC",
     }]
-    crops = _make_fixed_crops(trials, window_sec=10, n_crops=5, preproc=[], skip_preproc=True)
+    crops = _make_fixed_crops(
+        trials,
+        source_trial_sec=50,
+        window_sec=10,
+        n_crops=5,
+        preproc=[],
+        skip_preproc=True,
+    )
     assert len(crops) == 5
     assert [crop["crop_id"] for crop in crops] == [0, 1, 2, 3, 4]
     assert [crop["window_start_sec"] for crop in crops] == [0.0, 10.0, 20.0, 30.0, 40.0]
     np.testing.assert_array_equal(crops[1]["x"], x[:, 2500:5000])
+
+
+def test_validate_fixed_crop_coverage_requires_source_duration():
+    x = np.zeros((30, 2500 * 5), dtype=np.float32)
+    trials = [{"x": x, "trial_id": "S01_pos1"}]
+    with pytest.raises(ValueError, match="source_trial_sec=60"):
+        _validate_fixed_crop_coverage(
+            trials,
+            source_trial_sec=60,
+            window_sec=10,
+            n_crops=5,
+            split_name="test",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -589,3 +610,117 @@ def test_run_real_classifier_route_passes_model_kwargs_to_builder(tmp_path, monk
     )
 
     assert captured == {"n_filters_time": 24, "drop_prob": 0.25}
+
+
+def test_run_real_classifier_route_fixed_crop_augmentation_is_genuine(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    import hust_bci_er.models.factory as model_factory
+    import hust_bci_er.training.reproducibility as reproducibility
+
+    monkeypatch.setenv("PYTHONHASHSEED", "42")
+    monkeypatch.setattr(reproducibility, "PROCESS_START_PYTHONHASHSEED", "42")
+
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    for idx in range(3):
+        _write_hdf5_mat(data_root / f"DEP{idx:03d}timedata.mat", samples_per_trial=50)
+        _write_hdf5_mat(data_root / f"HC{idx:03d}timedata.mat", samples_per_trial=50, transpose=True)
+
+    route = tmp_path / "fixed_crop_route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: fixed_crop_route",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "input_window_sec: 0.04",
+                "preprocessing: [zscore]",
+                "features: []",
+                "augmentation:",
+                "  name: split_first_fixed_crops",
+                "  split_first: true",
+                "  source_trial_sec: 0.2",
+                "  window_sec: 0.04",
+                "  n_crops: 5",
+                "  apply_to_splits: [train, val, test]",
+                "  aggregate_to_trial:",
+                "    method: mean_score",
+                "    tie_break: mean_score",
+                "model:",
+                "  name: eegnet",
+                "adaptation: none",
+                "training:",
+                "  trainer: torch_classifier",
+                "  job_adapter: torch_classifier",
+                "  epochs: 1",
+                "  batch_size: 8",
+                "  optimizer:",
+                "    name: sgd",
+                "    lr: 0.01",
+                "    weight_decay: 0.0",
+                "  loss: cross_entropy",
+                "inference:",
+                "  top4: true",
+                "  crop_policy: exact_single_crop",
+                "evaluation:",
+                "  protocol: p1_repeated_group_kfold",
+                "  primary_metric: exact_single_crop_expected_BA",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class TinyClassifier(torch.nn.Module):
+        def __init__(self, n_channels: int, n_times: int) -> None:
+            super().__init__()
+            self.n_times = n_times
+            self.linear = torch.nn.Linear(n_channels * n_times, 2)
+
+        def forward(self, x):
+            return self.linear(x.flatten(1))
+
+    captured = {}
+
+    def fake_build_model(_name, *, n_channels, n_times, n_classes, **kwargs):
+        assert n_classes == 2
+        captured["n_times"] = n_times
+        return TinyClassifier(n_channels, n_times)
+
+    def fake_context(**kwargs):
+        return SimpleNamespace(
+            run_dir=kwargs["run_dir"],
+            prediction_csv=kwargs["prediction_csv"],
+        )
+
+    def fake_manifest(context, *, metrics, command, score_matrix_csv):
+        return {
+            "audit_schema_version": 2,
+            "route_id": "fixed_crop_route",
+            "command": " ".join(command) if isinstance(command, list) else command,
+            "primary_metric": "exact_single_crop_expected_BA",
+            "metrics": dict(metrics),
+            "prediction_csv": context.prediction_csv.name,
+            "metric_inputs": {"score_matrix_csv": Path(score_matrix_csv).name},
+        }
+
+    monkeypatch.setattr(model_factory, "build_model", fake_build_model)
+    monkeypatch.setattr(real_adapter, "prepare_run_manifest_context", fake_context)
+    monkeypatch.setattr(real_adapter, "build_run_manifest_payload", fake_manifest)
+
+    artifacts = run_real_classifier_route(
+        route_config_path=route,
+        run_dir=tmp_path / "run",
+        run_mode="candidate",
+        command=["python", "scripts/train_route.py", "--data-root", data_root.as_posix()],
+        data_root=data_root,
+        device="cpu",
+    )
+
+    manifest = json.loads(artifacts.manifest_json.read_text(encoding="utf-8"))
+    dataset = yaml.safe_load(artifacts.dataset_manifest.read_text(encoding="utf-8"))
+    assert captured["n_times"] == 10
+    assert dataset["n_crops"] == 5
+    assert manifest["score_matrix_evidence"] == "genuine"

@@ -1,0 +1,48 @@
+route_id: fixed_crop_pure_deformer_lite
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 10
+preprocessing: [zscore]
+features: []
+augmentation:
+  name: split_first_fixed_crops
+  split_first: true
+  source_trial_sec: 50
+  window_sec: 10
+  n_crops: 5
+  apply_to_splits: [train, val, test]
+  aggregate_to_trial:
+    method: mean_score
+    tie_break: mean_score
+model:
+  name: deformer_lite
+  conv_channels: 16
+  transformer_depth: 1
+  num_heads: 4
+  embedding_dim: 32
+  dropout: 0.4
+adaptation: none
+training:
+  trainer: torch_classifier
+  job_adapter: torch_classifier
+  epochs: 50
+  batch_size: 8
+  optimizer:
+    name: adamw
+    lr: 0.001
+    weight_decay: 0.0001
+  loss: cross_entropy
+  grad_clip_norm: 1.0
+  early_stopping:
+    monitor: val_loss
+    mode: min
+    patience: 10
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "Pure-model-eval aligned Deformer control: 50s trial -> 5 contiguous 10s pseudo-trials, zscore only, default lite Deformer capacity."

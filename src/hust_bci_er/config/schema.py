@@ -187,15 +187,20 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         errors.append(f"unknown augmentation component: {name}")
         return
 
-    if name != "split_first_sliding_window":
+    if name not in {"split_first_sliding_window", "split_first_fixed_crops"}:
         return
 
     if augmentation.get("split_first") is not True:
-        errors.append("split_first_sliding_window requires split_first: true")
+        errors.append(f"{name} requires split_first: true")
 
     source_trial_sec = validate_positive_number(augmentation.get("source_trial_sec"), "augmentation.source_trial_sec", errors)
     window_sec = validate_positive_number(augmentation.get("window_sec"), "augmentation.window_sec", errors)
-    stride_sec = validate_positive_number(augmentation.get("stride_sec"), "augmentation.stride_sec", errors)
+    stride_sec = None
+    n_crops = None
+    if name == "split_first_sliding_window":
+        stride_sec = validate_positive_number(augmentation.get("stride_sec"), "augmentation.stride_sec", errors)
+    else:
+        n_crops = validate_positive_int(augmentation.get("n_crops"), "augmentation.n_crops", errors)
 
     input_window_sec = data.get("input_window_sec")
     if window_sec is not None and isinstance(input_window_sec, (int, float)) and abs(float(input_window_sec) - window_sec) > 1e-9:
@@ -204,6 +209,24 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         errors.append("augmentation.window_sec must be <= augmentation.source_trial_sec")
     if source_trial_sec is not None and stride_sec is not None and stride_sec > source_trial_sec:
         errors.append("augmentation.stride_sec must be <= augmentation.source_trial_sec")
+    if source_trial_sec is not None and window_sec is not None and n_crops is not None:
+        if window_sec * n_crops > source_trial_sec + 1e-9:
+            errors.append("augmentation.n_crops * augmentation.window_sec must be <= augmentation.source_trial_sec")
+
+    inference = data.get("inference") if isinstance(data.get("inference"), dict) else {}
+    evaluation = data.get("evaluation") if isinstance(data.get("evaluation"), dict) else {}
+    requires_exact_five_crops = name == "split_first_fixed_crops" and (
+        inference.get("crop_policy") == "exact_single_crop"
+        or evaluation.get("primary_metric") == "exact_single_crop_expected_BA"
+    )
+    if requires_exact_five_crops and n_crops is not None and n_crops != 5:
+        errors.append("split_first_fixed_crops exact_single_crop routes require augmentation.n_crops == 5")
+
+    search_space = augmentation.get("search_space")
+    if requires_exact_five_crops and isinstance(search_space, dict) and "n_crops" in search_space:
+        crop_values = search_space.get("n_crops")
+        if isinstance(crop_values, list) and any(value != 5 for value in crop_values):
+            errors.append("split_first_fixed_crops exact_single_crop routes require augmentation.search_space.n_crops values to be 5")
 
     apply_to_splits = augmentation.get("apply_to_splits")
     if apply_to_splits is not None:
@@ -217,8 +240,11 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
     if not isinstance(aggregate, dict):
         errors.append("augmentation.aggregate_to_trial must be a mapping")
         return
-    if aggregate.get("method") != "majority_vote":
-        errors.append("augmentation.aggregate_to_trial.method must be majority_vote")
+    allowed_methods = {"majority_vote", "mean_score"}
+    if aggregate.get("method") not in allowed_methods:
+        errors.append("augmentation.aggregate_to_trial.method must be majority_vote or mean_score")
+    # tie_break is consumed only by majority_vote. mean_score accepts the field
+    # for config shape consistency with the sliding-window route family.
     if aggregate.get("tie_break") not in {None, "mean_score", "lower", "higher"}:
         errors.append("augmentation.aggregate_to_trial.tie_break must be mean_score, lower, or higher")
 
@@ -237,73 +263,114 @@ def route_primary_metric(data: dict[str, Any]) -> str | None:
 
 def validate_augmentation_search_space(data: dict[str, Any], augmentation: dict[str, Any], errors: list[str]) -> None:
     search_space = augmentation.get("search_space")
-    if search_space is not None and not isinstance(search_space, dict):
+    if search_space is None:
+        return
+    if not isinstance(search_space, dict):
         errors.append("augmentation.search_space must be a mapping")
         return
 
-    allowed = {"source_trial_sec", "window_sec", "stride_sec"}
-    parsed_search: dict[str, list[float]] = {}
-    if isinstance(search_space, dict):
-        for key, values in search_space.items():
-            if key not in allowed:
-                errors.append(f"augmentation.search_space has unsupported field: {key}")
-                continue
-            if not isinstance(values, list) or not values:
-                errors.append(f"augmentation.search_space.{key} must be a non-empty list")
-                continue
-            parsed = [validate_positive_number(value, f"augmentation.search_space.{key}", errors) for value in values]
-            parsed = [value for value in parsed if value is not None]
-            parsed_search[key] = parsed
-            source_trial_sec = float(augmentation.get("source_trial_sec")) if isinstance(augmentation.get("source_trial_sec"), (int, float)) else None
-            if key in {"window_sec", "stride_sec"} and source_trial_sec is not None:
-                if any(value > source_trial_sec for value in parsed):
-                    errors.append(f"augmentation.search_space.{key} values must be <= augmentation.source_trial_sec")
+    if augmentation.get("name") == "split_first_sliding_window":
+        allowed = {"source_trial_sec", "window_sec", "stride_sec"}
+    elif augmentation.get("name") == "split_first_fixed_crops":
+        allowed = {"source_trial_sec", "window_sec", "n_crops"}
+    else:
+        allowed = {"source_trial_sec", "window_sec", "stride_sec", "n_crops"}
 
-    values_by_key: dict[str, list[float]] = {}
-    for key in allowed:
+    parsed_search: dict[str, list[float | int]] = {}
+    for key, values in search_space.items():
+        if key not in allowed:
+            errors.append(f"augmentation.search_space has unsupported field: {key}")
+            continue
+        if not isinstance(values, list) or not values:
+            errors.append(f"augmentation.search_space.{key} must be a non-empty list")
+            continue
+        if key == "n_crops":
+            parsed_int = [validate_positive_int(value, f"augmentation.search_space.{key}", errors) for value in values]
+            parsed = [value for value in parsed_int if value is not None]
+        else:
+            parsed_number = [validate_positive_number(value, f"augmentation.search_space.{key}", errors) for value in values]
+            parsed = [value for value in parsed_number if value is not None]
+        parsed_search[key] = parsed
+        source_trial_sec = float(augmentation.get("source_trial_sec")) if isinstance(augmentation.get("source_trial_sec"), (int, float)) else None
+        if key in {"window_sec", "stride_sec"} and source_trial_sec is not None:
+            if any(float(value) > source_trial_sec for value in parsed):
+                errors.append(f"augmentation.search_space.{key} values must be <= augmentation.source_trial_sec")
+        if key == "n_crops" and source_trial_sec is not None and isinstance(augmentation.get("window_sec"), (int, float)):
+            window_sec = float(augmentation["window_sec"])
+            if any(float(value) * window_sec > source_trial_sec + 1e-9 for value in parsed):
+                errors.append("augmentation.search_space.n_crops values must fit inside augmentation.source_trial_sec")
+
+    def numeric_candidates(key: str) -> list[float] | None:
         base_value = augmentation.get(key)
         if not isinstance(base_value, (int, float)) or base_value <= 0:
-            return
+            return None
         candidates = [float(base_value)]
-        candidates.extend(parsed_search.get(key, []))
-        values_by_key[key] = sorted(set(candidates))
+        candidates.extend(float(value) for value in parsed_search.get(key, []))
+        return sorted(set(candidates))
 
+    def integer_candidates(key: str) -> list[int] | None:
+        base_value = augmentation.get(key)
+        if not isinstance(base_value, int) or base_value <= 0:
+            return None
+        candidates = [base_value]
+        candidates.extend(int(value) for value in parsed_search.get(key, []))
+        return sorted(set(candidates))
+
+    window_values = numeric_candidates("window_sec")
     input_window_sec = data.get("input_window_sec")
-    if isinstance(input_window_sec, (int, float)):
-        mismatched_windows = [
-            value for value in values_by_key["window_sec"]
-            if abs(float(input_window_sec) - value) > 1e-9
-        ]
-        if mismatched_windows:
+    if window_values is not None and isinstance(input_window_sec, (int, float)):
+        if any(abs(float(input_window_sec) - value) > 1e-9 for value in window_values):
             errors.append(
                 "SEARCH_SPACE_CROSS_PRODUCT_VALID: input_window_sec must match every "
                 "augmentation.window_sec/search_space.window_sec candidate"
             )
 
+    source_values = numeric_candidates("source_trial_sec")
     metric = route_primary_metric(data)
     requires_five_crops = metric == "exact_single_crop_expected_BA"
-    for source_trial_sec, window_sec, stride_sec in product(
-        values_by_key["source_trial_sec"],
-        values_by_key["window_sec"],
-        values_by_key["stride_sec"],
-    ):
-        combo = (
-            f"source_trial_sec={source_trial_sec:g}, "
-            f"window_sec={window_sec:g}, stride_sec={stride_sec:g}"
-        )
-        if window_sec > source_trial_sec:
-            errors.append(f"SEARCH_SPACE_CROSS_PRODUCT_VALID: window_sec must be <= source_trial_sec for {combo}")
-            continue
-        if stride_sec > source_trial_sec:
-            errors.append(f"SEARCH_SPACE_CROSS_PRODUCT_VALID: stride_sec must be <= source_trial_sec for {combo}")
-            continue
-        n_windows = sliding_window_count(source_trial_sec, window_sec, stride_sec)
-        if requires_five_crops and n_windows != 5:
-            errors.append(
-                "METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE: exact_single_crop_expected_BA "
-                f"requires exactly 5 sliding-window crops, got {n_windows} for {combo}"
-            )
 
+    if augmentation.get("name") == "split_first_sliding_window":
+        stride_values = numeric_candidates("stride_sec")
+        if source_values is None or window_values is None or stride_values is None:
+            return
+        for source_trial_sec, window_sec, stride_sec in product(source_values, window_values, stride_values):
+            combo = (
+                f"source_trial_sec={source_trial_sec:g}, "
+                f"window_sec={window_sec:g}, stride_sec={stride_sec:g}"
+            )
+            if window_sec > source_trial_sec:
+                errors.append(f"SEARCH_SPACE_CROSS_PRODUCT_VALID: window_sec must be <= source_trial_sec for {combo}")
+                continue
+            if stride_sec > source_trial_sec:
+                errors.append(f"SEARCH_SPACE_CROSS_PRODUCT_VALID: stride_sec must be <= source_trial_sec for {combo}")
+                continue
+            n_windows = sliding_window_count(source_trial_sec, window_sec, stride_sec)
+            if requires_five_crops and n_windows != 5:
+                errors.append(
+                    "METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE: exact_single_crop_expected_BA "
+                    f"requires exactly 5 sliding-window crops, got {n_windows} for {combo}"
+                )
+        return
+
+    if augmentation.get("name") == "split_first_fixed_crops":
+        crop_values = integer_candidates("n_crops")
+        if source_values is None or window_values is None or crop_values is None:
+            return
+        for source_trial_sec, window_sec, n_crops in product(source_values, window_values, crop_values):
+            combo = (
+                f"source_trial_sec={source_trial_sec:g}, "
+                f"window_sec={window_sec:g}, n_crops={n_crops}"
+            )
+            if window_sec * n_crops > source_trial_sec + 1e-9:
+                errors.append(
+                    "SEARCH_SPACE_CROSS_PRODUCT_VALID: augmentation.search_space fixed-crop "
+                    f"combinations must fit inside augmentation.source_trial_sec for {combo}"
+                )
+            if requires_five_crops and n_crops != 5:
+                errors.append(
+                    "METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE: exact_single_crop_expected_BA "
+                    f"requires exactly 5 fixed crops, got {n_crops} for {combo}"
+                )
 
 
 def validate_non_negative_number(value: Any, field: str, errors: list[str]) -> float | None:

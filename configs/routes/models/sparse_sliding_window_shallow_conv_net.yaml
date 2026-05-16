@@ -1,0 +1,56 @@
+route_id: sparse_sliding_window_shallow_conv_net
+status: CANDIDATE
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 6
+preprocessing: [zscore]
+features: []
+augmentation:
+  name: split_first_sliding_window
+  split_first: true
+  source_trial_sec: 14
+  window_sec: 6
+  stride_sec: 2
+  search_space:
+    source_trial_sec: [14]
+    window_sec: [6]
+    stride_sec: [2]
+  apply_to_splits: [train, val, test]
+  aggregate_to_trial:
+    method: majority_vote
+    tie_break: mean_score
+model:
+  name: shallow_conv_net
+  n_filters_time: 40
+  filter_time_length: 25
+  n_filters_spat: 40
+  pool_time_length: 75
+  pool_time_stride: 15
+  final_conv_length: auto
+  batch_norm: true
+  batch_norm_alpha: 0.1
+  drop_prob: 0.5
+adaptation: none
+training:
+  trainer: torch_classifier
+  job_adapter: torch_classifier
+  epochs: 80
+  batch_size: 32
+  optimizer:
+    name: adamw
+    lr: 0.001
+    weight_decay: 0.01
+  loss: cross_entropy
+  grad_clip_norm: 1.0
+  early_stopping:
+    monitor: val_loss
+    mode: min
+    patience: 12
+inference:
+  top4: true
+  crop_policy: sliding_window_vote
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "ShallowConvNet with split-first sparse sliding windows: 14s source, 6s windows, 2s stride, yielding 5 genuine candidate windows."

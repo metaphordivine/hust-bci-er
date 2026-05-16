@@ -124,3 +124,68 @@ def test_sliding_window_search_space_rejects_input_window_mismatch():
     errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
 
     assert any("SEARCH_SPACE_CROSS_PRODUCT_VALID" in err for err in errors)
+
+
+def test_augmentation_search_space_rejects_fields_for_other_augmentation_type():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"n_crops": [1]}
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+    assert any("unsupported field: n_crops" in err for err in errors)
+
+    data = load_route("configs/routes/models/fixed_crop_pure_deformer_lite.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"stride_sec": [1]}
+    errors = validate_route_config(data, path=Path("fixed_crop_pure_deformer_lite.yaml"))
+    assert any("unsupported field: stride_sec" in err for err in errors)
+
+
+def test_fixed_crop_augmentation_requires_valid_crop_grid():
+    data = load_route("configs/routes/models/ea_deformer.yaml")
+    data["route_id"] = "fixed_crop_ea_deformer"
+    data["input_window_sec"] = 10
+    data["augmentation"] = {
+        "name": "split_first_fixed_crops",
+        "split_first": True,
+        "source_trial_sec": 50,
+        "window_sec": 10,
+        "n_crops": 5,
+        "apply_to_splits": ["train", "val", "test"],
+        "aggregate_to_trial": {"method": "mean_score", "tie_break": "mean_score"},
+    }
+    data["inference"] = {"top4": True, "crop_policy": "exact_single_crop"}
+    assert validate_route_config(data, path=Path("fixed_crop_ea_deformer.yaml")) == []
+
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["n_crops"] = 6
+    errors = validate_route_config(data, path=Path("fixed_crop_ea_deformer.yaml"))
+    assert any("n_crops == 5" in err for err in errors)
+
+
+def test_exact_fixed_crop_route_rejects_search_space_crop_count_other_than_five():
+    data = load_route("configs/routes/models/fixed_crop_pure_deformer_lite.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"n_crops": [5, 6]}
+    errors = validate_route_config(data, path=Path("fixed_crop_pure_deformer_lite.yaml"))
+    assert any("search_space.n_crops values to be 5" in err for err in errors)
+
+
+def test_fixed_crop_search_space_rejects_invalid_cross_product():
+    data = load_route("configs/routes/models/fixed_crop_pure_deformer_lite.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"window_sec": [30], "n_crops": [2]}
+    errors = validate_route_config(data, path=Path("fixed_crop_pure_deformer_lite.yaml"))
+    assert any("search_space fixed-crop combinations" in err for err in errors)
+
+
+def test_fixed_crop_search_space_cross_product_uses_candidate_source_duration():
+    data = load_route("configs/routes/models/fixed_crop_pure_deformer_lite.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["source_trial_sec"] = 60
+    data["augmentation"]["search_space"] = {
+        "source_trial_sec": [50],
+        "window_sec": [30],
+        "n_crops": [2],
+    }
+    errors = validate_route_config(data, path=Path("fixed_crop_pure_deformer_lite.yaml"))
+    assert any("fixed-crop combinations" in err for err in errors)

@@ -19,9 +19,15 @@ class EEGDeformerLite(nn.Module):
         num_heads: int = 4,
         embedding_dim: int = 32,
         dropout: float = 0.4,
+        feedforward_multiplier: int = 2,
+        pooling: str = "mean",
+        classifier_hidden_dim: int | None = None,
     ):
         super().__init__()
         del n_times
+        if pooling not in {"mean", "attention"}:
+            raise ValueError(f"pooling must be mean or attention, got {pooling}")
+        self.pooling = pooling
         self.conv1 = nn.Sequential(
             nn.Conv2d(1, conv_channels, (1, 64), padding=(0, 32)),
             nn.BatchNorm2d(conv_channels),
@@ -52,18 +58,23 @@ class EEGDeformerLite(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embedding_dim,
             nhead=num_heads,
-            dim_feedforward=embedding_dim * 2,
+            dim_feedforward=embedding_dim * feedforward_multiplier,
             dropout=dropout,
             activation="gelu",
             batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=transformer_depth)
+        self.attention_pool = nn.Sequential(
+            nn.LayerNorm(embedding_dim),
+            nn.Linear(embedding_dim, 1),
+        ) if pooling == "attention" else None
+        hidden_dim = int(classifier_hidden_dim or max(embedding_dim // 2, 1))
         self.classifier = nn.Sequential(
             nn.LayerNorm(embedding_dim),
-            nn.Linear(embedding_dim, embedding_dim // 2),
+            nn.Linear(embedding_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(embedding_dim // 2, n_classes),
+            nn.Linear(hidden_dim, n_classes),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -74,10 +85,16 @@ class EEGDeformerLite(nn.Module):
         x = self.conv3(x).squeeze(2).transpose(1, 2)
         x = x + self.pos_enc[:, : x.shape[1], :]
         x = self.transformer(x)
-        return self.classifier(x.mean(dim=1))
+        if self.attention_pool is not None:
+            weights = torch.softmax(self.attention_pool(x).squeeze(-1), dim=1)
+            x = torch.sum(x * weights.unsqueeze(-1), dim=1)
+        else:
+            x = x.mean(dim=1)
+        return self.classifier(x)
 
 
 def build_deformer_lite(n_channels: int, n_times: int, n_classes: int = 2, **kwargs) -> EEGDeformerLite:
+    classifier_hidden_dim = kwargs.get("classifier_hidden_dim")
     return EEGDeformerLite(
         n_channels=n_channels,
         n_times=n_times,
@@ -87,5 +104,8 @@ def build_deformer_lite(n_channels: int, n_times: int, n_classes: int = 2, **kwa
         num_heads=kwargs.get("num_heads", 4),
         embedding_dim=kwargs.get("embedding_dim", 32),
         dropout=kwargs.get("dropout", 0.4),
+        feedforward_multiplier=int(kwargs.get("feedforward_multiplier", 2)),
+        pooling=str(kwargs.get("pooling", "mean")),
+        classifier_hidden_dim=int(classifier_hidden_dim) if classifier_hidden_dim is not None else None,
     )
 

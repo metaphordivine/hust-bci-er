@@ -9,6 +9,7 @@ def render_component_docs() -> str:
     sections = [
         ("Preprocessing", registry.PREPROCESSING),
         ("Features", registry.FEATURES),
+        ("Augmentation", registry.AUGMENTATION),
         ("Torch Backbones", registry.TORCH_BACKBONES),
         ("Sklearn Models", registry.SKLEARN_MODELS),
         ("Graph Models", registry.GRAPH_MODELS),
