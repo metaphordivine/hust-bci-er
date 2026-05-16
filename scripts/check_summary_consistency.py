@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
+import shlex
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import yaml
 
@@ -27,7 +27,8 @@ REQUIRED_EVIDENCE_FIELDS = {
     "manifest_sha256",
     "primary_metric_value",
 }
-LOCAL_ABSOLUTE_PATH_RE = re.compile(r"(?i)(?:\b[A-Z]:[\\/]|/home/|/Users/)")
+REPRODUCE_REPO_RELATIVE_FLAGS = {"--route", "--run", "--config", "--summary-dir"}
+REPRODUCE_PATH_FLAGS = REPRODUCE_REPO_RELATIVE_FLAGS | {"--data-root"}
 
 
 def sha256_file(path: Path) -> str:
@@ -65,6 +66,66 @@ def resolve_repo_path(value: str) -> Path | None:
     except ValueError:
         return None
     return path
+
+
+def clean_reproduce_token(value: str) -> str:
+    return value.strip().strip("\"'")
+
+
+def is_env_reference(value: str) -> bool:
+    cleaned = clean_reproduce_token(value)
+    return cleaned.startswith("$") or (cleaned.startswith("%") and cleaned.endswith("%"))
+
+
+def is_absolute_path_token(value: str) -> bool:
+    cleaned = clean_reproduce_token(value)
+    if not cleaned or is_env_reference(cleaned):
+        return False
+    return PureWindowsPath(cleaned).is_absolute() or PurePosixPath(cleaned).is_absolute()
+
+
+def reproduce_path_values(reproduce: str) -> list[tuple[str, str]]:
+    try:
+        tokens = shlex.split(reproduce, posix=False)
+    except ValueError:
+        return [("__parse_error__", reproduce)]
+
+    values: list[tuple[str, str]] = []
+    idx = 0
+    while idx < len(tokens):
+        token = clean_reproduce_token(tokens[idx])
+        if token in REPRODUCE_PATH_FLAGS:
+            value = clean_reproduce_token(tokens[idx + 1]) if idx + 1 < len(tokens) else ""
+            values.append((token, value))
+            idx += 2
+            continue
+        for flag in REPRODUCE_PATH_FLAGS:
+            prefix = f"{flag}="
+            if token.startswith(prefix):
+                values.append((flag, clean_reproduce_token(token[len(prefix):])))
+                break
+        idx += 1
+    return values
+
+
+def reproduce_path_errors(reproduce: str) -> list[str]:
+    errors: list[str] = []
+    for flag, value in reproduce_path_values(reproduce):
+        if flag == "__parse_error__":
+            errors.append("summary reproduce command could not be parsed")
+            continue
+        if not value:
+            errors.append(f"summary reproduce command missing value for {flag}")
+            continue
+        if is_absolute_path_token(value):
+            errors.append("summary reproduce command contains local absolute path")
+            continue
+        if flag in REPRODUCE_REPO_RELATIVE_FLAGS and is_env_reference(value):
+            errors.append(f"summary reproduce {flag} must be repo-relative, not an environment reference")
+            continue
+        if flag in REPRODUCE_REPO_RELATIVE_FLAGS and resolve_repo_path(value) is None:
+            errors.append(f"summary reproduce {flag} escapes repository")
+    return errors
 
 
 def parse_numeric(value: str) -> float | None:
@@ -158,8 +219,8 @@ def main() -> int:
             errors.append(f"summary missing tokens {missing}: {summary.relative_to(ROOT)}")
         fields = summary_fields(text)
         reproduce = fields.get("reproduce", "")
-        if LOCAL_ABSOLUTE_PATH_RE.search(reproduce):
-            errors.append(f"summary reproduce command contains local absolute path: {summary.relative_to(ROOT)}")
+        for reproduce_error in reproduce_path_errors(reproduce):
+            errors.append(f"{reproduce_error}: {summary.relative_to(ROOT)}")
         if routes[route_id].get("status") in SUMMARY_REQUIRED_STATUSES:
             missing_fields = sorted(field for field in REQUIRED_EVIDENCE_FIELDS if not fields.get(field))
             if missing_fields:

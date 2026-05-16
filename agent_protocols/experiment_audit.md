@@ -76,8 +76,9 @@ Use `top4_group_keys` when a prediction table combines repeated folds or seeds.
 Candidate and promoted gates must prove semantic correctness:
 
 - `RUN_REPRODUCIBILITY_LOCKED` verifies environment, deterministic seed policy, dataloader worker seed policy, checkpoint selection, crop policy, and lock-file hashes are present.
+- `RUN_AUDIT_SCHEMA_VERSION` verifies strict-gate evidence uses the current audit schema; candidate/promoted evidence with `audit_schema_version < 2` is blocked.
 - `EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE` verifies the audited route file is the exact config snapshot recorded by the run.
-- `EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION` verifies `manifest.git_commit` contains the route file and the implementation paths required to execute it.
+- `EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION` verifies `manifest.git_commit` contains the route file and the implementation paths required to execute it. New non-`score_fusion` models must have an explicit implementation path mapping; unknown mappings are strict-gate failures.
 - `ROUTE_MODEL_KWARGS_PASSTHROUGH` verifies route-level `model.*` kwargs are recorded in manifest provenance and therefore reached the builder path.
 - `METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE` verifies the score matrix shape matches the declared metric contract; `exact_single_crop_expected_BA` requires exactly five crop score columns.
 - `RUN_SPLIT_EVIDENCE_CONSISTENT` verifies subject lists or fold definitions match `trial_rows` subject membership.
@@ -95,7 +96,7 @@ Before marking any route as `CANDIDATE`, the evidence chain must prove:
 1. The route config is the exact config used by the run.
 2. `manifest.config_sha256` matches the audited route file.
 3. `manifest.git_commit` contains the route and implementation code needed to run it.
-4. Summary reproduce commands use repository-relative paths, not local absolute paths.
+4. Summary reproduce commands use repository-relative path arguments, not local absolute paths.
 5. Route `model.*` kwargs are passed to `build_model` and recorded in manifest provenance.
 6. Augmentation crop count matches `score_matrix.csv` columns and evaluation metric semantics.
 7. `search_space` is validated by full cross product, not only base values.

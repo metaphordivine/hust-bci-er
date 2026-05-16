@@ -46,14 +46,29 @@ PROMOTION_REQUIRED_FIELDS = {
     "date",
 }
 PROMOTION_REQUIRED_CANDIDATE_RULES = {
+    "EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+    "EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE",
     "MANIFEST_VALID",
+    "METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE",
     "PRIMARY_METRIC_RECOMPUTE",
     "PRIMARY_METRIC_REPORTED",
+    "ROUTE_MODEL_KWARGS_PASSTHROUGH",
     "RUN_DATASET_EVIDENCE_VALID",
     "RUN_SPLIT_EVIDENCE_VALID",
     "RUN_SPLIT_EVIDENCE_CONSISTENT",
     "RUN_REPRODUCIBILITY_LOCKED",
 }
+MODEL_IMPLEMENTATION_PATHS = {
+    "eegnet": "src/hust_bci_er/models/backbones/eegnet.py",
+    "conformer_lite": "src/hust_bci_er/models/backbones/conformer_lite.py",
+    "deformer_lite": "src/hust_bci_er/models/backbones/deformer_lite.py",
+    "srfnet": "src/hust_bci_er/models/backbones/srfnet.py",
+    "shallow_conv_net": "src/hust_bci_er/models/backbones/shallow_conv_net.py",
+    "cbramod": "src/hust_bci_er/models/backbones/cbramod.py",
+    "fbstcnet": "src/hust_bci_er/models/backbones/fbstcnet.py",
+    "toy_centroid": "src/hust_bci_er/training/toy_adapter.py",
+}
+MISSING_MODEL_IMPL_MAPPING_PREFIX = "__missing_model_impl_mapping__:"
 PROMOTION_REQUIRED_TOP4_RULES = {
     "PREDICTION_TOP4_RANKING",
     "PREDICTION_TOP4_BINARY",
@@ -260,17 +275,11 @@ def route_implementation_paths(route_data: dict[str, Any], route_rel_path: str) 
                 "src/hust_bci_er/models/factory.py",
             }
         )
-        model_file = {
-            "eegnet": "src/hust_bci_er/models/backbones/eegnet.py",
-            "conformer_lite": "src/hust_bci_er/models/backbones/conformer_lite.py",
-            "deformer_lite": "src/hust_bci_er/models/backbones/deformer_lite.py",
-            "srfnet": "src/hust_bci_er/models/backbones/srfnet.py",
-            "shallow_conv_net": "src/hust_bci_er/models/backbones/shallow_conv_net.py",
-            "cbramod": "src/hust_bci_er/models/backbones/cbramod.py",
-            "fbstcnet": "src/hust_bci_er/models/backbones/fbstcnet.py",
-        }.get(model_name)
+        model_file = MODEL_IMPLEMENTATION_PATHS.get(model_name)
         if model_file is not None:
             paths.add(model_file)
+        else:
+            paths.add(f"{MISSING_MODEL_IMPL_MAPPING_PREFIX}{model_name}")
     training = route_data.get("training")
     adapter_name = training.get("job_adapter") if isinstance(training, dict) else None
     trainer_name = training.get("trainer") if isinstance(training, dict) else None
@@ -333,8 +342,27 @@ def check_evidence_lineage(
     *,
     gate: str,
 ) -> None:
-    if gate not in STRICT_GATES or int(manifest.get("audit_schema_version", 0)) < 2:
+    if gate not in STRICT_GATES:
         return
+    schema_version = manifest.get("audit_schema_version")
+    if type(schema_version) is not int or schema_version < 2:
+        add_check(
+            checks,
+            rule_id="RUN_AUDIT_SCHEMA_VERSION",
+            severity="ERROR",
+            status="FAIL",
+            message="candidate/promoted evidence requires audit_schema_version >= 2",
+            fix="Regenerate manifest with current audit schema and evidence lineage fields.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    add_check(
+        checks,
+        rule_id="RUN_AUDIT_SCHEMA_VERSION",
+        severity="INFO",
+        status="PASS",
+        message="audit_schema_version supports evidence lineage checks",
+    )
     config_sha = manifest.get("config_sha256")
     if isinstance(config_sha, str) and route_path.exists() and sha256_file(route_path) == config_sha:
         add_check(
@@ -382,9 +410,27 @@ def check_evidence_lineage(
         )
         return
 
+    implementation_paths = route_implementation_paths(route_data, route_rel)
+    missing_model_mappings = [
+        path.removeprefix(MISSING_MODEL_IMPL_MAPPING_PREFIX)
+        for path in implementation_paths
+        if path.startswith(MISSING_MODEL_IMPL_MAPPING_PREFIX)
+    ]
+    if missing_model_mappings:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+            severity="ERROR",
+            status="FAIL",
+            message="missing implementation path mapping for model: " + ", ".join(sorted(missing_model_mappings)),
+            fix="Add the model implementation file to MODEL_IMPLEMENTATION_PATHS before using candidate/promoted evidence.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+
     route_bytes = git_file_bytes_at_commit(ROOT, commit, route_rel)
     missing_paths = []
-    for path in route_implementation_paths(route_data, route_rel):
+    for path in implementation_paths:
         path_bytes = route_bytes if path == route_rel else git_file_bytes_at_commit(ROOT, commit, path)
         if path_bytes is None:
             missing_paths.append(path)

@@ -135,3 +135,38 @@ def test_summary_rejects_local_absolute_reproduce_path(monkeypatch, tmp_path, ca
 
     assert check_summary_consistency.main() == 1
     assert "summary reproduce command contains local absolute path" in capsys.readouterr().out
+
+
+def test_summary_rejects_posix_absolute_reproduce_path(monkeypatch, tmp_path, capsys):
+    write_route(tmp_path)
+    write_bound_summary(
+        tmp_path,
+        reproduce="python scripts/repo_doctor.py experiment --route configs/routes/models/r.yaml --run /tmp/local/run --gate candidate",
+    )
+    monkeypatch.setattr(check_summary_consistency, "ROOT", tmp_path)
+
+    assert check_summary_consistency.main() == 1
+    assert "summary reproduce command contains local absolute path" in capsys.readouterr().out
+
+
+def test_summary_rejects_unc_absolute_reproduce_path(monkeypatch, tmp_path, capsys):
+    write_route(tmp_path)
+    write_bound_summary(
+        tmp_path,
+        reproduce=r"python scripts/repo_doctor.py experiment --route configs/routes/models/r.yaml --run \\server\share\run --gate candidate",
+    )
+    monkeypatch.setattr(check_summary_consistency, "ROOT", tmp_path)
+
+    assert check_summary_consistency.main() == 1
+    assert "summary reproduce command contains local absolute path" in capsys.readouterr().out
+
+
+def test_summary_allows_data_root_environment_reference(monkeypatch, tmp_path):
+    write_route(tmp_path)
+    write_bound_summary(
+        tmp_path,
+        reproduce='python scripts/repo_doctor.py experiment --route configs/routes/models/r.yaml --run outputs/r/run --data-root "$HUST_BCI_ER_DATA_ROOT" --gate candidate',
+    )
+    monkeypatch.setattr(check_summary_consistency, "ROOT", tmp_path)
+
+    assert check_summary_consistency.main() == 0

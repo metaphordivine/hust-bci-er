@@ -9,6 +9,7 @@ from hust_bci_er.audit.manifest import sha256_file
 from hust_bci_er.contracts.prediction import prediction_schema
 from hust_bci_er.evaluation.report import build_metric_report
 from scripts.audit_experiment import (
+    PROMOTION_REQUIRED_CANDIDATE_RULES,
     add_raw_data_source_dataset_match,
     check_prediction_scope_against_split,
     check_promotion_audit,
@@ -346,6 +347,28 @@ def test_evidence_lineage_requires_config_sha_to_match_worktree():
     assert rules["EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION"] == "PASS"
 
 
+def test_evidence_lineage_rejects_legacy_audit_schema_version():
+    route_data = yaml.safe_load(ROUTE.read_text(encoding="utf-8"))
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    checks = []
+
+    check_evidence_lineage(
+        {
+            "audit_schema_version": 1,
+            "git_commit": head,
+            "config_sha256": sha256_file(ROUTE),
+        },
+        ROUTE,
+        route_data,
+        checks,
+        gate="candidate",
+    )
+
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["RUN_AUDIT_SCHEMA_VERSION"] == "FAIL"
+    assert "EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE" not in rules
+
+
 def test_evidence_lineage_requires_commit_to_contain_route():
     route_data = yaml.safe_load(ROUTE.read_text(encoding="utf-8"))
     checks = []
@@ -365,6 +388,29 @@ def test_evidence_lineage_requires_commit_to_contain_route():
     rules = {check["rule_id"]: check["status"] for check in checks}
     assert rules["EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE"] == "PASS"
     assert rules["EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION"] == "FAIL"
+
+
+def test_evidence_lineage_rejects_missing_model_implementation_mapping():
+    route_data = yaml.safe_load(ROUTE.read_text(encoding="utf-8"))
+    route_data["model"] = {"name": "new_backbone"}
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    checks = []
+
+    check_evidence_lineage(
+        {
+            "audit_schema_version": 2,
+            "git_commit": head,
+            "config_sha256": sha256_file(ROUTE),
+        },
+        ROUTE,
+        route_data,
+        checks,
+        gate="candidate",
+    )
+
+    rule = next(check for check in checks if check["rule_id"] == "EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION")
+    assert rule["status"] == "FAIL"
+    assert "missing implementation path mapping for model: new_backbone" in rule["message"]
 
 
 def test_genuine_score_matrix_requires_crop_provenance(tmp_path):
@@ -1939,9 +1985,9 @@ def test_promotion_audit_uses_strict_key_value_parser(monkeypatch, tmp_path):
     assert "route_id" in rule["message"]
 
 
-def test_promotion_audit_requires_top4_rules_from_route_policy(monkeypatch, tmp_path):
+def test_promotion_audit_requires_new_candidate_evidence_rules(monkeypatch, tmp_path):
     monkeypatch.setattr("scripts.audit_experiment.ROOT", tmp_path)
-    critical_rules = [
+    old_required_rules = [
         "MANIFEST_VALID",
         "PRIMARY_METRIC_RECOMPUTE",
         "PRIMARY_METRIC_REPORTED",
@@ -1950,6 +1996,45 @@ def test_promotion_audit_requires_top4_rules_from_route_policy(monkeypatch, tmp_
         "RUN_SPLIT_EVIDENCE_CONSISTENT",
         "RUN_REPRODUCIBILITY_LOCKED",
     ]
+    audit = tmp_path / "reports" / "audits" / "candidate.json"
+    audit.parent.mkdir(parents=True)
+    audit.write_text(
+        json.dumps({"route_id": "summary_route", "gate": "candidate", "overall": "PASS", "checks": [{"rule_id": rule, "status": "PASS"} for rule in old_required_rules]}),
+        encoding="utf-8",
+    )
+    promotion = tmp_path / "reports" / "promotion_audits" / "summary_route_promotion.md"
+    promotion.parent.mkdir(parents=True)
+    promotion.write_text(
+        "\n".join(
+            [
+                "route_id: summary_route",
+                "promoted_from_run: outputs/summary_route/run",
+                "candidate_audit_report: reports/audits/candidate.json",
+                "primary_metric: top4_BA",
+                "comparison_baseline: baseline",
+                "risk_review: reviewed",
+                "no_leakage_review: reviewed",
+                "decision: promote",
+                "reviewer: test",
+                "date: 2026-05-14",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    checks = []
+    check_promotion_audit("summary_route", promotion, checks)
+
+    rule = next(check for check in checks if check["rule_id"] == "PROMOTION_AUDIT_CANDIDATE_RULES")
+    assert rule["status"] == "FAIL"
+    assert "EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE" in rule["message"]
+    assert "ROUTE_MODEL_KWARGS_PASSTHROUGH" in rule["message"]
+
+
+def test_promotion_audit_requires_top4_rules_from_route_policy(monkeypatch, tmp_path):
+    monkeypatch.setattr("scripts.audit_experiment.ROOT", tmp_path)
+    critical_rules = sorted(PROMOTION_REQUIRED_CANDIDATE_RULES)
     audit = tmp_path / "reports" / "audits" / "candidate.json"
     audit.parent.mkdir(parents=True)
     audit.write_text(

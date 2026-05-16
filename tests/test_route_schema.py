@@ -116,6 +116,19 @@ def test_sliding_window_search_space_cross_product_must_match_exact_metric_shape
     assert any("METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE" in err for err in errors)
 
 
+def test_sliding_window_base_config_must_match_exact_metric_shape_without_search_space():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"].pop("search_space", None)
+    data["augmentation"]["window_sec"] = 5
+    data["augmentation"]["stride_sec"] = 2
+    data["input_window_sec"] = 5
+
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+
+    assert any("METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE" in err for err in errors)
+
+
 def test_sliding_window_search_space_rejects_input_window_mismatch():
     data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
     data["augmentation"] = dict(data["augmentation"])

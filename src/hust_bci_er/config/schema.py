@@ -215,12 +215,26 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
 
     inference = data.get("inference") if isinstance(data.get("inference"), dict) else {}
     evaluation = data.get("evaluation") if isinstance(data.get("evaluation"), dict) else {}
-    requires_exact_five_crops = name == "split_first_fixed_crops" and (
+    requires_exact_metric = (
         inference.get("crop_policy") == "exact_single_crop"
         or evaluation.get("primary_metric") == "exact_single_crop_expected_BA"
     )
+    requires_exact_five_crops = name == "split_first_fixed_crops" and requires_exact_metric
     if requires_exact_five_crops and n_crops is not None and n_crops != 5:
         errors.append("split_first_fixed_crops exact_single_crop routes require augmentation.n_crops == 5")
+    if (
+        name == "split_first_sliding_window"
+        and requires_exact_metric
+        and source_trial_sec is not None
+        and window_sec is not None
+        and stride_sec is not None
+    ):
+        n_windows = sliding_window_count(source_trial_sec, window_sec, stride_sec)
+        if n_windows != 5:
+            errors.append(
+                "METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE: exact_single_crop_expected_BA "
+                f"requires exactly 5 sliding-window crops, got {n_windows}"
+            )
 
     search_space = augmentation.get("search_space")
     if requires_exact_five_crops and isinstance(search_space, dict) and "n_crops" in search_space:
