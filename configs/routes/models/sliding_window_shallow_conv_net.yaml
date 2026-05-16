@@ -1,5 +1,5 @@
 route_id: sliding_window_shallow_conv_net
-status: IDEA
+status: CANDIDATE
 dataset_version: train_v1
 split_id: p1_seed42_fold0
 seed: 42
