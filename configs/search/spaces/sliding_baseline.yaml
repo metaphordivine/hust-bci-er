@@ -1,6 +1,6 @@
 # Coarse-to-fine hyperparameter search space for sliding-window route family.
-# All sliding-window models share identical training config, so this
-# search space applies to eegnet, deformer_lite, conformer_lite, srfnet.
+# This search space applies to sliding-window torch backbones sharing this
+# training config; model-specific architecture hparams are intentionally excluded.
 
 parameters:
   training.optimizer.lr:
