@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,7 @@ AuditCheck = dict[str, Any]
 GATES = {"smoke", "diagnostic", "candidate", "promoted"}
 STRICT_GATES = {"candidate", "promoted"}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PROMOTION_REQUIRED_FIELDS = {
     "route_id",
     "promoted_from_run",
@@ -43,14 +46,30 @@ PROMOTION_REQUIRED_FIELDS = {
     "date",
 }
 PROMOTION_REQUIRED_CANDIDATE_RULES = {
+    "EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+    "EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE",
     "MANIFEST_VALID",
+    "METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE",
     "PRIMARY_METRIC_RECOMPUTE",
     "PRIMARY_METRIC_REPORTED",
+    "ROUTE_MODEL_KWARGS_PASSTHROUGH",
+    "RUN_AUDIT_SCHEMA_VERSION",
     "RUN_DATASET_EVIDENCE_VALID",
     "RUN_SPLIT_EVIDENCE_VALID",
     "RUN_SPLIT_EVIDENCE_CONSISTENT",
     "RUN_REPRODUCIBILITY_LOCKED",
 }
+MODEL_IMPLEMENTATION_PATHS = {
+    "eegnet": "src/hust_bci_er/models/backbones/eegnet.py",
+    "conformer_lite": "src/hust_bci_er/models/backbones/conformer_lite.py",
+    "deformer_lite": "src/hust_bci_er/models/backbones/deformer_lite.py",
+    "srfnet": "src/hust_bci_er/models/backbones/srfnet.py",
+    "shallow_conv_net": "src/hust_bci_er/models/backbones/shallow_conv_net.py",
+    "cbramod": "src/hust_bci_er/models/backbones/cbramod.py",
+    "fbstcnet": "src/hust_bci_er/models/backbones/fbstcnet.py",
+    "toy_centroid": "src/hust_bci_er/training/toy_adapter.py",
+}
+MISSING_MODEL_IMPL_MAPPING_PREFIX = "__missing_model_impl_mapping__:"
 PROMOTION_REQUIRED_TOP4_RULES = {
     "PREDICTION_TOP4_RANKING",
     "PREDICTION_TOP4_BINARY",
@@ -111,6 +130,38 @@ def display_path(path: Path, *, root: Path = ROOT) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return str(path.resolve())
+
+
+def repo_relative_or_display(path: Path | None, *, root: Path = ROOT) -> str | None:
+    if path is None:
+        return None
+    return display_path(path, root=root)
+
+
+def git_bytes(root: Path, args: list[str]) -> bytes | None:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def git_file_bytes_at_commit(root: Path, commit: str, rel_path: str) -> bytes | None:
+    return git_bytes(root, ["show", f"{commit}:{rel_path}"])
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def bytes_equal_ignoring_line_endings(left: bytes, right: bytes) -> bool:
+    return left.replace(b"\r\n", b"\n") == right.replace(b"\r\n", b"\n")
 
 
 def resolve_run_artifact(value: str, *, run_dir: Path, field: str) -> Path:
@@ -186,6 +237,236 @@ def compare_metric(checks: list[AuditCheck], *, metric_name: str, recomputed: fl
 def route_uses_top4(route_data: dict[str, Any]) -> bool:
     inference = route_data.get("inference")
     return isinstance(inference, dict) and inference.get("top4") is True
+
+
+def route_model_kwargs(route_data: dict[str, Any]) -> dict[str, Any]:
+    model = route_data.get("model")
+    if not isinstance(model, dict) or model.get("name") == "score_fusion":
+        return {}
+    return {key: value for key, value in model.items() if key != "name"}
+
+
+def route_model_name(route_data: dict[str, Any]) -> str:
+    model = route_data.get("model")
+    if isinstance(model, dict):
+        return str(model.get("name") or "")
+    return str(model or "")
+
+
+def route_implementation_paths(route_data: dict[str, Any], route_rel_path: str) -> list[str]:
+    paths = {
+        route_rel_path,
+        "src/hust_bci_er/config/schema.py",
+        "scripts/audit_experiment.py",
+    }
+    model_name = route_model_name(route_data)
+    if model_name == "score_fusion":
+        paths.update(
+            {
+                "scripts/assemble_score_route.py",
+                "src/hust_bci_er/inference/score_route_assembly.py",
+                "src/hust_bci_er/inference/clean_score_routes.py",
+            }
+        )
+    else:
+        paths.update(
+            {
+                "scripts/train_route.py",
+                "src/hust_bci_er/audit/run_manifest.py",
+                "src/hust_bci_er/models/factory.py",
+            }
+        )
+        model_file = MODEL_IMPLEMENTATION_PATHS.get(model_name)
+        if model_file is not None:
+            paths.add(model_file)
+        else:
+            paths.add(f"{MISSING_MODEL_IMPL_MAPPING_PREFIX}{model_name}")
+    training = route_data.get("training")
+    adapter_name = training.get("job_adapter") if isinstance(training, dict) else None
+    trainer_name = training.get("trainer") if isinstance(training, dict) else None
+    if adapter_name == "torch_classifier" or (trainer_name == "torch_classifier" and adapter_name in {None, ""}):
+        paths.update(
+            {
+                "src/hust_bci_er/training/real_adapter.py",
+                "src/hust_bci_er/training/_real_adapter_impl.py",
+            }
+        )
+    augmentation = route_data.get("augmentation")
+    if isinstance(augmentation, dict):
+        paths.add("src/hust_bci_er/data/windowing.py")
+    return sorted(paths)
+
+
+def check_route_model_kwargs_passthrough(
+    manifest: dict[str, Any],
+    route_data: dict[str, Any],
+    checks: list[AuditCheck],
+    *,
+    gate: str,
+) -> None:
+    expected = route_model_kwargs(route_data)
+    if not expected:
+        add_check(
+            checks,
+            rule_id="ROUTE_MODEL_KWARGS_PASSTHROUGH",
+            severity="INFO",
+            status="PASS",
+            message="route model exposes no builder kwargs",
+        )
+        return
+    observed = manifest.get("model_kwargs")
+    if observed != expected:
+        add_warn_or_fail(
+            checks,
+            gate=gate,
+            fail_gate=STRICT_GATES,
+            rule_id="ROUTE_MODEL_KWARGS_PASSTHROUGH",
+            message="manifest.model_kwargs does not match route.model kwargs",
+            fix="Pass every route.model field except name into build_model and record model_kwargs in manifest.",
+            decision_if_fail="BLOCKED",
+        )
+    else:
+        add_check(
+            checks,
+            rule_id="ROUTE_MODEL_KWARGS_PASSTHROUGH",
+            severity="INFO",
+            status="PASS",
+            message="route model kwargs match manifest provenance",
+        )
+
+
+def check_evidence_lineage(
+    manifest: dict[str, Any],
+    route_path: Path,
+    route_data: dict[str, Any],
+    checks: list[AuditCheck],
+    *,
+    gate: str,
+) -> None:
+    if gate not in STRICT_GATES:
+        return
+    schema_version = manifest.get("audit_schema_version")
+    if type(schema_version) is not int or schema_version < 2:
+        add_check(
+            checks,
+            rule_id="RUN_AUDIT_SCHEMA_VERSION",
+            severity="ERROR",
+            status="FAIL",
+            message="candidate/promoted evidence requires audit_schema_version >= 2",
+            fix="Regenerate manifest with current audit schema and evidence lineage fields.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    add_check(
+        checks,
+        rule_id="RUN_AUDIT_SCHEMA_VERSION",
+        severity="INFO",
+        status="PASS",
+        message="audit_schema_version supports evidence lineage checks",
+    )
+    config_sha = manifest.get("config_sha256")
+    if isinstance(config_sha, str) and route_path.exists() and sha256_file(route_path) == config_sha:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE",
+            severity="INFO",
+            status="PASS",
+            message="manifest config_sha256 matches current route file",
+        )
+    else:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE",
+            severity="ERROR",
+            status="FAIL",
+            message="manifest config_sha256 does not match the audited route file in this worktree",
+            fix="Audit the exact route YAML used for the run, or rerun after updating the route.",
+            decision_if_fail="BLOCKED",
+        )
+
+    try:
+        route_rel = route_path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+            severity="ERROR",
+            status="FAIL",
+            message="audited route config is outside the repository",
+            fix="Use a committed route config under configs/routes/models/.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+
+    commit = manifest.get("git_commit")
+    if not isinstance(commit, str) or GIT_SHA_RE.fullmatch(commit) is None:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+            severity="ERROR",
+            status="FAIL",
+            message="manifest.git_commit is not a full git commit SHA",
+            fix="Regenerate manifest from a committed worktree.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+
+    implementation_paths = route_implementation_paths(route_data, route_rel)
+    missing_model_mappings = [
+        path.removeprefix(MISSING_MODEL_IMPL_MAPPING_PREFIX)
+        for path in implementation_paths
+        if path.startswith(MISSING_MODEL_IMPL_MAPPING_PREFIX)
+    ]
+    if missing_model_mappings:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+            severity="ERROR",
+            status="FAIL",
+            message="missing implementation path mapping for model: " + ", ".join(sorted(missing_model_mappings)),
+            fix="Add the model implementation file to MODEL_IMPLEMENTATION_PATHS before using candidate/promoted evidence.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+
+    route_bytes = git_file_bytes_at_commit(ROOT, commit, route_rel)
+    missing_paths = []
+    for path in implementation_paths:
+        path_bytes = route_bytes if path == route_rel else git_file_bytes_at_commit(ROOT, commit, path)
+        if path_bytes is None:
+            missing_paths.append(path)
+    if route_bytes is None or missing_paths:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+            severity="ERROR",
+            status="FAIL",
+            message="manifest.git_commit does not contain route/implementation paths: " + ", ".join(missing_paths[:8]),
+            fix="Commit the route and implementation code before running candidate evidence.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    route_worktree_bytes = route_path.read_bytes()
+    commit_matches_config = isinstance(config_sha, str) and sha256_bytes(route_bytes) == config_sha
+    commit_matches_worktree = bytes_equal_ignoring_line_endings(route_bytes, route_worktree_bytes)
+    if not commit_matches_config and not commit_matches_worktree:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+            severity="ERROR",
+            status="FAIL",
+            message="route file at manifest.git_commit does not match manifest.config_sha256",
+            fix="Regenerate evidence from the committed route config used by the run.",
+            decision_if_fail="BLOCKED",
+        )
+        return
+    add_check(
+        checks,
+        rule_id="EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+        severity="INFO",
+        status="PASS",
+        message="manifest git commit contains the audited route and implementation paths",
+    )
 
 
 def check_split_manifest(route_data: dict[str, Any], checks: list[AuditCheck], *, gate: str) -> None:
@@ -1298,13 +1579,28 @@ def dataset_crop_provenance_keys(manifest: dict[str, Any], run_dir: Path, *, err
 
 
 def crop_score_columns(fields: set[str]) -> list[str]:
-    candidates = [f"crop_{idx}" for idx in range(5)]
-    if all(col in fields for col in candidates):
-        return candidates
-    candidates = [f"crop{idx}" for idx in range(5)]
-    if all(col in fields for col in candidates):
-        return candidates
+    for pattern, template in (
+        (re.compile(r"^crop_(\d+)$"), "crop_{}"),
+        (re.compile(r"^crop(\d+)$"), "crop{}"),
+    ):
+        indices = sorted(
+            int(match.group(1))
+            for field in fields
+            for match in [pattern.fullmatch(field)]
+            if match is not None
+        )
+        if indices == [0, 1, 2, 3, 4]:
+            return [template.format(idx) for idx in range(5)]
     return []
+
+
+def crop_score_shape_error(fields: set[str]) -> str | None:
+    score_like = sorted(field for field in fields if re.fullmatch(r"crop_?\d+", field))
+    if crop_score_columns(fields):
+        return None
+    if score_like:
+        return "score matrix metric requires exactly crop_0..crop_4 score columns; found " + ", ".join(score_like)
+    return "score matrix CSV must include crop_0..crop_4 score columns"
 
 
 def add_group_check(checks: list[AuditCheck], *, rule_id: str, bad: list[str], message: str, fix: str) -> None:
@@ -1335,6 +1631,25 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
     score_cols = crop_score_columns(fields)
     truth_col = schema["y_true"]
     trial_col = schema["trial_id"]
+    shape_error = crop_score_shape_error(fields)
+    if shape_error is not None:
+        add_check(
+            checks,
+            rule_id="METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE",
+            severity="ERROR",
+            status="FAIL",
+            message=shape_error,
+            fix="Regenerate score_matrix.csv with exactly five crop score columns matching the exact metric contract.",
+            decision_if_fail="DIAGNOSTIC_ONLY",
+        )
+        raise ValueError(shape_error)
+    add_check(
+        checks,
+        rule_id="METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE",
+        severity="INFO",
+        status="PASS",
+        message="score matrix crop shape matches exact metric contract",
+    )
     if group_cols is None or truth_col is None or trial_col is None or len(score_cols) != 5:
         raise ValueError("score matrix CSV must include group keys, trial_id, y_true, and crop_0..crop_4 columns")
     subject_col = schema["subject_id"]
@@ -2334,6 +2649,8 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir:
             else:
                 add_check(checks, rule_id="MANIFEST_VALID", severity="INFO", status="PASS", message="manifest is valid")
                 manifest = load_manifest(manifest_path)
+                check_evidence_lineage(manifest, route_path, route_data, checks, gate=gate)
+                check_route_model_kwargs_passthrough(manifest, route_data, checks, gate=gate)
                 check_reproducibility_manifest(manifest, checks, gate=gate, root=ROOT)
                 check_run_gate_eligibility(manifest, checks, gate=gate, route_data=route_data)
                 check_run_dataset_split_evidence(manifest, route_data, run_dir, checks, gate=gate)
@@ -2392,8 +2709,8 @@ def run_audit(route_path: Path, run_dir: Path | None, *, gate: str, summary_dir:
         raise RuntimeError(f"unknown audit decision: {decision}")
     return {
         "route_id": route_id,
-        "route_config": str(route_path),
-        "run_dir": str(run_dir) if run_dir is not None else None,
+        "route_config": repo_relative_or_display(route_path),
+        "run_dir": repo_relative_or_display(run_dir) if run_dir is not None else None,
         "gate": gate,
         "overall": decision,
         "checks": checks,

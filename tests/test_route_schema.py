@@ -100,6 +100,63 @@ def test_sliding_window_search_space_is_validated():
     assert any("search_space.window_sec" in err for err in errors)
 
 
+def test_sliding_window_search_space_cross_product_must_match_exact_metric_shape():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["window_sec"] = 5
+    data["input_window_sec"] = 5
+    data["augmentation"]["search_space"] = {
+        "source_trial_sec": [10],
+        "window_sec": [5],
+        "stride_sec": [1, 2],
+    }
+
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+
+    assert any("METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE" in err for err in errors)
+
+
+def test_sliding_window_base_config_must_match_exact_metric_shape_without_search_space():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"].pop("search_space", None)
+    data["augmentation"]["window_sec"] = 5
+    data["augmentation"]["stride_sec"] = 2
+    data["input_window_sec"] = 5
+
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+
+    assert any("METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE" in err for err in errors)
+
+
+def test_sliding_window_search_space_rejects_input_window_mismatch():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"window_sec": [4]}
+
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+
+    assert any("SEARCH_SPACE_CROSS_PRODUCT_VALID" in err for err in errors)
+
+
+def test_sliding_window_search_space_reports_missing_base_field():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"].pop("source_trial_sec")
+    data["augmentation"]["search_space"] = {
+        "source_trial_sec": [10],
+        "window_sec": [6],
+        "stride_sec": [1],
+    }
+
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+
+    assert any(
+        "SEARCH_SPACE_CROSS_PRODUCT_VALID: augmentation.source_trial_sec" in err
+        for err in errors
+    )
+
+
 def test_augmentation_search_space_rejects_fields_for_other_augmentation_type():
     data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
     data["augmentation"] = dict(data["augmentation"])
@@ -162,4 +219,4 @@ def test_fixed_crop_search_space_cross_product_uses_candidate_source_duration():
         "n_crops": [2],
     }
     errors = validate_route_config(data, path=Path("fixed_crop_pure_deformer_lite.yaml"))
-    assert any("search_space fixed-crop combinations" in err for err in errors)
+    assert any("fixed-crop combinations" in err for err in errors)
