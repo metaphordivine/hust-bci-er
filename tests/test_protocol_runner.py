@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import numpy as np
+import pytest
 import yaml
 
 import hust_bci_er.training.reproducibility as reproducibility_module
@@ -100,6 +101,19 @@ def test_protocol_execute_results_list_artifact_only_skips(tmp_path):
     assert skipped[0]["requested_device"] == "cuda"
     assert "prediction-producing jobs only" in skipped[0]["reason"]
     assert (run_dir / "protocol_execution_results.json").exists()
+
+
+def test_protocol_execute_candidate_rejects_artifact_only_skips(tmp_path):
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+
+    with pytest.raises(ValueError, match="cannot skip artifact-only training/selection jobs"):
+        execute_protocol_jobs(
+            manifest,
+            protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+            gate="candidate",
+            max_jobs=0,
+        )
 
 
 def test_protocol_runner_counts_p1_and_p3_jobs():
@@ -407,6 +421,31 @@ def test_write_run_manifest_locks_artifact_hashes(monkeypatch, tmp_path):
     assert manifest["environment_lock"]["files"]
     assert validate_manifest(run_dir / "manifest.json", root=Path.cwd(), route_data=None) == []
     assert json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["audit_schema_version"] == 2
+
+
+def test_write_run_manifest_records_route_model_kwargs(monkeypatch, tmp_path):
+    lock_pythonhashseed(monkeypatch, 42)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    predictions = run_dir / "predictions.csv"
+    predictions.write_text(
+        "subject_id,trial_id,y_score,y_pred,y_true,pred_top4\n"
+        + "\n".join(f"s1,t{idx},{1.0 - idx * 0.01},{1 if idx < 4 else 0},{1 if idx < 4 else 0},{1 if idx < 4 else 0}" for idx in range(8))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manifest = write_run_manifest(
+        route_config_path=Path("configs/routes/models/fixed_crop_ea_fbcnet.yaml"),
+        run_dir=run_dir,
+        prediction_csv=predictions,
+        metrics={"exact_single_crop_expected_BA": 1.0},
+        command="test",
+    )
+
+    assert manifest["model_name"] == "fbcnet"
+    assert manifest["model_kwargs"]["n_bands"] == 9
+    assert "name" not in manifest["model_kwargs"]
 
 
 def test_write_run_manifest_requires_locked_pythonhashseed_for_default_determinism(monkeypatch, tmp_path):

@@ -99,6 +99,16 @@ def default_checkpoint_selection(route_data: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def route_model_provenance(route_data: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    model = route_data.get("model")
+    if isinstance(model, Mapping):
+        model_name = str(model.get("name") or "")
+        if model_name == "score_fusion":
+            return model_name, {}
+        return model_name, {str(key): value for key, value in model.items() if key != "name"}
+    return str(model or ""), {}
+
+
 def environment_lock_payload(root: Path) -> dict[str, Any] | None:
     files = []
     for name in ["environment.lock", "requirements.lock"]:
@@ -205,9 +215,12 @@ def build_run_manifest_payload(
 ) -> dict[str, Any]:
     require_route_mapping(context.route_data, "evaluation")
     primary_metric = str(require_route_value(context.route_data, "evaluation", "primary_metric"))
+    model_name, model_kwargs = route_model_provenance(context.route_data)
     manifest: dict[str, Any] = {
         "audit_schema_version": 2,
         "route_id": context.route_id,
+        "model_name": model_name,
+        "model_kwargs": model_kwargs,
         "git_commit": git_commit(context.root),
         "config_path": context.route_config_path.relative_to(context.root).as_posix(),
         "config_snapshot_path": context.snapshot_path.relative_to(context.run_dir).as_posix(),

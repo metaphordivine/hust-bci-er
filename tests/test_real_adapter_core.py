@@ -585,12 +585,16 @@ def test_run_real_classifier_route_uses_protocol_split_manifest(tmp_path, monkey
         encoding="utf-8",
     )
 
+    seen_input_dims: list[int] = []
+
     class TinyClassifier(torch.nn.Module):
         def __init__(self, n_channels: int, n_times: int) -> None:
             super().__init__()
             self.linear = torch.nn.Linear(n_channels * n_times, 2)
 
         def forward(self, x):
+            seen_input_dims.append(int(x.ndim))
+            assert x.ndim == 3
             return self.linear(x.flatten(1))
 
     monkeypatch.setattr(
@@ -641,6 +645,7 @@ def test_run_real_classifier_route_uses_protocol_split_manifest(tmp_path, monkey
     with artifacts.prediction_csv.open(newline="", encoding="utf-8") as f:
         prediction_subjects = {row["subject_id"] for row in csv.DictReader(f)}
     assert prediction_subjects == {"HC001"}
+    assert seen_input_dims
 
 
 def test_run_real_classifier_route_passes_model_kwargs_to_builder(tmp_path, monkeypatch):

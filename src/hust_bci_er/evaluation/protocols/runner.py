@@ -404,6 +404,13 @@ def execute_protocol_jobs(
     jobs = [job for job in manifest.get("jobs", []) if isinstance(job, Mapping)]
     runnable = [job for job in jobs if "predictions.csv" in job.get("expected_artifacts", [])]
     artifact_only = [job for job in jobs if "predictions.csv" not in job.get("expected_artifacts", [])]
+    if gate == "candidate" and artifact_only:
+        skipped = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
+        raise ValueError(
+            "candidate protocol execution cannot skip artifact-only training/selection jobs; "
+            "P2/P3 candidate execution needs a formal adapter for these protocol stages first: "
+            f"{skipped}"
+        )
     if max_jobs is not None:
         runnable = runnable[: int(max_jobs)]
     results: list[dict[str, Any]] = [

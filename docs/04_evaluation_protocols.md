@@ -107,6 +107,8 @@ python scripts/run_evaluation_protocol.py \
 
 `--execute` 只调用已支持的 route job adapter。toy route 用于端到端平台 smoke；真实 HUST EEG P1 route 在传入 `--data-root` 后可用于受控 diagnostic/smoke 执行，例如 `--execute-gate smoke --execute-epochs-override 1 --device cuda`。这种运行用于证明真实数据、split、device、manifest、prediction 和 score matrix 链路可跑通；正式 candidate 证据必须使用 route 原始 epochs，不能带 epoch override，并且需要按审计要求补齐 route summary 与 candidate gate。
 
+P2/P3 现在可以生成 plan、runner manifest 和 split contract，也可以做非正式局部 diagnostic；但还没有完整的 candidate-grade 自动执行器。P2 的 `train_holdout_model` 和 P3 的 `inner_select` 属于 artifact-only 训练/选择 job，当前 `--execute` 不会产出这些 checkpoint/selection artifacts，也不会把它们传给后续评估 job。因此 `--execute-gate candidate` 会拒绝跳过这些 job，避免把部分执行结果误报为完整 P2/P3 candidate protocol。
+
 ## P2：pseudo-public holdout
 
 做什么：
