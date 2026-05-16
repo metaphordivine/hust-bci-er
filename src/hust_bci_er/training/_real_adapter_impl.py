@@ -136,6 +136,59 @@ def _split_subjects(
     return train_subjects, val_subjects, test_subjects
 
 
+def _subject_sets_from_split_manifest(path: Path, *, active_split_id: str) -> tuple[set[str], set[str], set[str]]:
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"split manifest must be a mapping: {path}")
+    manifest_split_id = str(data.get("split_id") or "")
+    if manifest_split_id and manifest_split_id != active_split_id:
+        raise ValueError(f"split manifest split_id {manifest_split_id} does not match active split_id {active_split_id}")
+
+    def listed(name: str) -> set[str]:
+        value = data.get(name) or []
+        if not isinstance(value, list):
+            raise ValueError(f"split manifest {name} must be a list")
+        return {str(item) for item in value}
+
+    train_subjects = listed("train_subjects")
+    val_subjects = listed("val_subjects")
+    test_subjects = listed("test_subjects")
+    if not (train_subjects or val_subjects or test_subjects):
+        rows = data.get("trial_rows") or []
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("split manifest must contain subject lists or trial_rows")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("split manifest trial_rows must contain only mappings")
+            subject = str(row.get("subject_id") or "")
+            split = str(row.get("split") or "")
+            if not subject:
+                raise ValueError("split manifest trial row is missing subject_id")
+            if split == "train":
+                train_subjects.add(subject)
+            elif split == "val":
+                val_subjects.add(subject)
+            elif split == "test":
+                test_subjects.add(subject)
+            else:
+                raise ValueError(f"split manifest trial row has invalid split: {split}")
+    overlaps = {
+        "train_val": train_subjects & val_subjects,
+        "train_test": train_subjects & test_subjects,
+        "val_test": val_subjects & test_subjects,
+    }
+    bad = {key: sorted(value) for key, value in overlaps.items() if value}
+    if bad:
+        raise ValueError(f"split manifest subject overlap: {bad}")
+    if not train_subjects:
+        raise ValueError("split manifest must provide non-empty train_subjects")
+    if not val_subjects:
+        raise ValueError("split manifest must provide non-empty val_subjects for checkpoint selection")
+    if not test_subjects:
+        raise ValueError("split manifest must provide non-empty test_subjects")
+    return train_subjects, val_subjects, test_subjects
+
+
 def _clip_trial(x: np.ndarray, duration_sec: float) -> np.ndarray:
     n_samples = int(round(duration_sec * SFREQ))
     return x[:, :min(n_samples, x.shape[1])]
@@ -692,6 +745,7 @@ def run_real_classifier_route(
     run_dir: Path,
     run_mode: str = "smoke",
     split_id: str | None = None,
+    split_manifest_path: Path | None = None,
     seed: int | None = None,
     command: str | Sequence[str] = "python scripts/train_route.py",
     data_root: Path | None = None,
@@ -708,6 +762,7 @@ def run_real_classifier_route(
         run_mode: "smoke" (subset + val-only), "full_subjects" (all subjects + val-only),
             or "candidate" (all subjects + held-out test predictions).
         split_id: Override split_id (default from route config).
+        split_manifest_path: Optional formal split manifest with train/val/test subjects.
         seed: Override seed (default from route config).
         command: Command string for manifest provenance.
         data_root: Path to .mat data root directory.
@@ -748,19 +803,33 @@ def run_real_classifier_route(
     if not all_trials:
         raise FileNotFoundError(f"no .mat files found under {data_root}")
 
-    rng = np.random.default_rng(active_seed)
     dep_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "DEP"))
     hc_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "HC"))
 
-    if run_mode in {"full_subjects", "candidate"}:
+    if split_manifest_path is not None:
+        train_subjects, val_subjects, test_subjects = _subject_sets_from_split_manifest(
+            Path(split_manifest_path),
+            active_split_id=active_split_id,
+        )
+        available_subjects = {t["subject_id"] for t in all_trials}
+        requested_subjects = train_subjects | val_subjects | test_subjects
+        missing_subjects = sorted(requested_subjects - available_subjects)
+        if missing_subjects:
+            raise ValueError(f"split manifest references subjects absent from data_root: {missing_subjects[:5]}")
+        trials = [t for t in all_trials if t["subject_id"] in requested_subjects]
+    elif run_mode in {"full_subjects", "candidate"}:
         # Use all subjects with 20% val + 20% test per cohort
         n_dep = len(dep_subjects)
         n_hc = len(hc_subjects)
         val_dep = max(1, n_dep // 5)
         val_hc = max(1, n_hc // 5)
         trials = all_trials
+        train_subjects, val_subjects, test_subjects = _split_subjects(
+            trials, val_dep=val_dep, val_hc=val_hc, seed=active_seed
+        )
     else:
         # Smoke: subset subjects by seeded random selection
+        rng = np.random.default_rng(active_seed)
         n_dep_avail = len(dep_subjects)
         n_hc_avail = len(hc_subjects)
         subset_dep = list(rng.choice(dep_subjects, min(smoke_n_dep, n_dep_avail), replace=False))
@@ -769,11 +838,9 @@ def run_real_classifier_route(
         trials = [t for t in all_trials if t["subject_id"] in subset_ids]
         val_dep = max(1, smoke_n_dep // 2)
         val_hc = max(1, smoke_n_hc // 2)
-
-    # Split subjects
-    train_subjects, val_subjects, test_subjects = _split_subjects(
-        trials, val_dep=val_dep, val_hc=val_hc, seed=active_seed
-    )
+        train_subjects, val_subjects, test_subjects = _split_subjects(
+            trials, val_dep=val_dep, val_hc=val_hc, seed=active_seed
+        )
 
     train_trials = [t for t in trials if t["subject_id"] in train_subjects]
     val_trials = [t for t in trials if t["subject_id"] in val_subjects]
@@ -1022,9 +1089,12 @@ def run_real_classifier_route(
             "training_epochs_overridden": epochs != source_epochs,
             "seed": active_seed,
             "run_mode": run_mode,
+            "requested_device": device,
+            "resolved_device": device_str,
             "prediction_scope": prediction_scope,
             "evaluation_split": eval_split,
             "score_matrix_evidence": score_matrix_evidence,
+            "protocol_job_split_manifest": str(Path(split_manifest_path).resolve()) if split_manifest_path is not None else None,
             "augmentation_transforms": train_transform_configs,
             "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
         }, indent=2, ensure_ascii=False) + "\n",
@@ -1055,6 +1125,7 @@ def run_real_classifier_route(
     manifest["prediction_scope"] = prediction_scope
     manifest["evaluation_split"] = eval_split
     manifest["evaluation_subjects"] = sorted(test_subjects if eval_split == "test" else val_subjects)
+    manifest["protocol_job_split_manifest"] = str(Path(split_manifest_path).resolve()) if split_manifest_path is not None else None
     manifest["split_subject_counts"] = {
         "train": len(train_subjects),
         "val": len(val_subjects),
@@ -1063,14 +1134,19 @@ def run_real_classifier_route(
     manifest["training_epochs"] = epochs
     manifest["source_training_epochs"] = source_epochs
     manifest["training_epochs_overridden"] = epochs != source_epochs
+    manifest["requested_device"] = device
+    manifest["resolved_device"] = device_str
     manifest["score_matrix_evidence"] = score_matrix_evidence
     manifest["augmentation_transforms"] = train_transform_configs
     manifest["augmentation_transform_scope"] = "train_only" if train_transform_configs else "none"
     manifest["declared_protocol"] = str(route_data["evaluation"]["protocol"])
-    manifest["adapter_execution_protocol"] = "single_subject_holdout_split"
+    manifest["adapter_execution_protocol"] = (
+        "materialized_protocol_job_split" if split_manifest_path is not None else "single_subject_holdout_split"
+    )
     manifest["protocol_evidence_scope"] = (
-        "one materialized split/fold from the declared route protocol; "
-        "full repeated/nested protocol evidence must be produced by run_evaluation_protocol.py"
+        "one materialized split/fold from the declared route protocol"
+        if split_manifest_path is not None
+        else "one adapter-generated subject holdout split; full repeated/nested protocol evidence must be produced by run_evaluation_protocol.py"
     )
     if run_mode in {"full_subjects", "candidate"}:
         ds = yaml.safe_load(dataset_path.read_text(encoding="utf-8")) or {}

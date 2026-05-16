@@ -78,6 +78,19 @@ python scripts/run_evaluation_protocol.py \
 
 runner 会在 `outputs/protocol_runs/<run_id>/splits/` 里写每个 job 的 split contract，并在 `protocol_run_manifest.json` 中记录 `split_manifest_path` 和 `split_sha256`。这些 contract 只是 job-specific 占位锁；真实训练前必须把它们替换为包含 subject lists 和 `trial_rows` 的正式 evidence。
 
+如果给 P1 runner 传入真实 HUST EEG 数据根目录，runner 会直接从 `.mat` 文件索引 subject/trial，并生成正式 subject-level `train_subjects`、`val_subjects`、`test_subjects` 和 `trial_rows`。`--device` 是执行设备契约的一部分：它会写入 `protocol_run_manifest.json`，执行时传给 `run_route_job.py`，最终由 `torch_classifier` 记录为 `requested_device` / `resolved_device`。
+
+```bash
+python scripts/run_evaluation_protocol.py \
+  --protocol p1 \
+  --route-config configs/routes/models/fixed_crop_ea_fbcnet.yaml \
+  --run-dir outputs/protocol_runs/p1_fbcnet_<run_id> \
+  --data-root scratch/local_data/hust_bci_er_train/训练集 \
+  --device cuda \
+  --seed 42 \
+  --n-folds 5
+```
+
 当前 runner 还提供受限执行模式：
 
 ```bash
@@ -92,7 +105,7 @@ python scripts/run_evaluation_protocol.py \
   --max-execute-jobs 1
 ```
 
-`--execute` 只调用已支持的 route job adapter。toy route 用于端到端平台 smoke；真实 HUST EEG route 应通过 `run_candidate_route.py` 产生 held-out test predictions、score matrix、run manifest、route summary，并完成 candidate audit。
+`--execute` 只调用已支持的 route job adapter。toy route 用于端到端平台 smoke；真实 HUST EEG P1 route 在传入 `--data-root` 后可用于受控 diagnostic/smoke 执行，例如 `--execute-gate smoke --execute-epochs-override 1 --device cuda`。这种运行用于证明真实数据、split、device、manifest、prediction 和 score matrix 链路可跑通；正式 candidate 证据必须使用 route 原始 epochs，不能带 epoch override，并且需要按审计要求补齐 route summary 与 candidate gate。
 
 ## P2：pseudo-public holdout
 
@@ -256,7 +269,7 @@ P3：
 
 当前仓库已有统一 runner manifest、toy end-to-end smoke，以及真实 HUST EEG `.mat` loader / `torch_classifier` candidate adapter。
 `plan_evaluation_protocol.py` 只生成计划，不训练，不读取标签，不生成结果。  
-`run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息；真实 candidate 结果应由 `run_candidate_route.py` 按 route 默认训练轮数生成，并由 `repo_doctor.py experiment --gate candidate` 审计。真实数据根目录通过 `--data-root` 或 `HUST_BCI_ER_DATA_ROOT` 提供，`.mat` 文件必须是 HDF5/v7.3 格式。带 `--epochs-override` 的运行只用于链路验证，会被 candidate/promoted gate 阻止。
+`run_evaluation_protocol.py` 会生成可审计 job 清单和 lock 信息；P1 在提供真实 `--data-root` 时会生成正式 subject/trial split contract，并可通过 `--execute` 跑受控诊断 job。真实 candidate 结果应按 route 默认训练轮数生成，并由 `repo_doctor.py experiment --gate candidate` 审计。真实数据根目录通过 `--data-root` 或 `HUST_BCI_ER_DATA_ROOT` 提供，`.mat` 文件必须是 HDF5/v7.3 格式。带 `--epochs-override` 的运行只用于链路验证，会被 candidate/promoted gate 阻止。
 
 无 sliding-window augmentation 的 exact-metric route（例如 `ea_deformer`）在 candidate 模式下不是普通单 crop 证据：adapter 会为 held-out test trial 生成 5 个不重叠 fixed crops 写入 `score_matrix.csv`，并要求 dataset manifest 中的 `crop_ids/window_start_secs` 与之对齐。原始 trial 必须至少覆盖 `5 * input_window_sec` 秒；`predictions.csv` 的 trial-level score 是这些 fixed crops 的均值，审计主指标以 score matrix 复算为准。
 

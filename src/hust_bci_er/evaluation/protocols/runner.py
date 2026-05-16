@@ -15,6 +15,7 @@ import yaml
 from hust_bci_er.audit.environment import capture_environment
 from hust_bci_er.audit.manifest import sha256_file
 from hust_bci_er.audit.run_manifest import default_checkpoint_selection, environment_lock_payload, git_commit, repo_root_from_route
+from hust_bci_er.data.hust_mat_index import hust_mat_trial_index
 from hust_bci_er.evaluation.crop_policy import crop_policy_manifest, route_crop_policy_manifest
 from hust_bci_er.evaluation.protocols.plans import (
     DEFAULT_CROP_POLICIES,
@@ -23,6 +24,7 @@ from hust_bci_er.evaluation.protocols.plans import (
     build_protocol2_plan,
     build_protocol3_plan,
 )
+from hust_bci_er.evaluation.protocols.subject_splits import assign_trial_rows_to_split, p1_subject_split
 from hust_bci_er.training.reproducibility import ReproducibilityConfig, reproducibility_manifest
 
 
@@ -54,6 +56,8 @@ class ProtocolJob:
     crop_policy: Mapping[str, Any] | None = None
     determinism: Mapping[str, Any] | None = None
     checkpoint_selection: Mapping[str, Any] | None = None
+    n_folds: int | None = None
+    val_fraction: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -95,6 +99,7 @@ def build_protocol_jobs(
     *,
     seeds: Sequence[int] = DEFAULT_SEEDS,
     n_folds: int = 5,
+    val_fraction: float = 0.2,
     n_holdout_subjects: int = 12,
     holdout_seed: int = 999,
     train_seed: int = 42,
@@ -112,7 +117,7 @@ def build_protocol_jobs(
     jobs: list[ProtocolJob] = []
 
     if protocol_name == "p1_repeated_group_kfold":
-        plan = build_protocol1_plan(routes, seeds=seeds, n_folds=n_folds)
+        plan = build_protocol1_plan(routes, seeds=seeds, n_folds=n_folds, val_fraction=val_fraction)
         for path, data in zip(paths, route_data):
             for seed in seeds:
                 for fold in range(int(n_folds)):
@@ -126,6 +131,8 @@ def build_protocol_jobs(
                             fold=fold,
                             expected_artifacts=("config_snapshot.yaml", "predictions.csv", "score_matrix.csv", "manifest.json", "audit_report.json"),
                             crop_policy=route_crop_policy_manifest(data, seed=int(seed)),
+                            n_folds=int(n_folds),
+                            val_fraction=float(val_fraction),
                             **route_job_base(path, data, seed=int(seed), split_id=split_id),
                         )
                     )
@@ -224,7 +231,11 @@ def route_locks(route_config_paths: Sequence[Path], *, run_dir: Path, root: Path
     return locks
 
 
-def split_contract_payload(jobs: Sequence[ProtocolJob]) -> dict[str, Any]:
+def split_contract_payload(
+    jobs: Sequence[ProtocolJob],
+    *,
+    trial_rows: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not jobs:
         raise ValueError("at least one job is required for a split contract")
     job = jobs[0]
@@ -263,10 +274,40 @@ def split_contract_payload(jobs: Sequence[ProtocolJob]) -> dict[str, Any]:
     crop_policies = [dict(item.crop_policy) for item in jobs if isinstance(item.crop_policy, Mapping)]
     if crop_policies:
         payload["crop_policies"] = crop_policies
+    if trial_rows is not None:
+        if job.protocol != "p1_repeated_group_kfold" or job.fold is None or job.n_folds is None:
+            raise ValueError("formal data-root split materialization is currently supported for P1 jobs only")
+        train_subjects, val_subjects, test_subjects = p1_subject_split(
+            trial_rows,
+            seed=int(job.seed),
+            fold=int(job.fold),
+            n_folds=int(job.n_folds),
+            val_fraction=float(job.val_fraction if job.val_fraction is not None else 0.2),
+        )
+        payload.update(
+            {
+                "status": "ready",
+                "description": "Formal P1 subject-group split contract generated from the indexed HUST EEG data root.",
+                "train_subjects": train_subjects,
+                "val_subjects": val_subjects,
+                "test_subjects": test_subjects,
+                "trial_rows": assign_trial_rows_to_split(
+                    trial_rows,
+                    train_subjects=train_subjects,
+                    val_subjects=val_subjects,
+                    test_subjects=test_subjects,
+                ),
+            }
+        )
     return payload
 
 
-def materialize_job_splits(jobs: Sequence[ProtocolJob], *, run_dir: Path) -> list[ProtocolJob]:
+def materialize_job_splits(
+    jobs: Sequence[ProtocolJob],
+    *,
+    run_dir: Path,
+    trial_rows: Sequence[Mapping[str, Any]] | None = None,
+) -> list[ProtocolJob]:
     split_dir = run_dir / "splits"
     split_dir.mkdir(parents=True, exist_ok=True)
     jobs_by_split: dict[str, list[ProtocolJob]] = {}
@@ -276,7 +317,14 @@ def materialize_job_splits(jobs: Sequence[ProtocolJob], *, run_dir: Path) -> lis
     locks: dict[str, tuple[str, str]] = {}
     for split_id, split_jobs in jobs_by_split.items():
         path = split_dir / f"{split_id}.yaml"
-        path.write_text(yaml.safe_dump(split_contract_payload(split_jobs), sort_keys=False, allow_unicode=True), encoding="utf-8")
+        path.write_text(
+            yaml.safe_dump(
+                split_contract_payload(split_jobs, trial_rows=trial_rows),
+                sort_keys=False,
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
         locks[split_id] = (path.relative_to(run_dir).as_posix(), sha256_file(path))
 
     return [
@@ -290,6 +338,8 @@ def materialize_protocol_run(
     route_config_paths: Sequence[Path],
     *,
     run_dir: Path,
+    data_root: Path | None = None,
+    default_execute_device: str = "auto",
     **kwargs: Any,
 ) -> dict[str, Any]:
     if not route_config_paths:
@@ -298,7 +348,8 @@ def materialize_protocol_run(
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     plan, jobs = build_protocol_jobs(protocol, route_config_paths, **kwargs)
-    jobs = materialize_job_splits(jobs, run_dir=run_dir)
+    trial_rows = hust_mat_trial_index(data_root) if data_root is not None else None
+    jobs = materialize_job_splits(jobs, run_dir=run_dir, trial_rows=trial_rows)
     experiment_gate_job_ids = [job.job_id for job in jobs if "predictions.csv" in job.expected_artifacts]
     artifact_only_job_ids = [job.job_id for job in jobs if job.job_id not in set(experiment_gate_job_ids)]
     manifest = {
@@ -309,6 +360,9 @@ def materialize_protocol_run(
         "plan": plan,
         "environment": capture_environment(),
         "environment_lock": environment_lock_payload(root),
+        "data_root": str(Path(data_root).resolve()) if data_root is not None else None,
+        "default_execute_device": str(default_execute_device),
+        "split_contract_evidence": "formal_subject_trial_rows" if trial_rows is not None else "placeholder_contracts",
         "route_locks": route_locks(route_config_paths, run_dir=run_dir, root=root),
         "jobs": [job.as_dict() for job in jobs],
         "experiment_gate_job_ids": experiment_gate_job_ids,
@@ -325,8 +379,14 @@ def execute_protocol_jobs(
     protocol_run_manifest_path: Path,
     gate: str = "smoke",
     max_jobs: int | None = None,
+    data_root: Path | None = None,
+    device: str = "auto",
+    epochs_override: int | None = None,
 ) -> list[dict[str, Any]]:
     """Execute prediction-producing jobs through the stable route-job adapter."""
+    if gate == "candidate" and epochs_override is not None:
+        raise ValueError("epochs_override cannot be used with candidate gate")
+    effective_device = str(device if str(device) != "auto" else manifest.get("default_execute_device") or "auto")
     run_manifest = protocol_run_manifest_path.resolve()
     root = next(
         (
@@ -358,6 +418,7 @@ def execute_protocol_jobs(
             "audit_returncode": None,
             "stdout_tail": "",
             "stderr_tail": "",
+            "requested_device": effective_device,
         }
         for job in artifact_only
     ]
@@ -375,7 +436,16 @@ def execute_protocol_jobs(
             str(protocol_run_manifest_path),
             "--job-id",
             str(job["job_id"]),
+            "--mode",
+            "candidate",
+            "--device",
+            effective_device,
         ]
+        resolved_data_root = data_root or manifest.get("data_root")
+        if resolved_data_root:
+            command.extend(["--data-root", str(resolved_data_root)])
+        if epochs_override is not None:
+            command.extend(["--epochs-override", str(int(epochs_override))])
         route_config = str(job["route_config"])
         run_dir = protocol_run_manifest_path.resolve().parent / "job_runs" / str(job["job_id"])
         proc = subprocess.run(command, cwd=root, text=True, capture_output=True)
@@ -412,6 +482,7 @@ def execute_protocol_jobs(
                 "command_returncode": proc.returncode,
                 "audit_gate": gate,
                 "audit_returncode": audit_code,
+                "requested_device": effective_device,
                 "stdout_tail": proc_stdout[-4000:],
                 "stderr_tail": proc_stderr[-4000:],
             }

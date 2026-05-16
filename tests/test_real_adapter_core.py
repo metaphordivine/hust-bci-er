@@ -523,6 +523,126 @@ def test_run_real_classifier_route_candidate_fake_hdf5_is_test_only(monkeypatch,
     assert captured_model_kwargs == {}
 
 
+def test_run_real_classifier_route_uses_protocol_split_manifest(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    import hust_bci_er.models.factory as model_factory
+    import hust_bci_er.training.reproducibility as reproducibility
+
+    monkeypatch.setenv("PYTHONHASHSEED", "42")
+    monkeypatch.setattr(reproducibility, "PROCESS_START_PYTHONHASHSEED", "42")
+
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    for idx in range(3):
+        _write_hdf5_mat(data_root / f"DEP{idx:03d}timedata.mat", samples_per_trial=50)
+        _write_hdf5_mat(data_root / f"HC{idx:03d}timedata.mat", samples_per_trial=50, transpose=True)
+    route = tmp_path / "protocol_split_route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: protocol_split_route",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "input_window_sec: 0.04",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: shallow_conv_net}",
+                "adaptation: none",
+                "training:",
+                "  trainer: torch_classifier",
+                "  job_adapter: torch_classifier",
+                "  epochs: 1",
+                "  batch_size: 8",
+                "  optimizer: {name: adamw, lr: 0.001}",
+                "  loss: cross_entropy",
+                "inference: {top4: true, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: exact_single_crop_expected_BA}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    split_manifest = tmp_path / "split.yaml"
+    split_manifest.write_text(
+        "\n".join(
+            [
+                "split_id: p1_seed42_fold0__p1_seed42_fold0",
+                "subject_group_split: true",
+                "status: ready",
+                "train_subjects: [DEP000, HC000]",
+                "val_subjects: [DEP001]",
+                "test_subjects: [HC001]",
+                "trial_rows:",
+                "  - {subject_id: DEP000, original_trial_id: DEP000::DEP000_neu1, split: train}",
+                "  - {subject_id: HC000, original_trial_id: HC000::HC000_neu1, split: train}",
+                "  - {subject_id: DEP001, original_trial_id: DEP001::DEP001_neu1, split: val}",
+                "  - {subject_id: HC001, original_trial_id: HC001::HC001_neu1, split: test}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class TinyClassifier(torch.nn.Module):
+        def __init__(self, n_channels: int, n_times: int) -> None:
+            super().__init__()
+            self.linear = torch.nn.Linear(n_channels * n_times, 2)
+
+        def forward(self, x):
+            return self.linear(x.flatten(1))
+
+    monkeypatch.setattr(
+        model_factory,
+        "build_model",
+        lambda _name, *, n_channels, n_times, n_classes, **_kwargs: TinyClassifier(n_channels, n_times),
+    )
+
+    def fake_context(**kwargs):
+        return SimpleNamespace(
+            run_dir=kwargs["run_dir"],
+            prediction_csv=kwargs["prediction_csv"],
+        )
+
+    def fake_manifest(context, *, metrics, command, score_matrix_csv):
+        return {
+            "audit_schema_version": 2,
+            "route_id": "protocol_split_route",
+            "command": " ".join(command) if isinstance(command, list) else command,
+            "primary_metric": "exact_single_crop_expected_BA",
+            "metrics": dict(metrics),
+            "prediction_csv": context.prediction_csv.name,
+            "metric_inputs": {"score_matrix_csv": Path(score_matrix_csv).name},
+        }
+
+    monkeypatch.setattr(real_adapter, "prepare_run_manifest_context", fake_context)
+    monkeypatch.setattr(real_adapter, "build_run_manifest_payload", fake_manifest)
+
+    artifacts = run_real_classifier_route(
+        route_config_path=route,
+        run_dir=tmp_path / "run",
+        run_mode="candidate",
+        split_id="p1_seed42_fold0__p1_seed42_fold0",
+        split_manifest_path=split_manifest,
+        command=["pytest", "protocol-split"],
+        data_root=data_root,
+        device="cpu",
+    )
+
+    manifest = json.loads(artifacts.manifest_json.read_text(encoding="utf-8"))
+    assert manifest["adapter_execution_protocol"] == "materialized_protocol_job_split"
+    assert manifest["requested_device"] == "cpu"
+    assert manifest["resolved_device"] == "cpu"
+    assert manifest["evaluation_subjects"] == ["HC001"]
+    split = yaml.safe_load(artifacts.split_manifest.read_text(encoding="utf-8"))
+    assert split["split_id"] == "p1_seed42_fold0__p1_seed42_fold0"
+    assert split["train_subjects"] == ["DEP000", "HC000"]
+    with artifacts.prediction_csv.open(newline="", encoding="utf-8") as f:
+        prediction_subjects = {row["subject_id"] for row in csv.DictReader(f)}
+    assert prediction_subjects == {"HC001"}
+
+
 def test_run_real_classifier_route_passes_model_kwargs_to_builder(tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
     import hust_bci_er.models.factory as model_factory

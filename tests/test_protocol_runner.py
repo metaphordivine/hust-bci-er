@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+import numpy as np
 import yaml
 
 import hust_bci_er.training.reproducibility as reproducibility_module
@@ -11,12 +12,29 @@ from hust_bci_er.audit.manifest import sha256_file, validate_manifest
 from hust_bci_er.audit.run_manifest import write_run_manifest
 from hust_bci_er.evaluation.crop_policy import crop_policy_manifest, select_crop_matrix, worst_crop_score
 from hust_bci_er.evaluation.protocols.runner import build_protocol_jobs, execute_protocol_jobs, materialize_protocol_run
+from hust_bci_er.evaluation.protocols.summary import write_protocol_summary
 from hust_bci_er.training.reproducibility import dataloader_worker_seed
 from scripts.audit_experiment import run_audit
 
 
 ROUTE = Path("configs/routes/models/ea_deformer.yaml")
 ROUTE2 = Path("configs/routes/models/sliding_window_eegnet.yaml")
+
+
+def write_hust_mat(path: Path, *, samples_per_trial: int = 8) -> None:
+    h5py = __import__("pytest").importorskip("h5py")
+    total = samples_per_trial * 4
+    with h5py.File(path, "w") as f:
+        f.create_dataset("EEG_data_neu", data=np.zeros((30, total), dtype=np.float32))
+        f.create_dataset("EEG_data_pos", data=np.ones((30, total), dtype=np.float32))
+
+
+def write_hust_data_root(root: Path, *, subjects_per_cohort: int = 6) -> Path:
+    root.mkdir()
+    for idx in range(subjects_per_cohort):
+        write_hust_mat(root / f"DEP{idx:03d}timedata.mat")
+        write_hust_mat(root / f"HC{idx:03d}timedata.mat")
+    return root
 
 
 def lock_pythonhashseed(monkeypatch, seed: int) -> None:
@@ -72,12 +90,14 @@ def test_protocol_runner_materializes_p2_crop_jobs(tmp_path):
 def test_protocol_execute_results_list_artifact_only_skips(tmp_path):
     run_dir = tmp_path / "p2_run"
     manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+    manifest["default_execute_device"] = "cuda"
 
     results = execute_protocol_jobs(manifest, protocol_run_manifest_path=run_dir / "protocol_run_manifest.json", max_jobs=0)
 
     skipped = [item for item in results if item["status"] == "SKIPPED_ARTIFACT_ONLY"]
     assert [item["job_id"] for item in skipped] == ["p2__ea_deformer__train_seed42"]
     assert skipped[0]["command_returncode"] is None
+    assert skipped[0]["requested_device"] == "cuda"
     assert "prediction-producing jobs only" in skipped[0]["reason"]
     assert (run_dir / "protocol_execution_results.json").exists()
 
@@ -127,6 +147,231 @@ def test_protocol_runner_records_multiple_routes_in_shared_split_contract(tmp_pa
     assert split_payload["route_ids"] == ["ea_deformer", "sliding_window_eegnet"]
     assert any(job_id.startswith("p2__ea_deformer__") for job_id in split_payload["job_ids"])
     assert any(job_id.startswith("p2__sliding_window_eegnet__") for job_id in split_payload["job_ids"])
+
+
+def test_protocol_runner_materializes_formal_p1_splits_from_hust_data_root(tmp_path):
+    data_root = write_hust_data_root(tmp_path / "data")
+
+    manifest = materialize_protocol_run(
+        "p1",
+        [ROUTE],
+        run_dir=tmp_path / "p1_formal",
+        seeds=[42],
+        n_folds=3,
+        data_root=data_root,
+        default_execute_device="cuda",
+    )
+    job = manifest["jobs"][0]
+    split_payload = yaml.safe_load((tmp_path / "p1_formal" / job["split_manifest_path"]).read_text(encoding="utf-8"))
+
+    assert manifest["split_contract_evidence"] == "formal_subject_trial_rows"
+    assert manifest["default_execute_device"] == "cuda"
+    assert split_payload["status"] == "ready"
+    assert split_payload["train_subjects"]
+    assert split_payload["val_subjects"]
+    assert split_payload["test_subjects"]
+    assert set(split_payload["train_subjects"]).isdisjoint(split_payload["val_subjects"])
+    assert set(split_payload["train_subjects"]).isdisjoint(split_payload["test_subjects"])
+    assert len(split_payload["trial_rows"]) == 12 * 8
+    assert {row["split"] for row in split_payload["trial_rows"]} == {"train", "val", "test"}
+
+
+def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path, monkeypatch):
+    from scripts import run_route_job
+    import hust_bci_er.training.real_adapter as real_adapter
+
+    route = tmp_path / "route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: tmp_real",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: base_split",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: shallow_conv_net}",
+                "adaptation: none",
+                "training: {trainer: torch_classifier, job_adapter: torch_classifier, epochs: 1, batch_size: 2, optimizer: {name: adamw, lr: 0.001}, loss: cross_entropy}",
+                "inference: {top4: true, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: exact_single_crop_expected_BA}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "protocol"
+    split = run_dir / "splits" / "job_split.yaml"
+    split.parent.mkdir(parents=True)
+    split.write_text("split_id: job_split\ntrain_subjects: [s1]\nval_subjects: [s2]\ntest_subjects: [s3]\ntrial_rows: []\n", encoding="utf-8")
+    protocol = {
+        "jobs": [
+            {
+                "job_id": "job1",
+                "route_config": route.as_posix(),
+                "split_id": "job_split",
+                "split_manifest_path": "splits/job_split.yaml",
+                "seed": 123,
+                "expected_artifacts": ["predictions.csv"],
+            }
+        ]
+    }
+    protocol_path = run_dir / "protocol_run_manifest.json"
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+    captured = {}
+
+    class Artifacts:
+        run_dir = tmp_path / "out" / "job1"
+        manifest_json = run_dir / "manifest.json"
+
+    def fake_run_real_classifier_route(**kwargs):
+        captured.update(kwargs)
+        Artifacts.run_dir.mkdir(parents=True)
+        Artifacts.manifest_json.write_text("{}", encoding="utf-8")
+        return Artifacts
+
+    monkeypatch.setattr(real_adapter, "run_real_classifier_route", fake_run_real_classifier_route)
+
+    assert run_route_job.main(
+        [
+            "--protocol-run",
+            protocol_path.as_posix(),
+            "--job-id",
+            "job1",
+            "--output-root",
+            (tmp_path / "out").as_posix(),
+            "--data-root",
+            (tmp_path / "data").as_posix(),
+            "--device",
+            "cpu",
+            "--epochs-override",
+            "1",
+        ]
+    ) == 0
+    assert captured["run_mode"] == "candidate"
+    assert captured["split_id"] == "job_split"
+    assert captured["split_manifest_path"] == split
+    assert captured["seed"] == 123
+    assert captured["device"] == "cpu"
+    assert captured["smoke_epochs"] == 1
+
+
+def test_run_route_job_uses_protocol_default_device_and_data_root(tmp_path, monkeypatch):
+    from scripts import run_route_job
+    import hust_bci_er.training.real_adapter as real_adapter
+
+    route = tmp_path / "route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: tmp_real",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: base_split",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: shallow_conv_net}",
+                "adaptation: none",
+                "training: {trainer: torch_classifier, job_adapter: torch_classifier, epochs: 1, batch_size: 2, optimizer: {name: adamw, lr: 0.001}, loss: cross_entropy}",
+                "inference: {top4: true, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: exact_single_crop_expected_BA}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "protocol"
+    split = run_dir / "splits" / "job_split.yaml"
+    split.parent.mkdir(parents=True)
+    split.write_text("split_id: job_split\ntrain_subjects: [s1]\nval_subjects: [s2]\ntest_subjects: [s3]\ntrial_rows: []\n", encoding="utf-8")
+    data_root = tmp_path / "data"
+    protocol = {
+        "default_execute_device": "cuda",
+        "data_root": data_root.as_posix(),
+        "jobs": [
+            {
+                "job_id": "job1",
+                "route_config": route.as_posix(),
+                "split_id": "job_split",
+                "split_manifest_path": "splits/job_split.yaml",
+                "seed": 123,
+                "expected_artifacts": ["predictions.csv"],
+            }
+        ],
+    }
+    protocol_path = run_dir / "protocol_run_manifest.json"
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+    captured = {}
+
+    class Artifacts:
+        run_dir = tmp_path / "out" / "job1"
+        manifest_json = run_dir / "manifest.json"
+
+    def fake_run_real_classifier_route(**kwargs):
+        captured.update(kwargs)
+        Artifacts.run_dir.mkdir(parents=True)
+        Artifacts.manifest_json.write_text("{}", encoding="utf-8")
+        return Artifacts
+
+    monkeypatch.setattr(real_adapter, "run_real_classifier_route", fake_run_real_classifier_route)
+
+    assert run_route_job.main(
+        [
+            "--protocol-run",
+            protocol_path.as_posix(),
+            "--job-id",
+            "job1",
+            "--output-root",
+            (tmp_path / "out").as_posix(),
+        ]
+    ) == 0
+    assert captured["device"] == "cuda"
+    assert captured["data_root"] == data_root
+
+
+def test_protocol_summary_writes_fold_aggregate_outputs(tmp_path):
+    run_dir = tmp_path / "p1_done"
+    job_run = run_dir / "job_runs" / "job1"
+    job_run.mkdir(parents=True)
+    (run_dir / "protocol_run_manifest.json").write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {
+                        "job_id": "job1",
+                        "route_id": "route_a",
+                        "seed": 42,
+                        "fold": 0,
+                        "stage": "train_eval",
+                        "split_id": "split_a",
+                        "expected_artifacts": ["predictions.csv", "manifest.json"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (job_run / "manifest.json").write_text(
+        json.dumps({"primary_metric": "exact_single_crop_expected_BA", "metrics": {"exact_single_crop_expected_BA": 0.75}}),
+        encoding="utf-8",
+    )
+    (job_run / "audit_report.json").write_text(json.dumps({"overall": "PASS"}), encoding="utf-8")
+    (job_run / "subject_ba.csv").write_text(
+        "subject_id,balanced_accuracy,metric_value,n_rows,group_key\ns1,0.75,0.75,8,s1\n",
+        encoding="utf-8",
+    )
+
+    audit = write_protocol_summary(run_dir)
+
+    assert audit["status"] == "COMPLETE"
+    board = (run_dir / "protocol1_board.csv").read_text(encoding="utf-8")
+    assert "route_a" in board
+    assert "0.75" in board
+    assert (run_dir / "protocol1_subject_ba.csv").exists()
 
 
 def test_write_run_manifest_locks_artifact_hashes(monkeypatch, tmp_path):

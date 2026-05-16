@@ -26,7 +26,7 @@ right foundation pieces, then calls the repository gates.
 | Raw/indexed data becomes evidence | Dataset Manifest Builder | `scripts/build_dataset_manifest.py` / `hust_bci_er.data.manifest_builder` | `configs/datasets/<dataset_version>.yaml` with data sources, checksums, subject/trial/crop rows, label availability | Dataset QA plus `python scripts/repo_doctor.py fast` |
 | Subject split becomes evidence | Split Manifest Builder | `scripts/build_split_manifest.py` / `hust_bci_er.data.split_builder` | `configs/splits/<split_id>.yaml` with subject lists and `trial_rows` | No subject/original-trial leakage plus fast gate |
 | Dataset evidence needs sanity check | Lightweight Data QA | `scripts/data_qa_report.py` / `hust_bci_er.data.qa` | Markdown/JSON QA summary for subject, trial, crop, label, checksum gaps | QA report has no blocking gaps for the intended gate |
-| P1/P2/P3 should become runnable jobs | Protocol Runner Skeleton | `scripts/plan_evaluation_protocol.py`, `scripts/run_evaluation_protocol.py` | `protocol_run_manifest.json` and job split contracts | Runner manifest exists; do not call it candidate evidence |
+| P1/P2/P3 should become runnable jobs | Protocol Runner Skeleton | `scripts/plan_evaluation_protocol.py`, `scripts/run_evaluation_protocol.py` | `protocol_run_manifest.json` and job split contracts; P1 with `--data-root` materializes formal subject/trial split evidence | Runner manifest exists; executed diagnostic jobs pass the requested smoke gate; do not call bounded diagnostic evidence candidate evidence |
 | Toy end-to-end platform smoke | Toy Route Job Adapter | `scripts/launch_reproducible.py`, `scripts/train_route.py`, `scripts/toy_experiment_audit.py` | synthetic dataset/split evidence, predictions, score matrix, metric report, run manifest, candidate audit report under `outputs/` | toy candidate audit passes; do not call it real EEG evidence |
 | Real HUST EEG candidate run | Torch Classifier Route Job Adapter | `scripts/launch_reproducible.py`, `scripts/run_candidate_route.py` with `--data-root` or `HUST_BCI_ER_DATA_ROOT` | run-local dataset/split evidence, held-out test predictions, genuine score matrix, metric report, manifest, route summary, candidate audit report | `repo_doctor.py experiment --gate candidate` passes |
 | Real run needs reproducibility lock | Deterministic Utilities + Run Manifest Writer | `hust_bci_er.training.reproducibility`, `hust_bci_er.audit.run_manifest.write_run_manifest` | `manifest.json` with git commit, config snapshot hash, dataset/split hash, command, seed, environment, artifact hashes | `repo_doctor.py experiment --gate candidate` when run artifacts exist |
@@ -83,13 +83,18 @@ route config -> plan_evaluation_protocol.py -> run_evaluation_protocol.py -> run
 ```
 
 The runner manifest is a job plan and lock. It is not a prediction table, score
-matrix, or candidate audit report.
+matrix, or candidate audit report. For P1, passing `--data-root` makes the split
+contracts formal subject/trial evidence; passing `--device` records and forwards
+the intended execution device.
 
-For the toy route only, the runner can execute one or more supported jobs:
+The runner can execute supported jobs for toy route platform smoke, and for real
+HUST EEG P1 diagnostic jobs when a real `--data-root` is provided:
 
 ```bash
 python scripts/run_evaluation_protocol.py --protocol p1 --route-config configs/routes/models/toy_eegnet.yaml --run-dir outputs/protocol_runs/toy_p1 --seed 42 --n-folds 2 --execute --execute-gate smoke --max-execute-jobs 1
 ```
+
+Real EEG diagnostic executions may use `--execute-gate smoke --execute-epochs-override 1 --device cuda`. Do not use epoch override with candidate evidence.
 
 ### Artifact First
 

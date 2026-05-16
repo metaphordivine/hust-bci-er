@@ -90,6 +90,19 @@ python scripts/launch_reproducible.py --seed 42 -- \
     --data-root scratch/local_data/hust_bci_er_train/训练集
 ```
 
+P1 repeated group-kfold 的训练前批量入口是 `run_evaluation_protocol.py`。传入真实 `--data-root` 时，runner 会索引 HUST `.mat` 文件并为每个 seed/fold 写入正式 subject-level split contract 和 `trial_rows`；`--device` 会记录到 protocol manifest，并在 `--execute` 时传给每个 route job 与最终训练 manifest。诊断跑可以加 `--execute-epochs-override`，但它不能和 `--execute-gate candidate` 同用：
+
+```bash
+python scripts/run_evaluation_protocol.py \
+  --protocol p1 \
+  --route-config configs/routes/models/fixed_crop_ea_fbcnet.yaml \
+  --run-dir outputs/protocol_runs/p1_fbcnet_<run_id> \
+  --data-root scratch/local_data/hust_bci_er_train/训练集 \
+  --device cuda \
+  --seed 42 \
+  --n-folds 5
+```
+
 `smoke` 和 `full_subjects` 都是诊断模式，不能作为 candidate 证据。
 带 `--epochs-override` 的 candidate run 只适合验证链路，candidate/promoted gate 会阻止它作为正式证据。
 对 `ea_deformer` 这类无 sliding-window augmentation、但主指标为 `exact_single_crop_expected_BA` 的真实 candidate route，adapter 会为 score matrix evidence 从每个 held-out test trial 切出 5 个不重叠固定 crop。因此原始 trial 至少需要 `5 * input_window_sec` 秒；`ea_deformer` 的 `input_window_sec: 10` 对应每个 trial 至少 50 秒。此时 `predictions.csv` 的 trial-level `y_score` 是这 5 个 fixed crops 的 `mean_score` 聚合，主指标仍由 `score_matrix.csv` 复算。

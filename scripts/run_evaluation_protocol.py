@@ -33,10 +33,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--outer-seed", type=int, default=42)
     parser.add_argument("--inner-seed", type=int, default=123)
     parser.add_argument("--grid-size", action="append", type=parse_grid_size, default=[], help="P3 route grid size, route_id=size.")
+    parser.add_argument("--data-root", type=Path, help="HUST EEG .mat data root. When provided for P1, job split contracts include formal subject/trial rows.")
+    parser.add_argument("--device", default="auto", help="Torch device passed to executed route jobs.")
     parser.add_argument("--execute", action="store_true", help="Execute prediction-producing jobs with the supported route adapter.")
     parser.add_argument("--execute-gate", choices=["smoke", "candidate"], default="smoke")
+    parser.add_argument("--execute-epochs-override", type=int, help="Bound executed jobs for diagnostic runs. Do not use with candidate evidence.")
     parser.add_argument("--max-execute-jobs", type=int)
     args = parser.parse_args(argv)
+    if args.execute_gate == "candidate" and args.execute_epochs_override is not None:
+        parser.error("--execute-epochs-override cannot be used with --execute-gate candidate")
 
     kwargs = {}
     if args.protocol == "p1":
@@ -62,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
         args.protocol,
         args.route_config,
         run_dir=run_dir,
+        data_root=args.data_root,
+        default_execute_device=args.device,
         **kwargs,
     )
     payload = {"protocol": manifest["protocol"], "jobs": len(manifest["jobs"]), "run_dir": str(run_dir.resolve())}
@@ -71,6 +78,9 @@ def main(argv: list[str] | None = None) -> int:
             protocol_run_manifest_path=run_dir.resolve() / "protocol_run_manifest.json",
             gate=args.execute_gate,
             max_jobs=args.max_execute_jobs,
+            data_root=args.data_root,
+            device=args.device,
+            epochs_override=args.execute_epochs_override,
         )
         payload["executed_jobs"] = sum(1 for item in results if item.get("status") == "EXECUTED")
         payload["skipped_artifact_only_jobs"] = sum(1 for item in results if item.get("status") == "SKIPPED_ARTIFACT_ONLY")
