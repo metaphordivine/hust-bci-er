@@ -37,6 +37,30 @@ routes:
   - route_id: fixed_crop_ea_deformer
     owner: metaphordivine
     blocker:
+  - route_id: fixed_crop_ea_deformer_depth1_emb64
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_deformer_depth2_emb96
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_deformer_depth3_emb64
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_deformer_dropout015
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_deformer_dropout035
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_deformer_ff2
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_deformer_ff6
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_deformer_mean_pool_control
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_fbstcnet
     owner: metaphordivine
     blocker:
