@@ -1,0 +1,18 @@
+# fixed_crop_ea_fbstcnet_bands_4_40 Summary
+
+route_id: fixed_crop_ea_fbstcnet_bands_4_40
+route_status: IDEA
+audit_decision: PASS
+gate: candidate
+primary_metric: exact_single_crop_expected_BA
+primary_metric_value: 0.6944506666666667
+decision: PASS
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/fixed_crop_ea_fbstcnet_bands_4_40.yaml --run outputs/fixed_crop_ea_fbstcnet_bands_4_40/candidate_20260516_seed42 --gate candidate
+dataset: train_v1
+split: p1_seed42_fold0
+seed: 42
+protocol: p1_repeated_group_kfold
+risk notes: single-split FBSTCNet ablation evidence only; no P1/P2/P3 repeated protocol was run, and promotion requires multi-seed/group-kfold, DEP/HC gap, and hard-subject review.
+audit_report_path: reports/route_summaries/evidence/fixed_crop_ea_fbstcnet_bands_4_40_audit_report.json
+manifest_path: reports/route_summaries/evidence/fixed_crop_ea_fbstcnet_bands_4_40_manifest.json
+manifest_sha256: fadf5f08836932a4c1dfa00244c2cae0163ea7184ad4341d07faae286ceef69f

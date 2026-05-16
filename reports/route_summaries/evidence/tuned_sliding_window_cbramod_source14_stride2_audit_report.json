@@ -1,0 +1,385 @@
+{
+  "route_id": "tuned_sliding_window_cbramod_source14_stride2",
+  "route_config": "configs/routes/models/tuned_sliding_window_cbramod_source14_stride2.yaml",
+  "run_dir": "outputs/tuned_sliding_window_cbramod_source14_stride2/candidate_20260516_seed42",
+  "gate": "candidate",
+  "overall": "PASS",
+  "checks": [
+    {
+      "rule_id": "ROUTE_SCHEMA",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "route config is valid",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "DATASET_MANIFEST_DECLARED",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "route dataset manifest is declared",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SPLIT_MANIFEST_DECLARED",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "route split manifest is declared",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_DIRECTORY",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "run directory exists",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "MANIFEST_VALID",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "manifest is valid",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_AUDIT_SCHEMA_VERSION",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "audit_schema_version supports evidence lineage checks",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "manifest config_sha256 matches current route file",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "manifest git commit contains the audited route and implementation paths",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "ROUTE_MODEL_KWARGS_PASSTHROUGH",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "route model kwargs match manifest provenance",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_REPRODUCIBILITY_LOCKED",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "run reproducibility metadata is locked",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_MODE_CANDIDATE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "run mode is candidate",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_SCOPE_TEST_ONLY",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "prediction scope is held-out test only",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "TRAINING_EPOCHS_MATCH_ROUTE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "candidate training epochs match the route config",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SCORE_MATRIX_GENUINE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "score matrix evidence is genuine (real crop/window scores)",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RAW_DATA_SOURCES_VALID",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "raw_data_sources records 60 .mat files with verified sha256",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_DATASET_EVIDENCE_VALID",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "run dataset evidence is verifiable",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_DATASET_LABEL_SCOPE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "dataset label scope is explicit",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_DATASET_CHECKSUM_SCHEMA",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "dataset checksum schema is valid",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_DATASET_CHECKSUM_COVERAGE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "dataset checksums cover all data sources",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_DATASET_CHECKSUM_EXTRA",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "dataset checksum manifest has no extra paths",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RAW_DATA_SOURCES_DATASET_MATCH",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "manifest raw_data_sources match dataset evidence (60 files)",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_SPLIT_EVIDENCE_VALID",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "run split evidence is verifiable",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_SPLIT_EVIDENCE_CONSISTENT",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "run split subject lists match trial_rows",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_SPLIT_SUBJECT_DISJOINT",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "run split subjects are disjoint",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "RUN_SPLIT_ORIGINAL_TRIAL_DISJOINT",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "run split original trials do not cross splits",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_NONEMPTY",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "prediction rows: 96",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_SCOPE_SPLIT_MATCH",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "prediction rows match test_subjects",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_SCOPE_TRIAL_MATCH",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "prediction trial keys match split test",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_SCORE_COLUMN",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "score column found",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_TOP4_GROUPS",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "Top-4 groups are valid",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_TRIAL_ID_UNIQUE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "Top-4 semantic check passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_TOP4_BINARY",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "Top-4 semantic check passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_TOP4_TRUTH_BALANCE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "Top-4 semantic check passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_SCORE_NUMERIC",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "Top-4 semantic check passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PREDICTION_TOP4_RANKING",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "Top-4 semantic check passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "METRIC_RECOMPUTE_BA",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "recomputed BA: 0.500000",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "score matrix crop shape matches exact metric contract",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SCORE_MATRIX_SCOPE_SPLIT_MATCH",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "score matrix rows match split test",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SCORE_MATRIX_GROUP_SIZE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "SCORE_MATRIX_GROUP_SIZE passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SCORE_MATRIX_TRIAL_ID_UNIQUE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "SCORE_MATRIX_TRIAL_ID_UNIQUE passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SCORE_MATRIX_LABEL_BINARY",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "SCORE_MATRIX_LABEL_BINARY passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SCORE_MATRIX_TRUTH_BALANCE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "SCORE_MATRIX_TRUTH_BALANCE passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SCORE_MATRIX_SCORE_NUMERIC",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "SCORE_MATRIX_SCORE_NUMERIC passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SCORE_MATRIX_CROP_PROVENANCE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "SCORE_MATRIX_CROP_PROVENANCE passed",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PRIMARY_METRIC_RECOMPUTE",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "recomputed exact_single_crop_expected_BA: 0.571061",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "PRIMARY_METRIC_REPORTED",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "reported exact_single_crop_expected_BA matches recompute",
+      "fix": "",
+      "decision_if_fail": null
+    },
+    {
+      "rule_id": "SUMMARY_EXISTS",
+      "severity": "INFO",
+      "status": "PASS",
+      "message": "summary found: reports/route_summaries/tuned_sliding_window_cbramod_source14_stride2_summary.md",
+      "fix": "",
+      "decision_if_fail": null
+    }
+  ]
+}
