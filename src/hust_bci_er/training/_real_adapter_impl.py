@@ -22,6 +22,7 @@ from hust_bci_er.audit.run_manifest import (
 )
 from hust_bci_er.config.schema import validate_route_config
 from hust_bci_er.contracts.records import PredictionRecord
+from hust_bci_er.data.augmentations import apply_transforms_to_windows, transform_configs_from_route
 from hust_bci_er.data.windowing import fixed_crop_slices, fixed_crop_spec_from_config
 from hust_bci_er.evaluation.prediction_writer import write_predictions
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
@@ -135,6 +136,59 @@ def _split_subjects(
     return train_subjects, val_subjects, test_subjects
 
 
+def _subject_sets_from_split_manifest(path: Path, *, active_split_id: str) -> tuple[set[str], set[str], set[str]]:
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"split manifest must be a mapping: {path}")
+    manifest_split_id = str(data.get("split_id") or "")
+    if manifest_split_id and manifest_split_id != active_split_id:
+        raise ValueError(f"split manifest split_id {manifest_split_id} does not match active split_id {active_split_id}")
+
+    def listed(name: str) -> set[str]:
+        value = data.get(name) or []
+        if not isinstance(value, list):
+            raise ValueError(f"split manifest {name} must be a list")
+        return {str(item) for item in value}
+
+    train_subjects = listed("train_subjects")
+    val_subjects = listed("val_subjects")
+    test_subjects = listed("test_subjects")
+    if not (train_subjects or val_subjects or test_subjects):
+        rows = data.get("trial_rows") or []
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("split manifest must contain subject lists or trial_rows")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("split manifest trial_rows must contain only mappings")
+            subject = str(row.get("subject_id") or "")
+            split = str(row.get("split") or "")
+            if not subject:
+                raise ValueError("split manifest trial row is missing subject_id")
+            if split == "train":
+                train_subjects.add(subject)
+            elif split == "val":
+                val_subjects.add(subject)
+            elif split == "test":
+                test_subjects.add(subject)
+            else:
+                raise ValueError(f"split manifest trial row has invalid split: {split}")
+    overlaps = {
+        "train_val": train_subjects & val_subjects,
+        "train_test": train_subjects & test_subjects,
+        "val_test": val_subjects & test_subjects,
+    }
+    bad = {key: sorted(value) for key, value in overlaps.items() if value}
+    if bad:
+        raise ValueError(f"split manifest subject overlap: {bad}")
+    if not train_subjects:
+        raise ValueError("split manifest must provide non-empty train_subjects")
+    if not val_subjects:
+        raise ValueError("split manifest must provide non-empty val_subjects for checkpoint selection")
+    if not test_subjects:
+        raise ValueError("split manifest must provide non-empty test_subjects")
+    return train_subjects, val_subjects, test_subjects
+
+
 def _clip_trial(x: np.ndarray, duration_sec: float) -> np.ndarray:
     n_samples = int(round(duration_sec * SFREQ))
     return x[:, :min(n_samples, x.shape[1])]
@@ -142,40 +196,75 @@ def _clip_trial(x: np.ndarray, duration_sec: float) -> np.ndarray:
 
 KNOWN_PREPROC = frozenset({
     "zscore", "robust_zscore", "whitening_eps1e3", "whitening_eps3e4",
-    "shrinkage_whitening", "euclidean_alignment", "car",
+    "shrinkage_whitening", "euclidean_alignment", "car", "bandpass",
 })
 
 
-def _apply_preprocessing(x: np.ndarray, preproc_names: list[str], *, ea_transform: np.ndarray | None = None) -> np.ndarray:
+def _preprocessing_step(item: Any) -> tuple[str, dict[str, Any]]:
+    if isinstance(item, str):
+        return item, {}
+    if isinstance(item, Mapping):
+        name = str(item.get("name") or "")
+        params = {key: value for key, value in item.items() if key != "name"}
+        return name, params
+    return str(item), {}
+
+
+def _preprocessing_names(preproc_items: Sequence[Any]) -> list[str]:
+    return [_preprocessing_step(item)[0] for item in preproc_items]
+
+
+def _apply_preprocessing(x: np.ndarray, preproc_names: Sequence[Any], *, ea_transform: np.ndarray | None = None) -> np.ndarray:
     """Apply a sequence of preprocessing steps to one window [channels, time]."""
-    for name in preproc_names:
+    for item in preproc_names:
+        name, params = _preprocessing_step(item)
         if name not in KNOWN_PREPROC:
             raise ValueError(f"unknown preprocessing step: {name}")
         if name == "zscore":
+            if params:
+                raise ValueError("zscore preprocessing does not accept parameters")
             x = zscore_per_channel(x)
         elif name == "robust_zscore":
+            if params:
+                raise ValueError("robust_zscore preprocessing does not accept parameters")
             from hust_bci_er.preprocessing.normalization import robust_zscore_per_channel
             x = robust_zscore_per_channel(x)
         elif name == "whitening_eps1e3":
+            if params:
+                raise ValueError("whitening_eps1e3 preprocessing does not accept parameters")
             x = channel_whiten(x, eps=1e-3)
         elif name == "whitening_eps3e4":
+            if params:
+                raise ValueError("whitening_eps3e4 preprocessing does not accept parameters")
             x = channel_whiten(x, eps=3e-4)
         elif name == "shrinkage_whitening":
+            if params:
+                raise ValueError("shrinkage_whitening preprocessing does not accept parameters")
             x = channel_whiten(x, eps=1e-3, shrinkage_alpha=0.1)
         elif name == "euclidean_alignment":
+            if params:
+                raise ValueError("euclidean_alignment preprocessing does not accept parameters")
             if ea_transform is not None:
                 x = apply_ea_transform(x, ea_transform)
         elif name == "car":
+            if params:
+                raise ValueError("car preprocessing does not accept parameters")
             from hust_bci_er.preprocessing.normalization import common_average_reference
             x = common_average_reference(x)
+        elif name == "bandpass":
+            from hust_bci_er.preprocessing.filtering import bandpass_filter
+            x = bandpass_filter(
+                x,
+                sfreq=SFREQ,
+                low_hz=float(params.get("low_hz", 1.0)),
+                high_hz=float(params.get("high_hz", min(45.0, SFREQ / 2.0 - 1.0))),
+                order=int(params.get("order", 4)),
+            )
     return x
 
 
-def _validate_adapter_preprocessing(preproc_names: list[str]) -> None:
-    unsupported = [name for name in preproc_names if name == "bandpass"]
-    if unsupported:
-        raise ValueError("torch_classifier adapter does not implement preprocessing step: bandpass")
-    unknown = [name for name in preproc_names if name not in KNOWN_PREPROC]
+def _validate_adapter_preprocessing(preproc_names: Sequence[Any]) -> None:
+    unknown = [name for name in _preprocessing_names(preproc_names) if name not in KNOWN_PREPROC]
     if unknown:
         raise ValueError(f"unknown preprocessing step(s): {', '.join(sorted(set(unknown)))}")
 
@@ -306,7 +395,7 @@ def _fit_ea_on_windows(train_windows: list[dict[str, Any]], preproc: list[str]) 
     Must be called after window creation so EA sees all training windows,
     not just the first window_sec of each trial.
     """
-    if "euclidean_alignment" not in preproc:
+    if "euclidean_alignment" not in _preprocessing_names(preproc):
         return None
     return fit_ea_transform([w["x"] for w in train_windows])
 
@@ -388,8 +477,7 @@ def _predict_scores(
     offset = 0
     with torch.no_grad():
         for x_batch, y_batch in loader:
-            # All factory backbones expect [B, 1, C, T]; add EEG channel dim
-            x_batch = x_batch.to(device).float().unsqueeze(1)
+            x_batch = x_batch.to(device).float()
             logits = logits_from_output(model(x_batch))
             probs = torch.softmax(logits, dim=1)[:, 1].detach().cpu().numpy()
             preds = (probs >= 0.5).astype(int)
@@ -657,6 +745,7 @@ def run_real_classifier_route(
     run_dir: Path,
     run_mode: str = "smoke",
     split_id: str | None = None,
+    split_manifest_path: Path | None = None,
     seed: int | None = None,
     command: str | Sequence[str] = "python scripts/train_route.py",
     data_root: Path | None = None,
@@ -673,6 +762,7 @@ def run_real_classifier_route(
         run_mode: "smoke" (subset + val-only), "full_subjects" (all subjects + val-only),
             or "candidate" (all subjects + held-out test predictions).
         split_id: Override split_id (default from route config).
+        split_manifest_path: Optional formal split manifest with train/val/test subjects.
         seed: Override seed (default from route config).
         command: Command string for manifest provenance.
         data_root: Path to .mat data root directory.
@@ -713,19 +803,33 @@ def run_real_classifier_route(
     if not all_trials:
         raise FileNotFoundError(f"no .mat files found under {data_root}")
 
-    rng = np.random.default_rng(active_seed)
     dep_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "DEP"))
     hc_subjects = sorted(set(t["subject_id"] for t in all_trials if t["cohort"] == "HC"))
 
-    if run_mode in {"full_subjects", "candidate"}:
+    if split_manifest_path is not None:
+        train_subjects, val_subjects, test_subjects = _subject_sets_from_split_manifest(
+            Path(split_manifest_path),
+            active_split_id=active_split_id,
+        )
+        available_subjects = {t["subject_id"] for t in all_trials}
+        requested_subjects = train_subjects | val_subjects | test_subjects
+        missing_subjects = sorted(requested_subjects - available_subjects)
+        if missing_subjects:
+            raise ValueError(f"split manifest references subjects absent from data_root: {missing_subjects[:5]}")
+        trials = [t for t in all_trials if t["subject_id"] in requested_subjects]
+    elif run_mode in {"full_subjects", "candidate"}:
         # Use all subjects with 20% val + 20% test per cohort
         n_dep = len(dep_subjects)
         n_hc = len(hc_subjects)
         val_dep = max(1, n_dep // 5)
         val_hc = max(1, n_hc // 5)
         trials = all_trials
+        train_subjects, val_subjects, test_subjects = _split_subjects(
+            trials, val_dep=val_dep, val_hc=val_hc, seed=active_seed
+        )
     else:
         # Smoke: subset subjects by seeded random selection
+        rng = np.random.default_rng(active_seed)
         n_dep_avail = len(dep_subjects)
         n_hc_avail = len(hc_subjects)
         subset_dep = list(rng.choice(dep_subjects, min(smoke_n_dep, n_dep_avail), replace=False))
@@ -734,11 +838,9 @@ def run_real_classifier_route(
         trials = [t for t in all_trials if t["subject_id"] in subset_ids]
         val_dep = max(1, smoke_n_dep // 2)
         val_hc = max(1, smoke_n_hc // 2)
-
-    # Split subjects
-    train_subjects, val_subjects, test_subjects = _split_subjects(
-        trials, val_dep=val_dep, val_hc=val_hc, seed=active_seed
-    )
+        train_subjects, val_subjects, test_subjects = _split_subjects(
+            trials, val_dep=val_dep, val_hc=val_hc, seed=active_seed
+        )
 
     train_trials = [t for t in trials if t["subject_id"] in train_subjects]
     val_trials = [t for t in trials if t["subject_id"] in val_subjects]
@@ -843,6 +945,14 @@ def run_real_classifier_route(
     train_windows = raw_train
     val_windows = raw_val
     eval_windows = raw_eval
+    train_transform_configs = transform_configs_from_route(route_data)
+    if train_transform_configs:
+        train_windows = apply_transforms_to_windows(
+            train_windows,
+            train_transform_configs,
+            seed=active_seed,
+            split="train",
+        )
 
     # Build model
     model_config = route_data.get("model") or {}
@@ -970,6 +1080,7 @@ def run_real_classifier_route(
         json.dumps({
             "adapter": "torch_classifier",
             "model_name": model_name,
+            "model_kwargs": model_kwargs,
             "best_epoch": result.best_epoch,
             "best_metric": result.best_metric,
             "epochs_ran": len(result.history),
@@ -978,9 +1089,14 @@ def run_real_classifier_route(
             "training_epochs_overridden": epochs != source_epochs,
             "seed": active_seed,
             "run_mode": run_mode,
+            "requested_device": device,
+            "resolved_device": device_str,
             "prediction_scope": prediction_scope,
             "evaluation_split": eval_split,
             "score_matrix_evidence": score_matrix_evidence,
+            "protocol_job_split_manifest": str(Path(split_manifest_path).resolve()) if split_manifest_path is not None else None,
+            "augmentation_transforms": train_transform_configs,
+            "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
         }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -1004,9 +1120,12 @@ def run_real_classifier_route(
         score_matrix_csv=score_matrix_path,
     )
     manifest["run_mode"] = run_mode
+    manifest["model_name"] = model_name
+    manifest["model_kwargs"] = model_kwargs
     manifest["prediction_scope"] = prediction_scope
     manifest["evaluation_split"] = eval_split
     manifest["evaluation_subjects"] = sorted(test_subjects if eval_split == "test" else val_subjects)
+    manifest["protocol_job_split_manifest"] = str(Path(split_manifest_path).resolve()) if split_manifest_path is not None else None
     manifest["split_subject_counts"] = {
         "train": len(train_subjects),
         "val": len(val_subjects),
@@ -1015,7 +1134,20 @@ def run_real_classifier_route(
     manifest["training_epochs"] = epochs
     manifest["source_training_epochs"] = source_epochs
     manifest["training_epochs_overridden"] = epochs != source_epochs
+    manifest["requested_device"] = device
+    manifest["resolved_device"] = device_str
     manifest["score_matrix_evidence"] = score_matrix_evidence
+    manifest["augmentation_transforms"] = train_transform_configs
+    manifest["augmentation_transform_scope"] = "train_only" if train_transform_configs else "none"
+    manifest["declared_protocol"] = str(route_data["evaluation"]["protocol"])
+    manifest["adapter_execution_protocol"] = (
+        "materialized_protocol_job_split" if split_manifest_path is not None else "single_subject_holdout_split"
+    )
+    manifest["protocol_evidence_scope"] = (
+        "one materialized split/fold from the declared route protocol"
+        if split_manifest_path is not None
+        else "one adapter-generated subject holdout split; full repeated/nested protocol evidence must be produced by run_evaluation_protocol.py"
+    )
     if run_mode in {"full_subjects", "candidate"}:
         ds = yaml.safe_load(dataset_path.read_text(encoding="utf-8")) or {}
         manifest["raw_data_sources"] = ds.get("raw_data_sources") or []

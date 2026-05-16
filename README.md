@@ -51,10 +51,11 @@ python scripts/repo_doctor.py fast
 - toy end-to-end audit smoke：`toy_eegnet` 可生成 synthetic dataset/split、prediction、score matrix、metric report、run manifest，并通过 candidate audit，用于 CI 和新人环境验证。
 - 真实 HUST EEG `.mat` dataset loader 和 `torch_classifier` job adapter；支持 `smoke`、`full_subjects` 诊断模式和 held-out test `candidate` 模式。
 - route registry / route board：`reports/route_registry.yaml` 记录 route owner/blocker 和共享谨慎修改路径，`reports/route_board.md` 从 route config 与 registry 生成。
+- LGGNet/DGCNN-style 图模型、TSception/FBCNet-style EEG backbone、通用 linear/MLP classifier head、Butterworth bandpass preprocessing、connectivity / Riemannian tangent features，以及 train-only augmentation transforms。
 
 仍属于预留或后续实现：
 
-- 图模型、heads、复杂训练 callback。
+- 复杂训练 callback。
 - 按 route 默认训练轮数完成并提交绑定 summary 的 candidate 级真实实验结果。
 
 P1/P2/P3 当前已迁入为 protocol 配置、dry-run plan 和统一 runner manifest。plan 只看工作量；runner 会锁定 route/config/dataset/source split、job-specific split contract、seed、environment 和 job artifact contract，但不会伪造训练结果：
@@ -87,6 +88,19 @@ python scripts/launch_reproducible.py --seed 42 -- \
     --route configs/routes/models/sliding_window_eegnet.yaml \
     --run-dir outputs/sliding_window_eegnet/<run_id> \
     --data-root scratch/local_data/hust_bci_er_train/训练集
+```
+
+P1 repeated group-kfold 的训练前批量入口是 `run_evaluation_protocol.py`。传入真实 `--data-root` 时，runner 会索引 HUST `.mat` 文件并为每个 seed/fold 写入正式 subject-level split contract 和 `trial_rows`；`--device` 会记录到 protocol manifest，并在 `--execute` 时传给每个 route job 与最终训练 manifest。诊断跑可以加 `--execute-epochs-override`，但它不能和 `--execute-gate candidate` 同用：
+
+```bash
+python scripts/run_evaluation_protocol.py \
+  --protocol p1 \
+  --route-config configs/routes/models/fixed_crop_ea_fbcnet.yaml \
+  --run-dir outputs/protocol_runs/p1_fbcnet_<run_id> \
+  --data-root scratch/local_data/hust_bci_er_train/训练集 \
+  --device cuda \
+  --seed 42 \
+  --n-folds 5
 ```
 
 `smoke` 和 `full_subjects` 都是诊断模式，不能作为 candidate 证据。

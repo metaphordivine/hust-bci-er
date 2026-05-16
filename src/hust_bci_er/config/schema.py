@@ -25,6 +25,7 @@ REQUIRED_TOP_LEVEL = {
     "inference",
     "evaluation",
 }
+DEFAULT_SFREQ = 250.0
 
 
 def as_list(value: Any) -> list[Any]:
@@ -55,6 +56,15 @@ def nested_name(value: Any, key: str = "name") -> str | None:
     return None
 
 
+def preprocessing_component_name(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        name = value.get("name")
+        return str(name) if name is not None else None
+    return None
+
+
 def validate_route_config(data: dict[str, Any], path: Path | None = None) -> list[str]:
     errors: list[str] = []
 
@@ -80,9 +90,12 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
     if not isinstance(input_window_sec, (int, float)) or input_window_sec <= 0:
         errors.append("input_window_sec must be positive")
 
-    for name in as_list(data.get("preprocessing")):
+    for item in as_list(data.get("preprocessing")):
+        name = preprocessing_component_name(item)
         if name not in registry.PREPROCESSING:
             errors.append(f"unknown preprocessing component: {name}")
+        elif isinstance(item, dict):
+            validate_preprocessing_spec(item, errors)
 
     for name in as_list(data.get("features")):
         if name not in registry.FEATURES:
@@ -100,6 +113,7 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
         for field in ["score_node", "components"]:
             if field in model:
                 errors.append(f"model.{field} is only allowed for score_fusion routes")
+        validate_model_specific_config(name, model, errors)
 
     adaptation = nested_name(data.get("adaptation")) or "none"
     if adaptation not in registry.ADAPTATION:
@@ -248,6 +262,8 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         if not isinstance(apply_to_splits, list) or not apply_to_splits or any(split not in valid_splits for split in apply_to_splits):
             errors.append("augmentation.apply_to_splits must be a non-empty list drawn from train/val/test")
 
+    validate_augmentation_transforms(augmentation, errors)
+
     validate_augmentation_search_space(data, augmentation, errors)
 
     aggregate = augmentation.get("aggregate_to_trial")
@@ -261,6 +277,78 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
     # for config shape consistency with the sliding-window route family.
     if aggregate.get("tie_break") not in {None, "mean_score", "lower", "higher"}:
         errors.append("augmentation.aggregate_to_trial.tie_break must be mean_score, lower, or higher")
+
+
+def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[str]) -> None:
+    transforms = augmentation.get("transforms")
+    if transforms is None:
+        return
+    if not isinstance(transforms, list):
+        errors.append("augmentation.transforms must be a list")
+        return
+    for idx, item in enumerate(transforms):
+        field = f"augmentation.transforms[{idx}]"
+        if not isinstance(item, dict):
+            errors.append(f"{field} must be a mapping")
+            continue
+        name = item.get("name")
+        if name not in registry.AUGMENTATION_TRANSFORMS:
+            errors.append(f"unknown augmentation transform: {name}")
+        splits = item.get("apply_to_splits", ["train"])
+        if not isinstance(splits, list) or not splits or any(split not in {"train", "val", "test"} for split in splits):
+            errors.append(f"{field}.apply_to_splits must be a non-empty list drawn from train/val/test")
+        elif set(splits) != {"train"}:
+            errors.append(f"{field}.apply_to_splits must be [train]; augmentation transforms cannot alter val/test evidence")
+
+        if name == "gaussian_noise":
+            validate_non_negative_number(item.get("std", 0.01), f"{field}.std", errors)
+        elif name == "channel_dropout":
+            p = validate_non_negative_number(item.get("p", 0.1), f"{field}.p", errors)
+            if p is not None and p >= 1.0:
+                errors.append(f"{field}.p must be < 1")
+        elif name == "time_mask":
+            max_width = validate_positive_int(item.get("max_width", 25), f"{field}.max_width", errors)
+            window_samples = augmentation_window_samples(augmentation)
+            if max_width is not None and window_samples is not None and max_width >= window_samples:
+                errors.append(f"{field}.max_width must be < augmentation.window_sec * 250Hz")
+        elif name == "time_shift":
+            max_shift = validate_non_negative_number(item.get("max_shift", 12), f"{field}.max_shift", errors)
+            window_samples = augmentation_window_samples(augmentation)
+            if max_shift is not None and window_samples is not None and max_shift >= window_samples:
+                errors.append(f"{field}.max_shift must be < augmentation.window_sec * 250Hz")
+
+
+def augmentation_window_samples(augmentation: dict[str, Any]) -> int | None:
+    window_sec = augmentation.get("window_sec")
+    if not isinstance(window_sec, (int, float)) or window_sec <= 0:
+        return None
+    return int(round(float(window_sec) * DEFAULT_SFREQ))
+
+
+def validate_preprocessing_spec(item: dict[str, Any], errors: list[str]) -> None:
+    name = preprocessing_component_name(item)
+    if name != "bandpass":
+        extra = sorted(key for key in item if key != "name")
+        if extra:
+            errors.append(f"preprocessing.{name} does not accept parameters: {', '.join(extra)}")
+        return
+    low_hz = validate_positive_number(item.get("low_hz", 1.0), "preprocessing.bandpass.low_hz", errors)
+    high_hz = validate_positive_number(item.get("high_hz", 45.0), "preprocessing.bandpass.high_hz", errors)
+    order = validate_positive_int(item.get("order", 4), "preprocessing.bandpass.order", errors)
+    if low_hz is not None and high_hz is not None:
+        if low_hz >= high_hz:
+            errors.append("preprocessing.bandpass.low_hz must be < high_hz")
+        if high_hz >= DEFAULT_SFREQ / 2.0:
+            errors.append("preprocessing.bandpass.high_hz must be < 125Hz")
+    if order is not None and order > 12:
+        errors.append("preprocessing.bandpass.order must be <= 12")
+
+
+def validate_model_specific_config(name: str | None, model: dict[str, Any], errors: list[str]) -> None:
+    if name in {"dgcnn", "lggnet", "tsception"}:
+        montage = model.get("channel_montage")
+        if montage not in {"hust_30_a2"}:
+            errors.append(f"model.channel_montage must be hust_30_a2 for {name} routes")
 
 
 def sliding_window_count(source_trial_sec: float, window_sec: float, stride_sec: float) -> int:

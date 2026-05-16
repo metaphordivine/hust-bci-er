@@ -5,6 +5,8 @@ torch = pytest.importorskip("torch")
 
 from hust_bci_er.models.backbones.cbramod import CBraMod
 from hust_bci_er.models.backbones.deformer_lite import EEGDeformerLite
+from hust_bci_er.models.backbones.fbcnet import FBCNet, segment_log_variance
+from hust_bci_er.models.backbones.tsception import TSception
 from hust_bci_er.models.backbones.fbstcnet import (
     FBSTCNet,
     Cheby2FilterBank,
@@ -13,6 +15,9 @@ from hust_bci_er.models.backbones.fbstcnet import (
     aggregate_crop_logits,
 )
 from hust_bci_er.models.factory import build_model
+from hust_bci_er.models.eeg_montage import HUST_30_A2_CHANNELS, HUST_30_A2_REGIONS
+from hust_bci_er.models.graph.dgcnn import DGCNN
+from hust_bci_er.models.graph.lggnet import LGGNet, normalize_adjacency
 
 
 # ---------------------------------------------------------------------------
@@ -312,3 +317,237 @@ def test_build_model_passes_cbramod_patch_embedding_width():
     with torch.no_grad():
         out = model(torch.randn(2, 30, 250))
     assert tuple(out.shape) == (2, 2)
+
+
+# ---------------------------------------------------------------------------
+# LGGNet graph-model guards
+# ---------------------------------------------------------------------------
+
+def test_lggnet_forward_shape():
+    model = LGGNet(
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        n_regions=5,
+        temporal_filters=4,
+        temporal_kernel_sizes=(15, 31),
+        graph_hidden_dim=8,
+        classifier_hidden_dim=16,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_lggnet_hust_montage_region_map_covers_all_channels():
+    model = LGGNet(
+        n_channels=30,
+        n_times=256,
+        channel_montage="hust_30_a2",
+        n_regions=5,
+        temporal_filters=4,
+        temporal_kernel_sizes=(15, 31),
+        graph_hidden_dim=8,
+        classifier_hidden_dim=16,
+    )
+    assert tuple(len(region) for region in model.region_indices) == tuple(len(region) for region in HUST_30_A2_REGIONS)
+    assert sorted(idx for region in model.region_indices for idx in region) == list(range(len(HUST_30_A2_CHANNELS)))
+
+
+def test_lggnet_rejects_region_size_mismatch():
+    with pytest.raises(ValueError, match="sum\\(region_sizes\\)"):
+        LGGNet(n_channels=30, region_sizes=(10, 10))
+
+
+def test_lggnet_normalized_adjacency_is_finite_and_symmetric():
+    adjacency = normalize_adjacency(torch.tensor([[0.0, 2.0], [2.0, 0.0]]))
+    assert torch.isfinite(adjacency).all()
+    assert torch.allclose(adjacency, adjacency.T, atol=1e-6)
+
+
+def test_build_model_builds_lggnet_graph_model():
+    model = build_model(
+        "lggnet",
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        temporal_filters=4,
+        temporal_kernel_sizes=(15, 31),
+        graph_hidden_dim=8,
+        classifier_hidden_dim=16,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+# ---------------------------------------------------------------------------
+# TSception guards
+# ---------------------------------------------------------------------------
+
+def test_tsception_forward_shape():
+    model = TSception(
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        n_filters=4,
+        temporal_kernel_sizes=(31, 63, 127),
+        classifier_hidden_dim=16,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_tsception_hust_montage_uses_named_hemispheres():
+    model = TSception(
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        n_filters=4,
+        temporal_kernel_sizes=(31, 63, 127),
+        classifier_hidden_dim=16,
+        channel_montage="hust_30_a2",
+    )
+    left_names = {HUST_30_A2_CHANNELS[idx] for idx in model.left_channel_indices}
+    right_names = {HUST_30_A2_CHANNELS[idx] for idx in model.right_channel_indices}
+    assert {"FP1", "F7", "C3", "P3", "O1"} <= left_names
+    assert {"FP2", "F8", "C4", "P4", "O2"} <= right_names
+    assert "CZ" not in left_names | right_names
+
+
+def test_tsception_rejects_temporal_kernel_larger_than_window():
+    with pytest.raises(ValueError, match="n_times"):
+        TSception(n_channels=30, n_times=32, temporal_kernel_sizes=(63,))
+
+
+def test_tsception_rejects_single_channel_input():
+    with pytest.raises(ValueError, match="at least two channels"):
+        TSception(n_channels=1, n_times=256)
+
+
+def test_build_model_builds_tsception():
+    model = build_model(
+        "tsception",
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        n_filters=4,
+        temporal_kernel_sizes=(31, 63, 127),
+        classifier_hidden_dim=16,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+# ---------------------------------------------------------------------------
+# FBCNet guards
+# ---------------------------------------------------------------------------
+
+def test_fbcnet_forward_shape():
+    model = FBCNet(
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        n_bands=4,
+        spatial_filters=2,
+        n_segments=4,
+        classifier_hidden_dim=16,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_segment_log_variance_rejects_too_many_segments():
+    with pytest.raises(ValueError, match="time dimension"):
+        segment_log_variance(torch.randn(2, 3, 1, 2), n_segments=4)
+
+
+def test_build_model_builds_fbcnet():
+    model = build_model(
+        "fbcnet",
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        n_bands=4,
+        spatial_filters=2,
+        n_segments=4,
+        classifier_hidden_dim=16,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+# ---------------------------------------------------------------------------
+# DGCNN guards
+# ---------------------------------------------------------------------------
+
+def test_dgcnn_forward_shape():
+    model = DGCNN(
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        node_features=8,
+        graph_hidden_dim=8,
+        k_order=2,
+        classifier_hidden_dim=16,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_dgcnn_records_declared_hust_montage():
+    model = DGCNN(n_channels=30, n_times=256, channel_montage="hust_30_a2")
+    assert model.channel_names == HUST_30_A2_CHANNELS
+
+
+def test_dgcnn_rejects_invalid_cheb_order():
+    with pytest.raises(ValueError, match="k_order"):
+        DGCNN(n_channels=30, n_times=256, k_order=0)
+
+
+def test_build_model_builds_dgcnn_graph_model():
+    model = build_model(
+        "dgcnn",
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        node_features=8,
+        graph_hidden_dim=8,
+        k_order=2,
+        classifier_hidden_dim=16,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+@pytest.mark.parametrize("name", ["dgcnn", "fbcnet", "lggnet", "tsception"])
+def test_new_models_forward_backward_on_candidate_length(name):
+    kwargs = {
+        "dgcnn": {"channel_montage": "hust_30_a2", "node_features": 4, "graph_hidden_dim": 4, "k_order": 2, "temporal_kernel_size": 31, "classifier_hidden_dim": 8},
+        "fbcnet": {"n_bands": 3, "spatial_filters": 2, "temporal_kernel_size": 31, "n_segments": 4, "classifier_hidden_dim": 8},
+        "lggnet": {"channel_montage": "hust_30_a2", "temporal_filters": 4, "temporal_kernel_sizes": (15, 31), "graph_hidden_dim": 4, "classifier_hidden_dim": 8},
+        "tsception": {"channel_montage": "hust_30_a2", "n_filters": 2, "temporal_kernel_sizes": (31, 63), "classifier_hidden_dim": 8},
+    }[name]
+    model = build_model(name, n_channels=30, n_times=2500, n_classes=2, **kwargs)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
+    x = torch.randn(2, 30, 2500)
+    y = torch.tensor([0, 1])
+    logits = model(x)
+    loss = torch.nn.functional.cross_entropy(logits, y)
+    assert torch.isfinite(loss)
+    loss.backward()
+    optimizer.step()

@@ -46,6 +46,9 @@ routes:
   - route_id: fixed_crop_ea_deformer
     owner: metaphordivine
     blocker:
+  - route_id: fixed_crop_ea_dgcnn
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_deformer_depth1_emb64
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
@@ -73,6 +76,12 @@ routes:
   - route_id: fixed_crop_ea_fbstcnet
     owner: metaphordivine
     blocker:
+  - route_id: fixed_crop_ea_fbcnet
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_fbcnet_train_aug
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_car_fbstcnet
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
@@ -100,6 +109,9 @@ routes:
   - route_id: fixed_crop_ea_fbstcnet_p_only
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
+  - route_id: fixed_crop_ea_lggnet
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
@@ -107,6 +119,12 @@ routes:
     owner: metaphordivine
     blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_shallow_conv_net
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_tsception
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_tsception_train_aug
     owner: metaphordivine
     blocker: missing_real_candidate_run
   - route_id: fixed_crop_fbstcnet_zscore_only

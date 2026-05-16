@@ -10,6 +10,7 @@ from .runner import (
     build_protocol_jobs,
     materialize_protocol_run,
 )
+from .summary import write_protocol_summary
 
 __all__ = [
     "ProtocolJob",
@@ -18,4 +19,5 @@ __all__ = [
     "build_protocol3_plan",
     "build_protocol_jobs",
     "materialize_protocol_run",
+    "write_protocol_summary",
 ]

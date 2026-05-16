@@ -16,14 +16,19 @@ from hust_bci_er.inference.clean_score_routes import CLEAN_SCORE_ROUTES, score_r
 PREPROCESSING_EVIDENCE = {
     "zscore": ("preprocessing/normalization.py", "zscore_per_channel"),
     "robust_zscore": ("preprocessing/normalization.py", "robust_zscore_per_channel"),
+    "car": ("preprocessing/normalization.py", "common_average_reference"),
+    "bandpass": ("preprocessing/filtering.py", "bandpass_filter"),
     "euclidean_alignment": ("preprocessing/euclidean_alignment.py", "fit_ea_transform"),
-    "whitening_eps1e3": ("preprocessing/whitening.py", "whiten"),
-    "whitening_eps3e4": ("preprocessing/whitening.py", "whiten"),
+    "whitening_eps1e3": ("preprocessing/whitening.py", "channel_whiten"),
+    "whitening_eps3e4": ("preprocessing/whitening.py", "channel_whiten"),
+    "shrinkage_whitening": ("preprocessing/whitening.py", "shrinkage_alpha"),
 }
 FEATURE_EVIDENCE = {
-    "bandpower": ("features/bandpower.py", "bandpower"),
-    "differential_entropy": ("features/differential_entropy.py", "differential_entropy"),
-    "hjorth": ("features/hjorth.py", "hjorth"),
+    "bandpower": ("features/bandpower.py", "bandpower_features"),
+    "connectivity": ("features/connectivity.py", "connectivity_features"),
+    "differential_entropy": ("features/differential_entropy.py", "differential_entropy_features"),
+    "hjorth": ("features/hjorth.py", "hjorth_features"),
+    "riemannian_tangent": ("features/riemannian.py", "tangent_space_features"),
 }
 
 
@@ -36,6 +41,15 @@ def model_factory_keys(root: Path) -> set[str]:
     raise ValueError("BUILDERS mapping not found")
 
 
+def graph_factory_keys(root: Path) -> set[str]:
+    tree = ast.parse((root / "src" / "hust_bci_er" / "models" / "factory.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "GRAPH_BUILDERS" for target in node.targets):
+            if isinstance(node.value, ast.Dict):
+                return {key.value for key in node.value.keys if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+    raise ValueError("GRAPH_BUILDERS mapping not found")
+
+
 def route_component_names(root: Path) -> dict[str, set[str]]:
     out = {"models": set(), "preprocessing": set(), "features": set(), "score_routes": set()}
     for path in (root / "configs" / "routes" / "models").glob("*.yaml"):
@@ -46,7 +60,10 @@ def route_component_names(root: Path) -> dict[str, set[str]]:
             if model.get("name") == "score_fusion" and data.get("route_id"):
                 out["score_routes"].add(str(data["route_id"]))
         for item in data.get("preprocessing") or []:
-            out["preprocessing"].add(str(item))
+            if isinstance(item, dict):
+                out["preprocessing"].add(str(item.get("name")))
+            else:
+                out["preprocessing"].add(str(item))
         for item in data.get("features") or []:
             out["features"].add(str(item))
     return out
@@ -61,6 +78,8 @@ def registry_consistency_errors(root: Path) -> list[str]:
     errors: list[str] = []
     if model_factory_keys(root) != registry.TORCH_BACKBONES:
         errors.append("TORCH_BACKBONES must match models.factory BUILDERS")
+    if graph_factory_keys(root) != registry.GRAPH_MODELS:
+        errors.append("GRAPH_MODELS must match models.factory GRAPH_BUILDERS")
     used = route_component_names(root)
     unknown_models = sorted(used["models"] - registry.MODELS)
     unknown_preprocessing = sorted(used["preprocessing"] - registry.PREPROCESSING)

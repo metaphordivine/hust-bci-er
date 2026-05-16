@@ -44,6 +44,7 @@ FEATURES = {
     "differential_entropy",
     "hjorth",
     "connectivity",
+    "riemannian_tangent",
 }
 
 AUGMENTATION = {
@@ -72,7 +73,16 @@ TORCH_BACKBONES = {
     "srfnet",
     "shallow_conv_net",
     "cbramod",
+    "fbcnet",
     "fbstcnet",
+    "tsception",
+}
+
+AUGMENTATION_TRANSFORMS = {
+    "channel_dropout",
+    "gaussian_noise",
+    "time_mask",
+    "time_shift",
 }
 
 SKLEARN_MODELS = {
@@ -82,6 +92,7 @@ SKLEARN_MODELS = {
 }
 
 GRAPH_MODELS = {
+    "dgcnn",
     "lggnet",
 }
 
