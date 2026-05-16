@@ -87,24 +87,27 @@ def _generate_fine_combinations(
     """Generate fine grid around best combination.
 
     For each parameter, creates a narrower range centered on the best value.
-    If the parameter is numeric and search_space defines a fine grid explicitly,
-    uses that. Otherwise, generates [best*(1-factor), best, best*(1+factor)]
-    for continuous params or adjacent discrete values.
+    If the search space defines ``fine`` values, treat them as the candidate
+    universe and select only the configured local neighborhood around best.
+    Otherwise, generates [best*(1-factor), best, best*(1+factor)] for
+    continuous params or uses the best value for discrete params.
     """
     params = search_space.get("parameters", {})
     keys: list[str] = []
     value_lists: list[list] = []
     for key, spec in params.items():
         fine_values = spec.get("fine") if isinstance(spec, dict) else None
-        if fine_values:
-            keys.append(key)
-            value_lists.append(list(fine_values))
-            continue
-
-        # Auto-generate fine range around best value
         best_val = best_combo.get(key)
         if best_val is None:
             continue
+
+        if fine_values:
+            radius = int(spec.get("fine_radius", 1)) if isinstance(spec, dict) else 1
+            keys.append(key)
+            value_lists.append(_fine_values_around_best(list(fine_values), best_val, radius=radius))
+            continue
+
+        # Auto-generate fine range around best value
         coarse_values = spec.get("coarse") if isinstance(spec, dict) else spec
         if not coarse_values:
             continue
@@ -131,6 +134,36 @@ def _generate_fine_combinations(
     combinations: list[dict[str, Any]] = []
     _cartesian_product(keys, value_lists, 0, {}, combinations)
     return combinations
+
+
+def _coerce_grid_value(value: Any) -> Any:
+    """Parse CSV string values back to numeric types when possible."""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return value
+        try:
+            return float(text) if "." in text or "e" in text.lower() else int(text)
+        except ValueError:
+            return value
+    return value
+
+
+def _fine_values_around_best(fine_values: list[Any], best_val: Any, *, radius: int = 1) -> list[Any]:
+    """Select a local fine-grid neighborhood around a coarse best value."""
+    if not fine_values:
+        raise ValueError("fine grid must not be empty")
+    best_val = _coerce_grid_value(best_val)
+    values = [_coerce_grid_value(value) for value in fine_values]
+    if isinstance(best_val, (int, float)) and all(isinstance(value, (int, float)) for value in values):
+        ordered = sorted(values)
+        idx = min(range(len(ordered)), key=lambda i: abs(float(ordered[i]) - float(best_val)))
+        lo = max(0, idx - radius)
+        hi = min(len(ordered), idx + radius + 1)
+        return ordered[lo:hi]
+    if best_val in values:
+        return [best_val]
+    return [values[0]]
 
 
 def _cartesian_product(
@@ -391,12 +424,8 @@ def main(argv: list[str] | None = None) -> int:
         best = _select_best(coarse_results)
         param_keys = [k for k in search_space.get("parameters", {}) if k in best]
         best_combo = {k: best.get(k) for k in param_keys}
-        # Convert string values back to original types
         for k, v in best_combo.items():
-            try:
-                best_combo[k] = float(v) if "." in str(v) or "e" in str(v).lower() else int(v)
-            except (ValueError, TypeError):
-                best_combo[k] = v
+            best_combo[k] = _coerce_grid_value(v)
         combinations = _generate_fine_combinations(search_space, best_combo)
         print(f"Fine grid (around best={best_combo}): {len(combinations)} combinations")
 

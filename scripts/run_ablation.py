@@ -158,19 +158,54 @@ def _run_single(
     return dict(parsed)
 
 
+def _has_value(raw: Any) -> bool:
+    return raw is not None and raw != ""
+
+
+def _coerce_metric_value(raw: Any) -> float | None:
+    if not _has_value(raw):
+        return None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            raw = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            try:
+                return float(text)
+            except ValueError:
+                return None
+    if isinstance(raw, dict):
+        for value in raw.values():
+            parsed = _coerce_metric_value(value)
+            if parsed is not None:
+                return parsed
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_metric_value(primary_metric: Any) -> float:
     """Extract a single float from the primary_metric dict/value."""
-    if isinstance(primary_metric, str):
-        try:
-            parsed = json.loads(primary_metric)
-        except (json.JSONDecodeError, TypeError):
-            return 0.0
-        if isinstance(parsed, dict):
-            return float(next(iter(parsed.values()), 0.0))
-        return float(parsed)
-    if isinstance(primary_metric, dict):
-        return float(next(iter(primary_metric.values()), 0.0))
-    return float(primary_metric)
+    value = _coerce_metric_value(primary_metric)
+    if value is None:
+        raise ValueError("missing or invalid numeric primary_metric")
+    return value
+
+
+def _mark_metric_error_if_needed(row: dict[str, Any]) -> dict[str, Any]:
+    """Treat malformed metrics as failed runs instead of valid 0.0 scores."""
+    if _is_error_result(row):
+        return row
+    try:
+        _extract_metric_value(row.get("primary_metric"))
+    except ValueError as exc:
+        row["error"] = True
+        row["message"] = str(exc)
+    return row
 
 
 def _is_error_result(row: dict[str, Any]) -> bool:
@@ -191,14 +226,21 @@ def _write_results_csv(results: list[dict[str, Any]], csv_path: Path, baseline_m
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in results:
-            variant_metric = None if _is_error_result(r) else _extract_metric_value(r.get("primary_metric", 0.0))
+            r = _mark_metric_error_if_needed(r)
+            is_error = _is_error_result(r)
+            variant_metric = None
+            error_detail = ""
+            if is_error:
+                error_detail = r.get("stderr", r.get("message", ""))[:500]
+            else:
+                variant_metric = _extract_metric_value(r.get("primary_metric"))
             writer.writerow({
                 "variant": r.get("variant", ""),
                 "description": r.get("description", ""),
-                "error": str(_is_error_result(r)),
+                "error": str(is_error),
                 "metric_value": "" if variant_metric is None else f"{variant_metric:.6f}",
                 "delta_vs_baseline": "" if variant_metric is None or baseline_metric is None else f"{variant_metric - baseline_metric:.6f}",
-                "error_detail": r.get("stderr", r.get("message", ""))[:500] if _is_error_result(r) else "",
+                "error_detail": error_detail,
             })
 
 
@@ -262,9 +304,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     baseline_result["variant"] = "baseline"
     baseline_result["description"] = "Baseline (no changes)"
+    baseline_result = _mark_metric_error_if_needed(baseline_result)
     results.append(baseline_result)
     if _is_error_result(baseline_result):
-        print(f"FAILED: {baseline_result.get('stderr', '')[:120]}")
+        print(f"FAILED: {baseline_result.get('stderr', baseline_result.get('message', ''))[:120]}")
         csv_path = run_dir / "ablation_results.csv"
         _write_results_csv(results, csv_path, baseline_metric=None)
         print("Baseline failed; stopping ablation because deltas would be invalid.")
@@ -274,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         pm = baseline_result.get("primary_metric", {})
         print(f"OK  {pm}")
 
-    baseline_metric = _extract_metric_value(baseline_result.get("primary_metric", 0.0))
+    baseline_metric = _extract_metric_value(baseline_result.get("primary_metric"))
 
     # Run each ablation variant
     for variant in variants:
@@ -298,13 +341,14 @@ def main(argv: list[str] | None = None) -> int:
 
         result["variant"] = name
         result["description"] = desc
+        result = _mark_metric_error_if_needed(result)
         results.append(result)
 
         if _is_error_result(result):
-            print(f"FAILED: {result.get('stderr', '')[:120]}")
+            print(f"FAILED: {result.get('stderr', result.get('message', ''))[:120]}")
         else:
             pm = result.get("primary_metric", {})
-            variant_metric = _extract_metric_value(result.get("primary_metric", 0.0))
+            variant_metric = _extract_metric_value(result.get("primary_metric"))
             delta = variant_metric - baseline_metric
             print(f"OK  {pm}  (delta={delta:+.4f})")
 
@@ -321,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
         for r in successful:
             if r.get("variant") == "baseline":
                 continue
-            vm = _extract_metric_value(r.get("primary_metric", 0.0))
+            vm = _extract_metric_value(r.get("primary_metric"))
             print(f"  {r['variant']}: {vm:.6f}  (delta={vm - baseline_metric:+.6f})")
     print(f"Results saved to: {csv_path}")
 

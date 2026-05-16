@@ -79,6 +79,24 @@ def test_hparam_results_csv_handles_first_row_error_then_metric(tmp_path: Path) 
     assert rows[1]["metric_exact_single_crop_expected_BA"] == "0.73"
 
 
+def test_hparam_fine_grid_uses_neighborhood_around_best() -> None:
+    combos = hparam_search._generate_fine_combinations(
+        {
+            "parameters": {
+                "training.optimizer.lr": {
+                    "coarse": [0.0001, 0.001, 0.01],
+                    "fine": [0.0005, 0.00075, 0.001, 0.0025, 0.005],
+                }
+            }
+        },
+        {"training.optimizer.lr": "0.01"},
+    )
+
+    values = [combo["training.optimizer.lr"] for combo in combos]
+    assert values == [0.0025, 0.005]
+    assert 0.0005 not in values
+
+
 def test_ablation_baseline_route_id_matches_temp_file(tmp_path: Path) -> None:
     route_path = run_ablation._build_temp_route_config(
         {"route_id": "sliding_window_eegnet", "training": {"epochs": 1}},
@@ -128,3 +146,34 @@ variants:
     assert exit_code == 1
     assert len(calls) == 1
     assert calls[0].name == "baseline_route.yaml"
+
+
+def test_ablation_invalid_metric_is_error_in_results_csv(tmp_path: Path) -> None:
+    csv_path = tmp_path / "ablation_results.csv"
+
+    run_ablation._write_results_csv(
+        [
+            {
+                "variant": "bad_metric",
+                "description": "invalid metric",
+                "primary_metric": "not-json-or-float",
+            }
+        ],
+        csv_path,
+        baseline_metric=0.5,
+    )
+
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8", newline="")))
+    assert rows[0]["error"] == "True"
+    assert rows[0]["metric_value"] == ""
+    assert rows[0]["delta_vs_baseline"] == ""
+    assert "primary_metric" in rows[0]["error_detail"]
+
+
+def test_ablation_extract_metric_rejects_empty_dict() -> None:
+    try:
+        run_ablation._extract_metric_value({})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("empty metric dict must not be coerced to 0.0")

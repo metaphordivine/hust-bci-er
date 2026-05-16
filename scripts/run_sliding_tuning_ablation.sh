@@ -4,7 +4,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DATA_ROOT="${HUST_BCI_ER_DATA_ROOT:-D:/hust-bci-er/scratch/local_data/hust_bci_er_train/训练集}"
+: "${HUST_BCI_ER_DATA_ROOT:?Set HUST_BCI_ER_DATA_ROOT to the HUST BCI ER train data root}"
+DATA_ROOT="$HUST_BCI_ER_DATA_ROOT"
 SEARCH_SPACE="$ROOT/configs/search/spaces/sliding_baseline.yaml"
 ABLATION_SPEC="$ROOT/configs/search/ablations/sliding_standard.yaml"
 SEED=42
@@ -17,6 +18,9 @@ MODELS=(
   "sliding_window_deformer_lite"
   "sliding_window_conformer_lite"
   "sliding_window_srfnet"
+  "sliding_window_cbramod"
+  "sliding_window_fbstcnet"
+  "sliding_window_shallow_conv_net"
 )
 
 # Ablation spec per model (different for sliding vs ea)
@@ -25,6 +29,9 @@ declare -A ABLATION_SPECS=(
   ["sliding_window_deformer_lite"]="$ROOT/configs/search/ablations/sliding_standard.yaml"
   ["sliding_window_conformer_lite"]="$ROOT/configs/search/ablations/sliding_standard.yaml"
   ["sliding_window_srfnet"]="$ROOT/configs/search/ablations/sliding_standard.yaml"
+  ["sliding_window_cbramod"]="$ROOT/configs/search/ablations/sliding_standard.yaml"
+  ["sliding_window_fbstcnet"]="$ROOT/configs/search/ablations/sliding_standard.yaml"
+  ["sliding_window_shallow_conv_net"]="$ROOT/configs/search/ablations/sliding_standard.yaml"
   ["ea_deformer"]="$ROOT/configs/search/ablations/ea_deformer.yaml"
 )
 
@@ -72,6 +79,12 @@ for model in "${MODELS[@]}"; do
   log "############################################"
   log "  MODEL: $model"
   log "############################################"
+
+  route="$ROOT/configs/routes/models/${model}.yaml"
+  if [[ ! -f "$route" ]]; then
+    log "Skipping $model: route config not found at $route"
+    continue
+  fi
 
   # 1. Coarse grid
   run_stage "$model" coarse
