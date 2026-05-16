@@ -1,0 +1,18 @@
+# fixed_crop_ea_deformer_mean_pool_control Summary
+
+route_id: fixed_crop_ea_deformer_mean_pool_control
+route_status: IDEA
+audit_decision: PASS
+gate: candidate
+primary_metric: exact_single_crop_expected_BA
+primary_metric_value: 0.6598290666666667
+decision: PASS
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/fixed_crop_ea_deformer_mean_pool_control.yaml --run outputs/fixed_crop_ea_deformer_mean_pool_control/candidate_20260516_seed42 --gate candidate
+dataset: train_v1
+split: p1_seed42_fold0
+seed: 42
+protocol: p1_repeated_group_kfold
+risk notes: single-split candidate only; below the FBSTCNet champion and no P1/P2/P3 repeated protocol was run; retain as architecture-diversity/control evidence pending multi-seed confirmation.
+audit_report_path: reports/route_summaries/evidence/fixed_crop_ea_deformer_mean_pool_control_audit_report.json
+manifest_path: reports/route_summaries/evidence/fixed_crop_ea_deformer_mean_pool_control_manifest.json
+manifest_sha256: 0f15e9ff8f82e8e9c34d1a33803594dba3454987522a2bdee2d6b86785f4ccd0
