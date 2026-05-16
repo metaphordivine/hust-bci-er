@@ -12,7 +12,7 @@ dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
-risk notes: candidate audit passed; improves over sliding_window_shallow_conv_net 0.533867 by +0.005058; compact evidence is stored under reports.
+risk notes: candidate audit passed; improves over sliding_window_shallow_conv_net 0.533867 by +0.005058; compact evidence is stored under reports. The 14s source window is covered because train_v1 original trials are 50s/12500 samples, and the candidate score-matrix audit verified five genuine windows per audited trial.
 audit_report_path: reports/route_summaries/evidence/sparse_sliding_window_shallow_conv_net_audit_report.json
 manifest_path: reports/route_summaries/evidence/sparse_sliding_window_shallow_conv_net_manifest.json
 manifest_sha256: 1d41649a29d208c0227b9d1ffd3090ccb934aa89543f0bbe9f7e5b1f7a3e320c

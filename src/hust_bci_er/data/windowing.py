@@ -138,8 +138,7 @@ def fixed_crop_slices(n_times: int, spec: FixedCropSpec) -> tuple[tuple[int, int
         start = idx * window_len
         stop = start + window_len
         if stop > n_times:
-            stop = n_times
-            start = stop - window_len
+            raise ValueError("n_times is too short for requested fixed crops")
         slices.append((start, stop, start_sec))
     return tuple(slices)
 

@@ -291,7 +291,14 @@ def test_make_fixed_crops_returns_non_overlapping_crops():
         "trial_id": "S01_pos1",
         "cohort": "HC",
     }]
-    crops = _make_fixed_crops(trials, window_sec=10, n_crops=5, preproc=[], skip_preproc=True)
+    crops = _make_fixed_crops(
+        trials,
+        source_trial_sec=50,
+        window_sec=10,
+        n_crops=5,
+        preproc=[],
+        skip_preproc=True,
+    )
     assert len(crops) == 5
     assert [crop["crop_id"] for crop in crops] == [0, 1, 2, 3, 4]
     assert [crop["window_start_sec"] for crop in crops] == [0.0, 10.0, 20.0, 30.0, 40.0]

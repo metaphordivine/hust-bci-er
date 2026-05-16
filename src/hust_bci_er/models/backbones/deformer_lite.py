@@ -94,6 +94,7 @@ class EEGDeformerLite(nn.Module):
 
 
 def build_deformer_lite(n_channels: int, n_times: int, n_classes: int = 2, **kwargs) -> EEGDeformerLite:
+    classifier_hidden_dim = kwargs.get("classifier_hidden_dim")
     return EEGDeformerLite(
         n_channels=n_channels,
         n_times=n_times,
@@ -105,10 +106,6 @@ def build_deformer_lite(n_channels: int, n_times: int, n_classes: int = 2, **kwa
         dropout=kwargs.get("dropout", 0.4),
         feedforward_multiplier=int(kwargs.get("feedforward_multiplier", 2)),
         pooling=str(kwargs.get("pooling", "mean")),
-        classifier_hidden_dim=(
-            int(kwargs["classifier_hidden_dim"])
-            if kwargs.get("classifier_hidden_dim") is not None
-            else None
-        ),
+        classifier_hidden_dim=int(classifier_hidden_dim) if classifier_hidden_dim is not None else None,
     )
 

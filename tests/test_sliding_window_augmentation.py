@@ -9,9 +9,11 @@ from hust_bci_er.data.windowing import (
     FixedCropSpec,
     SlidingWindowSpec,
     fixed_crop_slices,
+    fixed_crop_spec_from_config,
     fixed_crop_start_times,
     fixed_crops_for_trial,
     sliding_windows_for_trial,
+    split_first_fixed_crops,
     split_first_sliding_windows,
     window_slices,
     window_start_times,
@@ -73,6 +75,7 @@ def test_window_slices_keep_constant_length_when_sample_count_is_odd():
 def test_fixed_crop_counts_match_candidate_exact_metric_setup():
     spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5)
     assert fixed_crop_start_times(spec) == (0, 10, 20, 30, 40)
+    assert fixed_crop_spec_from_config({"source_trial_sec": 50, "window_sec": 10, "n_crops": 5}) == spec
     assert fixed_crop_slices(12500, spec) == (
         (0, 2500, 0),
         (2500, 5000, 10),
@@ -98,3 +101,20 @@ def test_fixed_crops_keep_original_trial_inside_one_split():
     assert [crop.window_start_sec for crop in crops] == [0, 10, 20, 30, 40]
     assert all(crop.split == "train" for crop in crops)
     assert crops[2].x.tolist() == np.arange(2 * 50).reshape(2, 50)[:, 20:30].tolist()
+
+
+def test_fixed_crop_slices_reject_too_short_sample_count():
+    spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5)
+    with pytest.raises(ValueError, match="too short"):
+        fixed_crop_slices(12499, spec)
+
+
+def test_split_first_fixed_crop_guard_rejects_original_trial_across_splits():
+    spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5)
+    trials = [
+        EEGTrial(np.zeros((2, 50)), 0, "s1", "t1", "train"),
+        EEGTrial(np.zeros((2, 50)), 0, "s1", "t1", "test"),
+    ]
+
+    with pytest.raises(ValueError, match="crosses split"):
+        split_first_fixed_crops(trials, spec)

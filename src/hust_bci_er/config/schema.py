@@ -227,6 +227,8 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
     allowed_methods = {"majority_vote", "mean_score"}
     if aggregate.get("method") not in allowed_methods:
         errors.append("augmentation.aggregate_to_trial.method must be majority_vote or mean_score")
+    # tie_break is consumed only by majority_vote. mean_score accepts the field
+    # for config shape consistency with the sliding-window route family.
     if aggregate.get("tie_break") not in {None, "mean_score", "lower", "higher"}:
         errors.append("augmentation.aggregate_to_trial.tie_break must be mean_score, lower, or higher")
 

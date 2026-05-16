@@ -22,6 +22,7 @@ from hust_bci_er.audit.run_manifest import (
 )
 from hust_bci_er.config.schema import validate_route_config
 from hust_bci_er.contracts.records import PredictionRecord
+from hust_bci_er.data.windowing import fixed_crop_slices, fixed_crop_spec_from_config
 from hust_bci_er.evaluation.prediction_writer import write_predictions
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
 # build_model and classifier imports are lazy (inside run_real_classifier_route / _predict_scores)
@@ -247,6 +248,7 @@ def _make_single_crops(
 def _make_fixed_crops(
     trials: list[dict[str, Any]],
     *,
+    source_trial_sec: float,
     window_sec: float,
     n_crops: int,
     preproc: list[str],
@@ -254,15 +256,13 @@ def _make_fixed_crops(
     skip_preproc: bool = False,
 ) -> list[dict[str, Any]]:
     """Create non-overlapping fixed crops from each source trial."""
-    window_samples = int(round(window_sec * SFREQ))
+    spec = fixed_crop_spec_from_config(
+        {"source_trial_sec": source_trial_sec, "window_sec": window_sec, "n_crops": n_crops}
+    )
     crops: list[dict[str, Any]] = []
     for trial in trials:
-        x_full = trial["x"].astype(np.float32)
-        for crop_id in range(n_crops):
-            start = crop_id * window_samples
-            stop = start + window_samples
-            if stop > x_full.shape[1]:
-                break
+        x_full = _clip_trial(trial["x"].astype(np.float32), source_trial_sec)
+        for crop_id, (start, stop, start_sec) in enumerate(fixed_crop_slices(x_full.shape[1], spec)):
             x = x_full[:, start:stop].copy()
             if not skip_preproc:
                 x = _apply_preprocessing(x, preproc, ea_transform=ea_transform)
@@ -273,7 +273,7 @@ def _make_fixed_crops(
                 "cohort": trial["cohort"],
                 "trial_id": trial["trial_id"],
                 "crop_id": crop_id,
-                "window_start_sec": start / SFREQ,
+                "window_start_sec": start_sec,
             })
     return crops
 
@@ -500,16 +500,17 @@ def _write_evidence_manifests(
         source_samples = int(round(float(aug["source_trial_sec"]) * SFREQ))
         window_samples = int(round(float(aug["window_sec"]) * SFREQ))
         stride_samples = int(round(float(aug["stride_sec"]) * SFREQ))
+        window_start_step_sec = stride_samples / SFREQ
         actual_n_crops = max(1, (source_samples - window_samples) // stride_samples + 1)
     elif isinstance(aug, dict) and aug.get("name") == "split_first_fixed_crops":
         window_sec = float(aug["window_sec"])
-        stride_samples = int(round(window_sec * SFREQ))
+        window_start_step_sec = window_sec
         actual_n_crops = int(aug["n_crops"])
     elif run_mode == "candidate":
-        stride_samples = int(round(window_sec * SFREQ))
+        window_start_step_sec = window_sec
         actual_n_crops = FIXED_CANDIDATE_CROPS
     else:
-        stride_samples = int(round(window_sec * SFREQ))
+        window_start_step_sec = window_sec
         actual_n_crops = 1
 
     # Write one feature-anchor CSV per trial with channel-mean signal statistics.
@@ -539,9 +540,7 @@ def _write_evidence_manifests(
             "n_crops": actual_n_crops,
             "crop_ids": list(range(actual_n_crops)),
             "window_start_secs": [
-                (idx * stride_samples / SFREQ)
-                if isinstance(aug, dict) and aug.get("name") == "split_first_sliding_window"
-                else (idx * window_sec)
+                idx * window_start_step_sec
                 for idx in range(actual_n_crops)
             ],
             "split": split,
@@ -793,7 +792,7 @@ def run_real_classifier_route(
         window_kwargs: dict = dict(source_trial_sec=source_trial_sec, window_sec=window_sec, stride_sec=stride_sec)
     elif has_fixed_crop_aug:
         make_windows = _make_fixed_crops
-        window_kwargs = dict(window_sec=window_sec, n_crops=int(n_fixed_crops))
+        window_kwargs = dict(source_trial_sec=source_trial_sec, window_sec=window_sec, n_crops=int(n_fixed_crops))
     else:
         make_windows = _make_single_crops
         window_kwargs = dict(window_sec=window_sec)
@@ -807,6 +806,7 @@ def run_real_classifier_route(
         else:
             raw_eval = _make_fixed_crops(
                 test_trials,
+                source_trial_sec=input_window_sec * FIXED_CANDIDATE_CROPS,
                 window_sec=input_window_sec,
                 n_crops=FIXED_CANDIDATE_CROPS,
                 preproc=preproc,
