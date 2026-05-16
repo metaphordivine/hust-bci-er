@@ -59,4 +59,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "FBSTCNet-M route. Chebyshev Type II filterbank (12 bands 4-52 Hz, order=4, stopband 30 dB, transition 2 Hz) + dual STConv blocks (power + connectivity) with cropped decoding."
+notes: "FBSTCNet-M route. Cheby2 magnitude-response FFT approximation (12 bands 4-52 Hz, order=4, stopband 30 dB, transition 2 Hz) + dual STConv blocks (power + connectivity) with cropped decoding."

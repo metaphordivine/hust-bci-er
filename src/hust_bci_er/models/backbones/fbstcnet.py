@@ -1,7 +1,8 @@
 """FBSTCNet: Filter-Bank Spatio-Temporal Convolutional Network.
 
 Variants: P (power), C (connectivity), M (mixed).
-Default filterbank: Chebyshev Type II (12 non-overlapping 4 Hz bands, 4-52 Hz).
+Default filterbank: Chebyshev Type II magnitude-response FFT approximation
+(12 non-overlapping 4 Hz bands, 4-52 Hz).
 FFT rectangular filterbank available via filterbank_type="fft_rectangular" for ablation.
 """
 
@@ -66,7 +67,7 @@ def _design_cheby2_sos(
 def _compute_sos_freq_response(
     sos_list: list[Any], n_fft_bins: int, sfreq: float
 ) -> torch.Tensor:
-    """Compute frequency-domain magnitude responses from SOS filters."""
+    """Compute magnitude-only frequency responses from SOS filters."""
     import numpy as np
     from scipy.signal import sosfreqz
 
@@ -84,7 +85,12 @@ def _compute_sos_freq_response(
 
 
 class Cheby2FilterBank(nn.Module):
-    """Chebyshev Type II bandpass filter bank applied in the frequency domain."""
+    """Cheby2 magnitude-response FFT approximation.
+
+    The SOS design is used to derive a magnitude response. The complex phase
+    response is intentionally not applied, so this is not time-domain SOS
+    filtering.
+    """
 
     def __init__(
         self,
@@ -105,6 +111,8 @@ class Cheby2FilterBank(nn.Module):
 
         self.metadata: dict[str, Any] = {
             "filterbank_type": "cheby2",
+            "implementation": "magnitude_response_fft",
+            "phase_response": "discarded",
             "sfreq": sfreq,
             "bands": [(float(low), float(high)) for low, high in bands],
             "order": order,
@@ -286,7 +294,8 @@ class FBSTCNet(nn.Module):
     """FBSTCNet: Filter-Bank Spatio-Temporal Convolutional Network.
 
     Variants: P (power), C (connectivity), M (mixed).
-    Default filterbank: Chebyshev Type II. Use ``filterbank_type="fft_rectangular"`` for ablation.
+    Default filterbank: Cheby2 magnitude-response FFT approximation.
+    Use ``filterbank_type="fft_rectangular"`` for ablation.
     """
 
     def __init__(
@@ -353,19 +362,19 @@ class FBSTCNet(nn.Module):
             return dict(self.filterbank.metadata)
         return {"filterbank_type": self.filterbank_type}
 
-    def forward(self, x: torch.Tensor, return_crop_logits: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_crop_logits: bool = False) -> torch.Tensor | dict[str, torch.Tensor]:
         if x.dim() == 4:
             x = x.squeeze(1)
         x_fb = self.filterbank(x)
-        branch_crop_logits: list[torch.Tensor] = []
+        branch_crop_logits: dict[str, torch.Tensor] = {}
         if self.variant in ("P", "M"):
-            branch_crop_logits.append(self.power_head(self.st_p(x_fb)))
+            branch_crop_logits["power"] = self.power_head(self.st_p(x_fb))
         if self.variant in ("C", "M"):
-            branch_crop_logits.append(self.conn_head(self.st_c(x_fb)))
-        crop_logits = torch.cat(branch_crop_logits, dim=1)
+            branch_crop_logits["connectivity"] = self.conn_head(self.st_c(x_fb))
+        crop_logits = torch.cat(list(branch_crop_logits.values()), dim=1)
         if return_crop_logits:
-            return crop_logits
-        branch_logits = [aggregate_crop_logits(logits) for logits in branch_crop_logits]
+            return {**branch_crop_logits, "combined": crop_logits}
+        branch_logits = [aggregate_crop_logits(logits) for logits in branch_crop_logits.values()]
         return aggregate_branch_logits(branch_logits)
 
 

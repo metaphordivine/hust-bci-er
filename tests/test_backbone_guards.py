@@ -29,12 +29,19 @@ def test_cbramod_rejects_patch_embedding_dim_mismatch():
         )
 
 
+def test_cbramod_rejects_longer_than_initialized_input():
+    model = CBraMod(n_chans=30, n_outputs=2, n_times=256, patch_size=200)
+
+    with pytest.raises(ValueError, match="expected <= 400 samples"):
+        model(torch.randn(2, 30, 401))
+
+
 # ---------------------------------------------------------------------------
 # FBSTCNet band-count guard
 # ---------------------------------------------------------------------------
 
 def test_fbstcnet_rejects_mismatched_band_count():
-    with pytest.raises(ValueError, match="n_bands must match len\\(bands\\)"):
+    with pytest.raises(ValueError, match="n_bands must match len\(bands\)"):
         FBSTCNet(
             n_chans=30,
             n_outputs=2,
@@ -86,6 +93,8 @@ def test_fbstcnet_cheby2_records_filter_metadata():
     model = FBSTCNet(n_chans=30, n_outputs=2, n_times=256, sfreq=200.0)
     params = model.filterbank_params
     assert params["filterbank_type"] == "cheby2"
+    assert params["implementation"] == "magnitude_response_fft"
+    assert params["phase_response"] == "discarded"
     assert params["sfreq"] == 200.0
     assert len(params["bands"]) == 12
     assert params["bands"][0] == (4.0, 8.0)
@@ -143,6 +152,17 @@ def test_fbstcnet_mixed_variant_fuses_branches_equally():
     assert torch.argmax(crop_weighted, dim=-1).item() == 0
     probs = torch.exp(branch_weighted)
     assert probs[0, 0] == pytest.approx(probs[0, 1], abs=1e-4)
+
+
+def test_fbstcnet_return_crop_logits_is_structured_for_mixed_variant():
+    model = FBSTCNet(n_chans=30, n_outputs=2, n_times=256, sfreq=200.0, variant="M")
+    model.eval()
+
+    with torch.no_grad():
+        result = model(torch.randn(2, 30, 256), return_crop_logits=True)
+
+    assert set(result) == {"power", "connectivity", "combined"}
+    assert result["combined"].shape[1] == result["power"].shape[1] + result["connectivity"].shape[1]
 
 
 # ---------------------------------------------------------------------------

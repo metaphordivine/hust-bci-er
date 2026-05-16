@@ -249,6 +249,11 @@ class CBraMod(nn.Module):
 
         B, C, T = x.shape
 
+        if T > self.n_times_padded:
+            raise ValueError(
+                f"CBraMod expected <= {self.n_times_padded} samples after padding, got {T}"
+            )
+
         # Pad time dimension to multiple of patch_size
         if T < self.n_times_padded:
             x = torch.nn.functional.pad(x, (0, self.n_times_padded - T))
