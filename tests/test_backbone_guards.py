@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -7,6 +8,8 @@ from hust_bci_er.models.backbones.fbstcnet import (
     FBSTCNet,
     Cheby2FilterBank,
     FFTRectangularFilterBank,
+    aggregate_branch_logits,
+    aggregate_crop_logits,
 )
 from hust_bci_er.models.factory import build_model
 
@@ -92,6 +95,12 @@ def test_fbstcnet_cheby2_records_filter_metadata():
     assert params["transition_bw_hz"] == 2.0
 
 
+def test_fbstcnet_transition_bandwidth_changes_cheby2_design():
+    narrow = Cheby2FilterBank(sfreq=250.0, transition_bw=0.5)
+    wide = Cheby2FilterBank(sfreq=250.0, transition_bw=2.0)
+    assert not np.allclose(narrow._sos_list[0], wide._sos_list[0])
+
+
 # ---------------------------------------------------------------------------
 # Filterbank output shapes
 # ---------------------------------------------------------------------------
@@ -118,6 +127,22 @@ def test_cheby2_filterbank_output_is_finite():
     with torch.no_grad():
         out = fb(torch.randn(2, 30, 256))
     assert torch.isfinite(out).all()
+
+
+def test_fbstcnet_mixed_variant_fuses_branches_equally():
+    power_crop_logits = torch.tensor([[[8.0, 0.0]]] * 4).transpose(0, 1)
+    conn_crop_logits = torch.tensor([[[0.0, 8.0]]])
+    crop_weighted = aggregate_crop_logits(torch.cat([power_crop_logits, conn_crop_logits], dim=1))
+    branch_weighted = aggregate_branch_logits(
+        [
+            aggregate_crop_logits(power_crop_logits),
+            aggregate_crop_logits(conn_crop_logits),
+        ]
+    )
+
+    assert torch.argmax(crop_weighted, dim=-1).item() == 0
+    probs = torch.exp(branch_weighted)
+    assert probs[0, 0] == pytest.approx(probs[0, 1], abs=1e-4)
 
 
 # ---------------------------------------------------------------------------

@@ -493,12 +493,19 @@ def test_run_real_classifier_route_candidate_fake_hdf5_is_test_only(monkeypatch,
 
 
 def test_run_real_classifier_route_passes_model_kwargs_to_builder(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    import hust_bci_er.models.factory as model_factory
+    import hust_bci_er.training.reproducibility as reproducibility
+
+    monkeypatch.setenv("PYTHONHASHSEED", "42")
+    monkeypatch.setattr(reproducibility, "PROCESS_START_PYTHONHASHSEED", "42")
+
     data_root = tmp_path / "data"
     data_root.mkdir()
     for idx in range(3):
         _write_hdf5_mat(data_root / f"DEP{idx:03d}timedata.mat", samples_per_trial=50)
         _write_hdf5_mat(data_root / f"HC{idx:03d}timedata.mat", samples_per_trial=50, transpose=True)
-    route = tmp_path / "route.yaml"
+    route = tmp_path / "fake_real_route.yaml"
     route.write_text(
         "\n".join(
             [
@@ -507,7 +514,7 @@ def test_run_real_classifier_route_passes_model_kwargs_to_builder(tmp_path, monk
                 "dataset_version: train_v1",
                 "split_id: p1_seed42_fold0",
                 "seed: 42",
-                "input_window_sec: 4",
+                "input_window_sec: 0.04",
                 "preprocessing: [zscore]",
                 "features: []",
                 "model:",

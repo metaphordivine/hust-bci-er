@@ -21,6 +21,17 @@ def aggregate_crop_logits(crop_logits: torch.Tensor, eps: float = 1e-6) -> torch
     return log_prob
 
 
+def aggregate_branch_logits(branch_logits: list[torch.Tensor], eps: float = 1e-6) -> torch.Tensor:
+    """Fuse branch-level logits with equal branch weights in prob space."""
+    if not branch_logits:
+        raise ValueError("branch_logits must not be empty")
+    if len(branch_logits) == 1:
+        return branch_logits[0]
+    prob = torch.stack([torch.softmax(logits, dim=-1) for logits in branch_logits], dim=0)
+    prob_mean = prob.mean(dim=0)
+    return torch.log(prob_mean.clamp_min(eps))
+
+
 # ---------------------------------------------------------------------------
 # Filterbank implementations
 # ---------------------------------------------------------------------------
@@ -45,10 +56,9 @@ def _design_cheby2_sos(
     sos_list: list[Any] = []
     nyq = sfreq / 2.0
     for low, high in bands:
-        wp = [low / nyq, high / nyq]
         ws = [(low - transition_bw) / nyq, (high + transition_bw) / nyq]
         ws = [max(ws[0], 1e-6), min(ws[1], 0.9999)]
-        sos = cheby2(N=order, rs=stopband_ripple, Wn=wp, btype="bandpass", output="sos")
+        sos = cheby2(N=order, rs=stopband_ripple, Wn=ws, btype="bandpass", output="sos")
         sos_list.append(sos)
     return sos_list
 
@@ -347,15 +357,16 @@ class FBSTCNet(nn.Module):
         if x.dim() == 4:
             x = x.squeeze(1)
         x_fb = self.filterbank(x)
-        crop_logits_list: list[torch.Tensor] = []
+        branch_crop_logits: list[torch.Tensor] = []
         if self.variant in ("P", "M"):
-            crop_logits_list.append(self.power_head(self.st_p(x_fb)))
+            branch_crop_logits.append(self.power_head(self.st_p(x_fb)))
         if self.variant in ("C", "M"):
-            crop_logits_list.append(self.conn_head(self.st_c(x_fb)))
-        crop_logits = torch.cat(crop_logits_list, dim=1)
+            branch_crop_logits.append(self.conn_head(self.st_c(x_fb)))
+        crop_logits = torch.cat(branch_crop_logits, dim=1)
         if return_crop_logits:
             return crop_logits
-        return aggregate_crop_logits(crop_logits)
+        branch_logits = [aggregate_crop_logits(logits) for logits in branch_crop_logits]
+        return aggregate_branch_logits(branch_logits)
 
 
 def build_fbstcnet(
