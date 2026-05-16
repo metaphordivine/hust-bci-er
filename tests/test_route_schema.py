@@ -120,3 +120,11 @@ def test_fixed_crop_augmentation_requires_valid_crop_grid():
     data["augmentation"]["n_crops"] = 6
     errors = validate_route_config(data, path=Path("fixed_crop_ea_deformer.yaml"))
     assert any("n_crops" in err and "source_trial_sec" in err for err in errors)
+
+
+def test_fixed_crop_search_space_rejects_invalid_cross_product():
+    data = load_route("configs/routes/models/fixed_crop_pure_deformer_lite.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"window_sec": [30], "n_crops": [2]}
+    errors = validate_route_config(data, path=Path("fixed_crop_pure_deformer_lite.yaml"))
+    assert any("search_space fixed-crop combinations" in err for err in errors)

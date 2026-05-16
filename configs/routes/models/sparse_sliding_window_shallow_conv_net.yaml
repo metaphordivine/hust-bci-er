@@ -53,4 +53,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "ShallowConvNet with split-first sparse sliding windows: 14s source, 6s windows, 2s stride, yielding 5 genuine candidate windows. train_v1 original trials are 50s/12500 samples, so the 14s/3500-sample source is covered for every audited trial."
+notes: "ShallowConvNet with split-first sparse sliding windows: 14s source, 6s windows, 2s stride, yielding 5 genuine candidate windows."

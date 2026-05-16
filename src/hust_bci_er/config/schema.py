@@ -264,6 +264,28 @@ def validate_augmentation_search_space(augmentation: dict[str, Any], errors: lis
             if any(value * window_sec > source_trial_sec + 1e-9 for value in parsed):
                 errors.append("augmentation.search_space.n_crops values must fit inside augmentation.source_trial_sec")
 
+    if augmentation.get("name") == "split_first_fixed_crops":
+        source_trial_sec = float(augmentation.get("source_trial_sec")) if isinstance(augmentation.get("source_trial_sec"), (int, float)) else None
+        if source_trial_sec is None:
+            return
+
+        def numeric_candidates(key: str, base: Any) -> list[float]:
+            raw_values = search_space.get(key, [base])
+            if not isinstance(raw_values, list):
+                return []
+            return [float(value) for value in raw_values if isinstance(value, (int, float)) and float(value) > 0]
+
+        def integer_candidates(key: str, base: Any) -> list[int]:
+            raw_values = search_space.get(key, [base])
+            if not isinstance(raw_values, list):
+                return []
+            return [int(value) for value in raw_values if isinstance(value, int) and value > 0]
+
+        window_values = numeric_candidates("window_sec", augmentation.get("window_sec"))
+        crop_values = integer_candidates("n_crops", augmentation.get("n_crops"))
+        if any(window_sec * n_crops > source_trial_sec + 1e-9 for window_sec in window_values for n_crops in crop_values):
+            errors.append("augmentation.search_space fixed-crop combinations must fit inside augmentation.source_trial_sec")
+
 
 def validate_non_negative_number(value: Any, field: str, errors: list[str]) -> float | None:
     if not isinstance(value, (int, float)) or value < 0:

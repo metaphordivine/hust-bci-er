@@ -28,6 +28,7 @@ from hust_bci_er.training.real_adapter import (
     _make_fixed_crops,
     _read_mat,
     _split_subjects,
+    _validate_fixed_crop_coverage,
     _write_evidence_manifests,
     run_real_classifier_route,
 )
@@ -303,6 +304,19 @@ def test_make_fixed_crops_returns_non_overlapping_crops():
     assert [crop["crop_id"] for crop in crops] == [0, 1, 2, 3, 4]
     assert [crop["window_start_sec"] for crop in crops] == [0.0, 10.0, 20.0, 30.0, 40.0]
     np.testing.assert_array_equal(crops[1]["x"], x[:, 2500:5000])
+
+
+def test_validate_fixed_crop_coverage_requires_source_duration():
+    x = np.zeros((30, 2500 * 5), dtype=np.float32)
+    trials = [{"x": x, "trial_id": "S01_pos1"}]
+    with pytest.raises(ValueError, match="source_trial_sec=60"):
+        _validate_fixed_crop_coverage(
+            trials,
+            source_trial_sec=60,
+            window_sec=10,
+            n_crops=5,
+            split_name="test",
+        )
 
 
 # ---------------------------------------------------------------------------

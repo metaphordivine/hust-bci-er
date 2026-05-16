@@ -281,11 +281,12 @@ def _make_fixed_crops(
 def _validate_fixed_crop_coverage(
     trials: list[dict[str, Any]],
     *,
+    source_trial_sec: float,
     window_sec: float,
     n_crops: int,
     split_name: str,
 ) -> None:
-    required_samples = int(round(window_sec * SFREQ)) * n_crops
+    required_samples = max(int(round(source_trial_sec * SFREQ)), int(round(window_sec * SFREQ)) * n_crops)
     bad_trials = [
         str(trial.get("trial_id", "<unknown>"))
         for trial in trials
@@ -294,7 +295,8 @@ def _validate_fixed_crop_coverage(
     if bad_trials:
         raise ValueError(
             f"{split_name} fixed-crop evidence requires at least {required_samples} samples "
-            f"per trial for {n_crops} crops; too short: {', '.join(bad_trials[:5])}"
+            f"per trial for source_trial_sec={source_trial_sec:g} and {n_crops} crops; "
+            f"too short: {', '.join(bad_trials[:5])}"
         )
 
 
@@ -773,6 +775,7 @@ def run_real_classifier_route(
     if has_fixed_crop_aug:
         _validate_fixed_crop_coverage(
             trials,
+            source_trial_sec=source_trial_sec,
             window_sec=window_sec,
             n_crops=int(n_fixed_crops),
             split_name=run_mode,
@@ -780,6 +783,7 @@ def run_real_classifier_route(
     elif run_mode == "candidate" and not has_aug:
         _validate_fixed_crop_coverage(
             trials,
+            source_trial_sec=input_window_sec * FIXED_CANDIDATE_CROPS,
             window_sec=input_window_sec,
             n_crops=FIXED_CANDIDATE_CROPS,
             split_name="candidate",
