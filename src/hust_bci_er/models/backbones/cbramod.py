@@ -33,6 +33,15 @@ class PatchEmbeddingCBraMod(nn.Module):
         super().__init__()
         self.patch_size = patch_size
         self.d_model = d_model
+        if conv_out_channels <= 0:
+            raise ValueError(f"CBraMod requires positive conv_out_channels, got {conv_out_channels}")
+        if group_norm_groups <= 0:
+            raise ValueError(f"CBraMod requires positive group_norm_groups, got {group_norm_groups}")
+        if conv_out_channels % group_norm_groups != 0:
+            raise ValueError(
+                "CBraMod requires conv_out_channels divisible by group_norm_groups, "
+                f"got conv_out_channels={conv_out_channels} and group_norm_groups={group_norm_groups}"
+            )
 
         time_branch_width = patch_size
         for kernel_size, stride, _, padding in conv_kernels:
@@ -206,6 +215,8 @@ class CBraMod(nn.Module):
         dim_feedforward: int = 800,
         drop_prob: float = 0.1,
         classifier_pooling: str = "flatten",
+        conv_out_channels: int = 25,
+        group_norm_groups: int = 5,
     ) -> None:
         super().__init__()
         if classifier_pooling not in {"flatten", "mean"}:
@@ -227,6 +238,8 @@ class CBraMod(nn.Module):
             patch_size=patch_size,
             drop_prob=drop_prob,
             d_model=d_model,
+            conv_out_channels=conv_out_channels,
+            group_norm_groups=group_norm_groups,
         )
 
         self.encoder = nn.ModuleList([
@@ -298,4 +311,6 @@ def build_cbramod(
         dim_feedforward=int(kwargs.get("dim_feedforward", 800)),
         drop_prob=float(kwargs.get("drop_prob", 0.1)),
         classifier_pooling=str(kwargs.get("classifier_pooling", "flatten")),
+        conv_out_channels=int(kwargs.get("conv_out_channels", 25)),
+        group_norm_groups=int(kwargs.get("group_norm_groups", 5)),
     )
