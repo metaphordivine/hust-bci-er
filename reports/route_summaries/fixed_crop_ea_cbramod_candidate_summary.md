@@ -15,4 +15,4 @@ protocol: p1_repeated_group_kfold
 risk notes: generated draft; review before committing.
 audit_report_path: reports/route_summaries/evidence/fixed_crop_ea_cbramod_candidate_audit_report.json
 manifest_path: reports/route_summaries/evidence/fixed_crop_ea_cbramod_candidate_manifest.json
-manifest_sha256: 68b76fa3b986eee3a51dfbcedd06e1969dbf50faf03ccae4c6218b49755ebe2f
+manifest_sha256: cd660cad9ece2652e71e6156e8e8a901b7d88d7052109447cf4c6db06a3c4fc8

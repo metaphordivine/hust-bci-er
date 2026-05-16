@@ -15,4 +15,4 @@ protocol: p1_repeated_group_kfold
 risk notes: generated draft; review before committing.
 audit_report_path: reports/route_summaries/evidence/fbstcnet_srfnet_score_average_audit_report.json
 manifest_path: reports/route_summaries/evidence/fbstcnet_srfnet_score_average_manifest.json
-manifest_sha256: d17f8cc1c12f7751fb1ad32d9623405511b277666c554195c6444ab11b46ad2e
+manifest_sha256: 5b04482e5690198b4e647e5b5818d8d4f2e7bfe263b405f3b58008a0ad5d0147
