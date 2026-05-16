@@ -51,5 +51,5 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "CBraMod rescue route: tuned sliding-window baseline extended to 14 s source trials with 6 s windows and stride 2, preserving five exact-metric crops."
+notes: "CBraMod rescue route: tuned sliding-window baseline extended to 14 s source trials with 6 s windows and stride 2, preserving five exact-metric crops. Crop count: (14-6)/2+1=5, which matches the exact_single_crop_expected_BA 5-column score-matrix requirement. Majority-vote crop_policy is used for trial-level prediction; the primary metric is recomputed from the 5-column score matrix exactly as for fixed-crop routes."
 

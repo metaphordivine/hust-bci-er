@@ -83,6 +83,20 @@ def discover_score_matrices(paths: Sequence[Path]) -> list[Path]:
 
 
 def load_score_matrix_run(path: Path, *, label: str | None = None) -> ScoreMatrixRun:
+    """Load a score_matrix.csv artifact into a :class:`ScoreMatrixRun`.
+
+    The CSV must follow the Top-4 candidate format:
+
+    - Columns: ``subject_id`` (or ``user_id``), ``trial_id``, ``y_true``,
+      and exactly five crop score columns (``crop_0`` … ``crop_4``).
+    - Each ``subject_id`` group must contain exactly **8 rows** with
+      exactly **4 positive** ``y_true`` values.
+
+    These constraints are validated lazily during :func:`analyze_score_matrices`
+    (inside :func:`_diagnose_run`) rather than at load time, so that
+    :func:`load_score_matrix_run` can still return a :class:`ScoreMatrixRun`
+    for inspection when the caller wants early access to metadata.
+    """
     score_matrix_path = Path(path)
     manifest_path = score_matrix_path.parent / "manifest.json"
     manifest = _read_json(manifest_path) if manifest_path.exists() else {}
@@ -463,10 +477,17 @@ def _score_matrix_and_truth(run: ScoreMatrixRun, rows: Sequence[Mapping[str, str
     )
     if matrix.shape != (8, 5):
         context = "|".join(str(rows[0][key]) for key in run.group_keys)
-        raise ValueError(f"score matrix group must contain 8 trials and 5 crops: {run.label} {context}")
+        raise ValueError(
+            f"Top-4 format requires exactly 8 trials and 5 crop columns per group, "
+            f"got shape {matrix.shape}: {run.label} group={context}. "
+            "This diagnostic tool only supports the Top-4 candidate score-matrix format."
+        )
     if int(y_true.sum()) != 4:
         context = "|".join(str(rows[0][key]) for key in run.group_keys)
-        raise ValueError(f"score matrix group must contain exactly 4 positive y_true values: {run.label} {context}")
+        raise ValueError(
+            f"Top-4 format requires exactly 4 positive y_true values per group, "
+            f"got {int(y_true.sum())}: {run.label} group={context}"
+        )
     return matrix, y_true
 
 
