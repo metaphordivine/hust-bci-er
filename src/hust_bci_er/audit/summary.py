@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping
 
 import yaml
@@ -12,6 +12,17 @@ from hust_bci_er.audit.manifest import sha256_file
 
 
 ROOT = Path(__file__).resolve().parents[3]
+REPO_PATH_ANCHORS = {
+    "agent_protocols",
+    "configs",
+    "docs",
+    "outputs",
+    "reports",
+    "scripts",
+    "scratch",
+    "src",
+    "tests",
+}
 
 
 def load_mapping(path: Path) -> dict[str, Any]:
@@ -27,8 +38,22 @@ def repo_relative_path(path: Path | str, *, root: Path = ROOT, field: str = "pat
     return resolve_repo_path(path, root=root, field=field).relative_to(root.resolve()).as_posix()
 
 
+def repo_relative_windows_path(path: Path | str) -> str | None:
+    text = str(path)
+    if "\\" not in text:
+        return None
+    windows_path = PureWindowsPath(text)
+    if not windows_path.drive and not text.startswith("\\\\"):
+        return None
+    parts = windows_path.parts
+    for idx, part in enumerate(parts):
+        if part.lower() in REPO_PATH_ANCHORS:
+            return "/".join(parts[idx:])
+    return None
+
+
 def resolve_repo_path(path: Path | str, *, root: Path = ROOT, field: str = "path") -> Path:
-    raw = Path(path)
+    raw = Path(repo_relative_windows_path(path) or path)
     resolved = (root / raw).resolve() if not raw.is_absolute() else raw.resolve()
     try:
         resolved.relative_to(root.resolve())
@@ -64,7 +89,8 @@ def render_route_summary(
             break
     run_dir = str(audit_report.get("run_dir", ""))
     run_dir_for_reproduce = repo_relative_path(run_dir, root=root, field="run_dir") if run_dir else ""
-    route_config = str(audit_report.get("route_config", ""))
+    manifest_config = manifest_data.get("config_path")
+    route_config = str(manifest_config) if isinstance(manifest_config, str) and manifest_config else str(audit_report.get("route_config", ""))
     route_config_for_reproduce = repo_relative_path(route_config, root=root, field="route_config") if route_config else ""
     lines = [
         f"# {route_id} Summary",
