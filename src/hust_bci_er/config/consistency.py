@@ -16,14 +16,19 @@ from hust_bci_er.inference.clean_score_routes import CLEAN_SCORE_ROUTES, score_r
 PREPROCESSING_EVIDENCE = {
     "zscore": ("preprocessing/normalization.py", "zscore_per_channel"),
     "robust_zscore": ("preprocessing/normalization.py", "robust_zscore_per_channel"),
+    "car": ("preprocessing/normalization.py", "common_average_reference"),
+    "bandpass": ("preprocessing/filtering.py", "bandpass_filter"),
     "euclidean_alignment": ("preprocessing/euclidean_alignment.py", "fit_ea_transform"),
-    "whitening_eps1e3": ("preprocessing/whitening.py", "whiten"),
-    "whitening_eps3e4": ("preprocessing/whitening.py", "whiten"),
+    "whitening_eps1e3": ("preprocessing/whitening.py", "channel_whiten"),
+    "whitening_eps3e4": ("preprocessing/whitening.py", "channel_whiten"),
+    "shrinkage_whitening": ("preprocessing/whitening.py", "shrinkage_alpha"),
 }
 FEATURE_EVIDENCE = {
-    "bandpower": ("features/bandpower.py", "bandpower"),
-    "differential_entropy": ("features/differential_entropy.py", "differential_entropy"),
-    "hjorth": ("features/hjorth.py", "hjorth"),
+    "bandpower": ("features/bandpower.py", "bandpower_features"),
+    "connectivity": ("features/connectivity.py", "connectivity_features"),
+    "differential_entropy": ("features/differential_entropy.py", "differential_entropy_features"),
+    "hjorth": ("features/hjorth.py", "hjorth_features"),
+    "riemannian_tangent": ("features/riemannian.py", "tangent_space_features"),
 }
 
 

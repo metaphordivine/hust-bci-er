@@ -6,18 +6,19 @@ import yaml
 from hust_bci_er.config import registry
 
 
-def builder_keys_from_source() -> set[str]:
+def builder_keys_from_source(mapping_name: str = "BUILDERS") -> set[str]:
     tree = ast.parse(Path("src/hust_bci_er/models/factory.py").read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.Assign):
             names = [target.id for target in node.targets if isinstance(target, ast.Name)]
-            if "BUILDERS" in names and isinstance(node.value, ast.Dict):
+            if mapping_name in names and isinstance(node.value, ast.Dict):
                 return {key.value for key in node.value.keys if isinstance(key, ast.Constant) and isinstance(key.value, str)}
-    raise AssertionError("BUILDERS mapping not found in model factory")
+    raise AssertionError(f"{mapping_name} mapping not found in model factory")
 
 
 def test_model_registry_matches_buildable_backbones():
     assert builder_keys_from_source() == registry.TORCH_BACKBONES
+    assert builder_keys_from_source("GRAPH_BUILDERS") == registry.GRAPH_MODELS
     assert registry.MODELS == registry.TORCH_BACKBONES | registry.SKLEARN_MODELS | registry.GRAPH_MODELS | registry.SCORE_ROUTE_MODELS | registry.TOY_MODELS
     assert registry.SCORE_ROUTE_MODELS == {"score_fusion"}
 

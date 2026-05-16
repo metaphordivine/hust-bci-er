@@ -17,11 +17,19 @@
 - `connectivity`
 - `differential_entropy`
 - `hjorth`
+- `riemannian_tangent`
 
 ## Augmentation
 
 - `split_first_fixed_crops`
 - `split_first_sliding_window`
+
+## Augmentation Transforms
+
+- `channel_dropout`
+- `gaussian_noise`
+- `time_mask`
+- `time_shift`
 
 ## Torch Backbones
 
@@ -29,9 +37,11 @@
 - `conformer_lite`
 - `deformer_lite`
 - `eegnet`
+- `fbcnet`
 - `fbstcnet`
 - `shallow_conv_net`
 - `srfnet`
+- `tsception`
 
 ## Sklearn Models
 
@@ -41,6 +51,7 @@
 
 ## Graph Models
 
+- `dgcnn`
 - `lggnet`
 
 ## Score Route Models

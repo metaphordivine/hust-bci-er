@@ -10,6 +10,7 @@ def render_component_docs() -> str:
         ("Preprocessing", registry.PREPROCESSING),
         ("Features", registry.FEATURES),
         ("Augmentation", registry.AUGMENTATION),
+        ("Augmentation Transforms", registry.AUGMENTATION_TRANSFORMS),
         ("Torch Backbones", registry.TORCH_BACKBONES),
         ("Sklearn Models", registry.SKLEARN_MODELS),
         ("Graph Models", registry.GRAPH_MODELS),

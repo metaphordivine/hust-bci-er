@@ -22,6 +22,7 @@ from hust_bci_er.audit.run_manifest import (
 )
 from hust_bci_er.config.schema import validate_route_config
 from hust_bci_er.contracts.records import PredictionRecord
+from hust_bci_er.data.augmentations import apply_transforms_to_windows, transform_configs_from_route
 from hust_bci_er.data.windowing import fixed_crop_slices, fixed_crop_spec_from_config
 from hust_bci_er.evaluation.prediction_writer import write_predictions
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
@@ -142,7 +143,7 @@ def _clip_trial(x: np.ndarray, duration_sec: float) -> np.ndarray:
 
 KNOWN_PREPROC = frozenset({
     "zscore", "robust_zscore", "whitening_eps1e3", "whitening_eps3e4",
-    "shrinkage_whitening", "euclidean_alignment", "car",
+    "shrinkage_whitening", "euclidean_alignment", "car", "bandpass",
 })
 
 
@@ -168,13 +169,13 @@ def _apply_preprocessing(x: np.ndarray, preproc_names: list[str], *, ea_transfor
         elif name == "car":
             from hust_bci_er.preprocessing.normalization import common_average_reference
             x = common_average_reference(x)
+        elif name == "bandpass":
+            from hust_bci_er.preprocessing.filtering import bandpass_filter
+            x = bandpass_filter(x, sfreq=SFREQ, low_hz=1.0, high_hz=min(45.0, SFREQ / 2.0 - 1.0), order=4)
     return x
 
 
 def _validate_adapter_preprocessing(preproc_names: list[str]) -> None:
-    unsupported = [name for name in preproc_names if name == "bandpass"]
-    if unsupported:
-        raise ValueError("torch_classifier adapter does not implement preprocessing step: bandpass")
     unknown = [name for name in preproc_names if name not in KNOWN_PREPROC]
     if unknown:
         raise ValueError(f"unknown preprocessing step(s): {', '.join(sorted(set(unknown)))}")
@@ -843,6 +844,14 @@ def run_real_classifier_route(
     train_windows = raw_train
     val_windows = raw_val
     eval_windows = raw_eval
+    train_transform_configs = transform_configs_from_route(route_data)
+    if train_transform_configs:
+        train_windows = apply_transforms_to_windows(
+            train_windows,
+            train_transform_configs,
+            seed=active_seed,
+            split="train",
+        )
 
     # Build model
     model_config = route_data.get("model") or {}
@@ -981,6 +990,7 @@ def run_real_classifier_route(
             "prediction_scope": prediction_scope,
             "evaluation_split": eval_split,
             "score_matrix_evidence": score_matrix_evidence,
+            "augmentation_transforms": train_transform_configs,
         }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -1016,6 +1026,8 @@ def run_real_classifier_route(
     manifest["source_training_epochs"] = source_epochs
     manifest["training_epochs_overridden"] = epochs != source_epochs
     manifest["score_matrix_evidence"] = score_matrix_evidence
+    manifest["augmentation_transforms"] = train_transform_configs
+    manifest["augmentation_transform_scope"] = "train_only" if train_transform_configs else "none"
     if run_mode in {"full_subjects", "candidate"}:
         ds = yaml.safe_load(dataset_path.read_text(encoding="utf-8")) or {}
         manifest["raw_data_sources"] = ds.get("raw_data_sources") or []

@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from hust_bci_er.config.registry import TORCH_BACKBONES  # noqa: E402
+from hust_bci_er.config.registry import GRAPH_MODELS, TORCH_BACKBONES  # noqa: E402
 from hust_bci_er.models.factory import build_model  # noqa: E402
 
 
@@ -15,7 +15,7 @@ def main() -> int:
 
     torch.manual_seed(0)
     x = torch.randn(2, 30, 256)
-    for name in sorted(TORCH_BACKBONES):
+    for name in sorted(TORCH_BACKBONES | GRAPH_MODELS):
         model = build_model(name, n_channels=30, n_times=256, n_classes=2)
         model.eval()
         with torch.no_grad():

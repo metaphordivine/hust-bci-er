@@ -248,6 +248,8 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         if not isinstance(apply_to_splits, list) or not apply_to_splits or any(split not in valid_splits for split in apply_to_splits):
             errors.append("augmentation.apply_to_splits must be a non-empty list drawn from train/val/test")
 
+    validate_augmentation_transforms(augmentation, errors)
+
     validate_augmentation_search_space(data, augmentation, errors)
 
     aggregate = augmentation.get("aggregate_to_trial")
@@ -261,6 +263,39 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
     # for config shape consistency with the sliding-window route family.
     if aggregate.get("tie_break") not in {None, "mean_score", "lower", "higher"}:
         errors.append("augmentation.aggregate_to_trial.tie_break must be mean_score, lower, or higher")
+
+
+def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[str]) -> None:
+    transforms = augmentation.get("transforms")
+    if transforms is None:
+        return
+    if not isinstance(transforms, list):
+        errors.append("augmentation.transforms must be a list")
+        return
+    for idx, item in enumerate(transforms):
+        field = f"augmentation.transforms[{idx}]"
+        if not isinstance(item, dict):
+            errors.append(f"{field} must be a mapping")
+            continue
+        name = item.get("name")
+        if name not in registry.AUGMENTATION_TRANSFORMS:
+            errors.append(f"unknown augmentation transform: {name}")
+        splits = item.get("apply_to_splits", ["train"])
+        if not isinstance(splits, list) or not splits or any(split not in {"train", "val", "test"} for split in splits):
+            errors.append(f"{field}.apply_to_splits must be a non-empty list drawn from train/val/test")
+        elif set(splits) != {"train"}:
+            errors.append(f"{field}.apply_to_splits must be [train]; augmentation transforms cannot alter val/test evidence")
+
+        if name == "gaussian_noise":
+            validate_non_negative_number(item.get("std", 0.01), f"{field}.std", errors)
+        elif name == "channel_dropout":
+            p = validate_non_negative_number(item.get("p", 0.1), f"{field}.p", errors)
+            if p is not None and p >= 1.0:
+                errors.append(f"{field}.p must be < 1")
+        elif name == "time_mask":
+            validate_positive_int(item.get("max_width", 25), f"{field}.max_width", errors)
+        elif name == "time_shift":
+            validate_non_negative_number(item.get("max_shift", 12), f"{field}.max_shift", errors)
 
 
 def sliding_window_count(source_trial_sec: float, window_sec: float, stride_sec: float) -> int:

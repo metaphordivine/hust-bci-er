@@ -51,10 +51,11 @@ python scripts/repo_doctor.py fast
 - toy end-to-end audit smoke：`toy_eegnet` 可生成 synthetic dataset/split、prediction、score matrix、metric report、run manifest，并通过 candidate audit，用于 CI 和新人环境验证。
 - 真实 HUST EEG `.mat` dataset loader 和 `torch_classifier` job adapter；支持 `smoke`、`full_subjects` 诊断模式和 held-out test `candidate` 模式。
 - route registry / route board：`reports/route_registry.yaml` 记录 route owner/blocker 和共享谨慎修改路径，`reports/route_board.md` 从 route config 与 registry 生成。
+- LGGNet/DGCNN-style 图模型、TSception/FBCNet-style EEG backbone、通用 linear/MLP classifier head、Butterworth bandpass preprocessing、connectivity / Riemannian tangent features，以及 train-only augmentation transforms。
 
 仍属于预留或后续实现：
 
-- 图模型、heads、复杂训练 callback。
+- 复杂训练 callback。
 - 按 route 默认训练轮数完成并提交绑定 summary 的 candidate 级真实实验结果。
 
 P1/P2/P3 当前已迁入为 protocol 配置、dry-run plan 和统一 runner manifest。plan 只看工作量；runner 会锁定 route/config/dataset/source split、job-specific split contract、seed、environment 和 job artifact contract，但不会伪造训练结果：
