@@ -438,8 +438,11 @@ def test_run_real_classifier_route_candidate_fake_hdf5_is_test_only(monkeypatch,
         def forward(self, x):
             return self.linear(x.flatten(1))
 
-    def fake_build_model(_name, *, n_channels, n_times, n_classes):
+    captured_model_kwargs = {}
+
+    def fake_build_model(_name, *, n_channels, n_times, n_classes, **kwargs):
         assert n_classes == 2
+        captured_model_kwargs.update(kwargs)
         return TinyClassifier(n_channels, n_times)
 
     def fake_context(**kwargs):
@@ -486,3 +489,103 @@ def test_run_real_classifier_route_candidate_fake_hdf5_is_test_only(monkeypatch,
     dataset = yaml.safe_load(artifacts.dataset_manifest.read_text(encoding="utf-8"))
     assert dataset["n_crops"] == FIXED_CANDIDATE_CROPS
     assert dataset["raw_data_sources"]
+    assert captured_model_kwargs == {}
+
+
+def test_run_real_classifier_route_passes_model_kwargs_to_builder(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    import hust_bci_er.models.factory as model_factory
+    import hust_bci_er.training.reproducibility as reproducibility
+
+    monkeypatch.setenv("PYTHONHASHSEED", "42")
+    monkeypatch.setattr(reproducibility, "PROCESS_START_PYTHONHASHSEED", "42")
+
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    for idx in range(3):
+        _write_hdf5_mat(data_root / f"DEP{idx:03d}timedata.mat", samples_per_trial=50)
+        _write_hdf5_mat(data_root / f"HC{idx:03d}timedata.mat", samples_per_trial=50, transpose=True)
+    route = tmp_path / "fake_real_route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: fake_real_route",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: p1_seed42_fold0",
+                "seed: 42",
+                "input_window_sec: 0.04",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model:",
+                "  name: shallow_conv_net",
+                "  n_filters_time: 24",
+                "  drop_prob: 0.25",
+                "adaptation: none",
+                "training:",
+                "  trainer: torch_classifier",
+                "  job_adapter: torch_classifier",
+                "  epochs: 1",
+                "  batch_size: 8",
+                "  optimizer:",
+                "    name: adamw",
+                "    lr: 0.001",
+                "  loss: cross_entropy",
+                "inference:",
+                "  top4: true",
+                "  crop_policy: single",
+                "evaluation:",
+                "  protocol: p1_repeated_group_kfold",
+                "  primary_metric: exact_single_crop_expected_BA",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class TinyClassifier(torch.nn.Module):
+        def __init__(self, n_channels: int, n_times: int) -> None:
+            super().__init__()
+            self.linear = torch.nn.Linear(n_channels * n_times, 2)
+
+        def forward(self, x):
+            return self.linear(x.flatten(1))
+
+    captured = {}
+
+    def fake_build_model(_name, *, n_channels, n_times, n_classes, **kwargs):
+        assert n_classes == 2
+        captured.update(kwargs)
+        return TinyClassifier(n_channels, n_times)
+
+    def fake_context(**kwargs):
+        return SimpleNamespace(
+            run_dir=kwargs["run_dir"],
+            prediction_csv=kwargs["prediction_csv"],
+        )
+
+    def fake_manifest(context, *, metrics, command, score_matrix_csv):
+        return {
+            "audit_schema_version": 2,
+            "route_id": "fake_real_route",
+            "command": " ".join(command) if isinstance(command, list) else command,
+            "primary_metric": "exact_single_crop_expected_BA",
+            "metrics": dict(metrics),
+            "prediction_csv": context.prediction_csv.name,
+            "metric_inputs": {"score_matrix_csv": Path(score_matrix_csv).name},
+        }
+
+    monkeypatch.setattr(model_factory, "build_model", fake_build_model)
+    monkeypatch.setattr(real_adapter, "prepare_run_manifest_context", fake_context)
+    monkeypatch.setattr(real_adapter, "build_run_manifest_payload", fake_manifest)
+
+    run_real_classifier_route(
+        route_config_path=route,
+        run_dir=tmp_path / "run",
+        run_mode="candidate",
+        command=["python", "scripts/train_route.py", "--data-root", data_root.as_posix()],
+        data_root=data_root,
+        device="cpu",
+    )
+
+    assert captured == {"n_filters_time": 24, "drop_prob": 0.25}
