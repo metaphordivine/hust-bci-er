@@ -1,0 +1,21 @@
+route_id: fbstcnet_srfnet_whitening_eps1e3_average
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 10
+preprocessing: [euclidean_alignment, zscore, whitening_eps1e3]
+features: []
+model:
+  name: score_fusion
+  score_node: fbstcnet_srfnet_whitening_eps1e3_average
+  components: [fixed_crop_ea_fbstcnet_component, srfnet_long_component, srfnet_whitening_eps1e3_component]
+adaptation: none
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "IDEA only. Weighted z-average target weights are FBSTCNet 0.40, SRFNet reference 0.30, whitening SRFNet eps1e3 0.30; preprocessing describes component provenance, not a unified preprocessing pass."
+

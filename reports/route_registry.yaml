@@ -82,6 +82,18 @@ routes:
   - route_id: fixed_crop_whitening_eps1e3_fbstcnet
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fbstcnet_as_query_srfnet_context_fusion
+    owner: metaphordivine
+    blocker: missing_component_evidence
+  - route_id: fbstcnet_srfnet_conformer_score_average
+    owner: metaphordivine
+    blocker: missing_component_evidence
+  - route_id: fbstcnet_srfnet_score_average
+    owner: metaphordivine
+    blocker: missing_component_evidence
+  - route_id: fbstcnet_srfnet_whitening_eps1e3_average
+    owner: metaphordivine
+    blocker: missing_component_evidence
   - route_id: sliding_window_conformer_lite
     owner: metaphordivine
     blocker:
@@ -103,6 +115,9 @@ routes:
   - route_id: sliding_window_srfnet
     owner: metaphordivine
     blocker:
+  - route_id: srfnet_as_query_fbstcnet_context_fusion
+    owner: metaphordivine
+    blocker: missing_component_evidence
   - route_id: sparse_sliding_window_shallow_conv_net
     owner: metaphordivine
     blocker:

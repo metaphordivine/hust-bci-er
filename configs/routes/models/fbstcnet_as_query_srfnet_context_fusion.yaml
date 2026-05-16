@@ -1,0 +1,21 @@
+route_id: fbstcnet_as_query_srfnet_context_fusion
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 10
+preprocessing: [euclidean_alignment, zscore]
+features: []
+model:
+  name: score_fusion
+  score_node: fbstcnet_as_query_srfnet_context_fusion
+  components: [fixed_crop_ea_fbstcnet_component, srfnet_long_component, conformer_component]
+adaptation: none
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "IDEA only. Score-fusion route uses fixed_crop_ea_fbstcnet as query and SRFNet/Conformer as context; preprocessing describes component provenance, not a unified preprocessing pass."
+

@@ -14,6 +14,22 @@ def test_descriptive_score_fusion_routes_are_present():
     route_ids = {route.route_id for route in CLEAN_SCORE_ROUTES}
     assert "whitening_eps1e3_query_eps3e4_srfnet_context_fusion" in route_ids
     assert "whitening_eps1e3_with_conformer_srfnet_reference_average" in route_ids
+    assert "fbstcnet_srfnet_score_average" in route_ids
+    assert "fbstcnet_as_query_srfnet_context_fusion" in route_ids
+
+
+def test_fbstcnet_fusion_routes_record_initial_weights():
+    pair = score_route_by_id("fbstcnet_srfnet_score_average")
+    assert pair is not None
+    assert pair.weights == (0.50, 0.50)
+
+    triple = score_route_by_id("fbstcnet_srfnet_conformer_score_average")
+    assert triple is not None
+    assert triple.weights == (0.40, 0.40, 0.20)
+
+    whitening = score_route_by_id("fbstcnet_srfnet_whitening_eps1e3_average")
+    assert whitening is not None
+    assert whitening.weights == (0.40, 0.30, 0.30)
 
 
 def test_score_route_lookup_by_id_and_node():
