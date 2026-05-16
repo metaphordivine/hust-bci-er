@@ -12,7 +12,7 @@ dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
-risk notes: generated draft; review before committing.
+risk notes: single-split PR12 candidate baseline now superseded by CAR/whitening/C-only ablations in PR16; keep as reference until multi-seed/group-kfold confirms the new ordering.
 audit_report_path: reports/route_summaries/evidence/fixed_crop_ea_fbstcnet_audit_report.json
 manifest_path: reports/route_summaries/evidence/fixed_crop_ea_fbstcnet_manifest.json
 manifest_sha256: 0b2ab35375070515def5ff0dab8a1c2dcc8196b85dc4e555b55efe75f39c9f9b

@@ -12,7 +12,7 @@ dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
-risk notes: generated draft; review before committing.
+risk notes: single-split candidate only; no P1/P2/P3 repeated protocol; DEP exact BA 0.519012 trails HC exact BA 0.795956, so promotion needs cohort-gap and multi-seed/group-kfold confirmation.
 audit_report_path: reports/route_summaries/evidence/fixed_crop_ea_whitening_eps1e3_fbstcnet_audit_report.json
 manifest_path: reports/route_summaries/evidence/fixed_crop_ea_whitening_eps1e3_fbstcnet_manifest.json
 manifest_sha256: fb54ad66ddc0b6c954dc91d519900b9109cd46b8b7ffbf9e14e31e6fa7e8953b

@@ -12,7 +12,7 @@ dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
-risk notes: generated draft; review before committing.
+risk notes: single-split candidate only; connectivity branch is strong at 0.702109, but hard DEP/subject errors remain clustered; require multi-seed/group-kfold and cohort-gap review before promotion.
 audit_report_path: reports/route_summaries/evidence/fixed_crop_ea_fbstcnet_c_only_audit_report.json
 manifest_path: reports/route_summaries/evidence/fixed_crop_ea_fbstcnet_c_only_manifest.json
 manifest_sha256: b2e04528c08b8f9f75a02cb75b5ac84facdcadf432783382d80d9010e6850458

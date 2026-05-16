@@ -12,7 +12,7 @@ dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
-risk notes: generated draft; review before committing.
+risk notes: single-split candidate only; below the FBSTCNet champion and no P1/P2/P3 repeated protocol was run; retain as architecture-diversity/control evidence pending multi-seed confirmation.
 audit_report_path: reports/route_summaries/evidence/fixed_crop_ea_deformer_ff2_audit_report.json
 manifest_path: reports/route_summaries/evidence/fixed_crop_ea_deformer_ff2_manifest.json
 manifest_sha256: 8e13ad09a3fee8a45ff0a57553ce41f4b6561e93ad6d2d866aa2cf3478b865b0

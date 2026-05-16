@@ -12,7 +12,7 @@ dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
-risk notes: generated draft; review before committing.
+risk notes: single-split score-fusion candidate only; fusion score is a ranking score, not a calibrated probability, and components use fixed_crop_ea_fbstcnet rather than the new CAR/C-only champion; rerun with new champion components before promotion.
 audit_report_path: reports/route_summaries/evidence/fbstcnet_as_query_srfnet_context_fusion_audit_report.json
 manifest_path: reports/route_summaries/evidence/fbstcnet_as_query_srfnet_context_fusion_manifest.json
 manifest_sha256: d5fc1b794dacd1dfc9baff3ad7404818911f25e027dbe7253dd85fb378a1db53

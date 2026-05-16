@@ -12,7 +12,7 @@ dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
-risk notes: generated draft; review before committing.
+risk notes: single-split FBSTCNet ablation evidence only; no P1/P2/P3 repeated protocol was run, and promotion requires multi-seed/group-kfold, DEP/HC gap, and hard-subject review.
 audit_report_path: reports/route_summaries/evidence/fixed_crop_whitening_eps1e3_fbstcnet_audit_report.json
 manifest_path: reports/route_summaries/evidence/fixed_crop_whitening_eps1e3_fbstcnet_manifest.json
 manifest_sha256: f6b13073419545fde69392d863dde2f49096f3e215ddb432ece46f5300dc353d

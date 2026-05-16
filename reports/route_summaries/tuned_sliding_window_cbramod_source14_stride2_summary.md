@@ -12,7 +12,7 @@ dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
-risk notes: generated draft; review before committing.
+risk notes: single-split candidate only; CBraMod rescue remains below the FBSTCNet champion and no P1/P2/P3 repeated protocol was run; retain as diversity evidence, not main-line promotion evidence.
 audit_report_path: reports/route_summaries/evidence/tuned_sliding_window_cbramod_source14_stride2_audit_report.json
 manifest_path: reports/route_summaries/evidence/tuned_sliding_window_cbramod_source14_stride2_manifest.json
 manifest_sha256: 7b0c005a9fc7fa7c77aad2f88e2e0f23055e96a9dece5b91e5fb229d124bc1ae
