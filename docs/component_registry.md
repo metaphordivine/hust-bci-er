@@ -20,9 +20,12 @@
 
 ## Torch Backbones
 
+- `cbramod`
 - `conformer_lite`
 - `deformer_lite`
 - `eegnet`
+- `fbstcnet`
+- `shallow_conv_net`
 - `srfnet`
 
 ## Sklearn Models

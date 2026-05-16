@@ -14,6 +14,7 @@ dev = [
 ]
 models = [
   "h5py>=3.0",
+  "scipy>=1.10",
   "torch>=2.0",
 ]
 tables = [

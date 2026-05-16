@@ -69,6 +69,9 @@ TORCH_BACKBONES = {
     "conformer_lite",
     "deformer_lite",
     "srfnet",
+    "shallow_conv_net",
+    "cbramod",
+    "fbstcnet",
 }
 
 SKLEARN_MODELS = {

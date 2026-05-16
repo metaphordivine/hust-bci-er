@@ -59,6 +59,15 @@ def test_route_config_must_not_set_output_dir():
     assert any("output_dir is derived" in err for err in errors)
 
 
+def test_sliding_window_fbstcnet_route_declares_cheby2_filterbank():
+    """Route config must explicitly declare filterbank_type: cheby2 (paper-faithful)."""
+    data = load_route("configs/routes/models/sliding_window_fbstcnet.yaml")
+    model_cfg = data.get("model", {})
+    assert model_cfg.get("filterbank_type") == "cheby2", (
+        "sliding_window_fbstcnet route must explicitly declare filterbank_type: cheby2"
+    )
+
+
 def test_sliding_window_augmentation_requires_split_first_and_matching_window():
     data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
     assert validate_route_config(data, path=Path("sliding_window_eegnet.yaml")) == []
