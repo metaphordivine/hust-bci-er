@@ -1,0 +1,18 @@
+# fbstcnet_srfnet_whitening_eps1e3_average Summary
+
+route_id: fbstcnet_srfnet_whitening_eps1e3_average
+route_status: IDEA
+audit_decision: PASS
+gate: candidate
+primary_metric: exact_single_crop_expected_BA
+primary_metric_value: 0.6994013333333333
+decision: PASS
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/fbstcnet_srfnet_whitening_eps1e3_average.yaml --run outputs/score_fusion_fbstcnet/20260516_fixed_ea_component/fbstcnet_srfnet_whitening_eps1e3_average --gate candidate
+dataset: train_v1
+split: p1_seed42_fold0
+seed: 42
+protocol: p1_repeated_group_kfold
+risk notes: generated draft; review before committing.
+audit_report_path: outputs/score_fusion_fbstcnet/20260516_fixed_ea_component/fbstcnet_srfnet_whitening_eps1e3_average/audit_report.json
+manifest_path: outputs/score_fusion_fbstcnet/20260516_fixed_ea_component/fbstcnet_srfnet_whitening_eps1e3_average/manifest.json
+manifest_sha256: 562295d64d083212674a179c54d09e0f9a6d94d1ccc3b7cce469dd17538b2a62
