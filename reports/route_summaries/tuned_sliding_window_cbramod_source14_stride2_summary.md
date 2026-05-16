@@ -1,0 +1,18 @@
+# tuned_sliding_window_cbramod_source14_stride2 Summary
+
+route_id: tuned_sliding_window_cbramod_source14_stride2
+route_status: IDEA
+audit_decision: PASS
+gate: candidate
+primary_metric: exact_single_crop_expected_BA
+primary_metric_value: 0.5710613333333333
+decision: PASS
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/tuned_sliding_window_cbramod_source14_stride2.yaml --run outputs/tuned_sliding_window_cbramod_source14_stride2/candidate_20260516_seed42 --gate candidate
+dataset: train_v1
+split: p1_seed42_fold0
+seed: 42
+protocol: p1_repeated_group_kfold
+risk notes: generated draft; review before committing.
+audit_report_path: outputs/tuned_sliding_window_cbramod_source14_stride2/candidate_20260516_seed42/audit_report.json
+manifest_path: outputs/tuned_sliding_window_cbramod_source14_stride2/candidate_20260516_seed42/manifest.json
+manifest_sha256: 05e1114e40517b5a7fa08fc4dc5cf0040d6e0c3b0b23d03bde8e93f7fc998773
