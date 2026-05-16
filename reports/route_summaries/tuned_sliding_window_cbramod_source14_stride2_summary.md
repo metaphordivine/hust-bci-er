@@ -13,6 +13,6 @@ split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
 risk notes: generated draft; review before committing.
-audit_report_path: outputs/tuned_sliding_window_cbramod_source14_stride2/candidate_20260516_seed42/audit_report.json
-manifest_path: outputs/tuned_sliding_window_cbramod_source14_stride2/candidate_20260516_seed42/manifest.json
+audit_report_path: reports/route_summaries/evidence/tuned_sliding_window_cbramod_source14_stride2_audit_report.json
+manifest_path: reports/route_summaries/evidence/tuned_sliding_window_cbramod_source14_stride2_manifest.json
 manifest_sha256: 05e1114e40517b5a7fa08fc4dc5cf0040d6e0c3b0b23d03bde8e93f7fc998773

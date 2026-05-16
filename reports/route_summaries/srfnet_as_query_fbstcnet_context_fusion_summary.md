@@ -13,6 +13,6 @@ split: p1_seed42_fold0
 seed: 42
 protocol: p1_repeated_group_kfold
 risk notes: generated draft; review before committing.
-audit_report_path: outputs/score_fusion_fbstcnet/20260516_fixed_ea_component/srfnet_as_query_fbstcnet_context_fusion/audit_report.json
-manifest_path: outputs/score_fusion_fbstcnet/20260516_fixed_ea_component/srfnet_as_query_fbstcnet_context_fusion/manifest.json
+audit_report_path: reports/route_summaries/evidence/srfnet_as_query_fbstcnet_context_fusion_audit_report.json
+manifest_path: reports/route_summaries/evidence/srfnet_as_query_fbstcnet_context_fusion_manifest.json
 manifest_sha256: 056dd417f88f407628ded3a694f29b384e9e6323d6a9ae524763063367fe4c0b

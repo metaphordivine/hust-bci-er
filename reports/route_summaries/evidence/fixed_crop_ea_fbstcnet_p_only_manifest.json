@@ -1,0 +1,924 @@
+{
+  "audit_schema_version": 2,
+  "route_id": "fixed_crop_ea_fbstcnet_p_only",
+  "git_commit": "e13e0106f06435ad6456e62f6e4abe548c8256ae",
+  "config_path": "configs/routes/models/fixed_crop_ea_fbstcnet_p_only.yaml",
+  "config_snapshot_path": "config_snapshot.yaml",
+  "config_sha256": "5f9fb1395b19413518421be00554b6822c99b43112325c4f6f8de3232993831f",
+  "dataset_manifest_path": "dataset_manifest.yaml",
+  "dataset_manifest_sha256": "f55780f0c090c96a46572a91b4106c3cc7341038a70e570c6da5677cc8eced86",
+  "split_manifest_path": "split_manifest.yaml",
+  "split_id": "p1_seed42_fold0",
+  "source_split_id": "p1_seed42_fold0",
+  "split_sha256": "a08282f079a77e92a61c834d83a99e8923b1954bccad1f184a61f94d0a78ed41",
+  "seed": 42,
+  "source_seed": 42,
+  "command": "python scripts/run_candidate_route.py --route configs/routes/models/fixed_crop_ea_fbstcnet_p_only.yaml --run-dir outputs/fixed_crop_ea_fbstcnet_p_only/candidate_20260516_seed42 --data-root scratch/local_data/hust_bci_er_train/训练集",
+  "primary_metric": "exact_single_crop_expected_BA",
+  "metrics": {
+    "exact_single_crop_expected_BA": 0.6582586666666667
+  },
+  "prediction_csv": "predictions.csv",
+  "prediction_sha256": "cb4d0cab3b4ec8740a423e2bc6a2822e237e495493fb99db6da41ad7dd81016b",
+  "prediction_record_level": "trial",
+  "top4_group_keys": [
+    "subject_id"
+  ],
+  "environment": {
+    "python": {
+      "version": "3.13.11",
+      "implementation": "CPython",
+      "executable": "D:\\ja153\\Miniconda\\python.exe"
+    },
+    "platform": {
+      "system": "Windows",
+      "release": "11",
+      "machine": "AMD64",
+      "platform": "Windows-11-10.0.26200-SP0"
+    },
+    "packages": {
+      "numpy": "2.4.2",
+      "PyYAML": "6.0.3",
+      "pytest": "9.0.3",
+      "torch": "2.12.0.dev20260408+cu128"
+    },
+    "torch": {
+      "installed": true,
+      "version": "2.12.0.dev20260408+cu128",
+      "cuda": "12.8",
+      "cudnn": 92000,
+      "cuda_available": true,
+      "device_count": 1,
+      "devices": [
+        "NVIDIA GeForce RTX 5070 Laptop GPU"
+      ],
+      "driver": "582.05"
+    },
+    "pip_freeze": [
+      "CairoSVG==2.9.0",
+      "CoLT5-attention==0.11.1",
+      "Jinja2==3.1.6",
+      "Markdown==3.10.2",
+      "MarkupSafe==3.0.3",
+      "PyJWT @ file:///C:/miniconda3/conda-bld/pyjwt_1764332257117/work",
+      "PyMuPDF==1.27.2.3",
+      "PyPDF2==3.0.1",
+      "PySocks @ file:///C:/miniconda3/conda-bld/pysocks_1761753030965/work",
+      "PyYAML==6.0.3",
+      "Pygments @ file:///C:/miniconda3/conda-bld/pygments_1762431428918/work",
+      "Werkzeug==3.1.6",
+      "absl-py==2.4.0",
+      "aiobotocore==3.5.0",
+      "aiofiles==25.1.0",
+      "aiohappyeyeballs==2.6.1",
+      "aiohttp==3.13.5",
+      "aioitertools==0.13.0",
+      "aiosignal==1.4.0",
+      "anaconda-anon-usage @ file:///opt/miniconda3/conda-bld/anaconda-anon-usage_1764636648062/work",
+      "anaconda-auth @ file:///C:/miniconda3/conda-bld/anaconda-cloud-auth-split_1765839853030/work",
+      "anaconda-cli-base @ file:///C:/miniconda3/conda-bld/anaconda-cli-base_1764888883727/work",
+      "annotated-doc==0.0.4",
+      "annotated-types @ file:///C:/miniconda3/conda-bld/annotated-types_1761745107361/work",
+      "anyio==4.13.0",
+      "archspec @ file:///home/task_175812491784513/conda-bld/archspec_1758124989039/work",
+      "asttokens @ file:///home/conda/feedstock_root/build_artifacts/asttokens_1763409923949/work",
+      "astunparse==1.6.3",
+      "attrs==26.1.0",
+      "axial_positional_embedding==0.3.12",
+      "beautifulsoup4==4.14.3",
+      "boltons @ file:///C:/b/abs_e2_iokhxbp/croot/boltons_1751383740243/work",
+      "botocore==1.42.91",
+      "bracex==2.6",
+      "braindecode==1.4.0",
+      "brotlicffi @ file:///C:/miniconda3/conda-bld/brotlicffi_1764961374486/work",
+      "cairocffi==1.7.1",
+      "certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1767500808759/work/certifi",
+      "cffi @ file:///C:/miniconda3/conda-bld/cffi_1761832792955/work",
+      "charset-normalizer @ file:///C:/miniconda3/conda-bld/charset-normalizer_1761744975868/work",
+      "click @ file:///C:/miniconda3/conda-bld/click_1764332372183/work",
+      "colorama @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/colorama_1729036581634/work",
+      "comm @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_comm_1753453984/work",
+      "conda @ file:///C:/miniconda3/conda-bld/conda_1765567840841/work/conda-src",
+      "conda-anaconda-telemetry @ file:///croot/conda-anaconda-telemetry_1755883788794/work",
+      "conda-anaconda-tos @ file:///C:/b/abs_c9yejtsx9g/croot/conda-anaconda-tos_1755123332641/work",
+      "conda-content-trust @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/conda-content-trust_1729088072778/work",
+      "conda-libmamba-solver @ file:///C:/miniconda3/conda-bld/conda-libmamba-solver_1764245615235/work/src",
+      "conda-package-handling @ file:///C:/miniconda3/conda-bld/conda-package-handling_1762366515145/work",
+      "conda_package_streaming @ file:///C:/miniconda3/conda-bld/conda-package-streaming_1762361689679/work",
+      "contourpy==1.3.3",
+      "cryptography @ file:///C:/miniconda3/conda-bld/cryptography-split_1761932023265/work",
+      "cssselect2==0.9.0",
+      "cycler==0.12.1",
+      "debugpy @ file:///D:/bld/bld/rattler-build_debugpy_1765840845/work",
+      "decorator @ file:///home/conda/feedstock_root/build_artifacts/decorator_1740384970518/work",
+      "defusedxml==0.7.1",
+      "distro @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/distro_1729059153117/work",
+      "docstring-inheritance==3.0.0",
+      "donfig==0.8.1.post1",
+      "eegdash==0.7.2",
+      "eeglabio==0.1.3",
+      "einops==0.8.2",
+      "et_xmlfile==2.0.0",
+      "executing @ file:///home/conda/feedstock_root/build_artifacts/executing_1756729339227/work",
+      "filelock==3.25.2",
+      "flatbuffers==25.12.19",
+      "fonttools==4.61.1",
+      "freetype-py==2.5.1",
+      "frozendict @ file:///C:/miniconda3/conda-bld/frozendict_1761750728192/work",
+      "frozenlist==1.8.0",
+      "fsspec==2026.4.0",
+      "gast==0.7.0",
+      "gdown==5.2.1",
+      "git-filter-repo==2.47.0",
+      "google-crc32c==1.8.0",
+      "google-pasta==0.2.0",
+      "greenlet==3.4.0",
+      "grpcio==1.78.0",
+      "h11==0.16.0",
+      "h5py==3.15.1",
+      "hf-xet==1.4.3",
+      "httpcore==1.0.9",
+      "httpx==0.28.1",
+      "huggingface_hub==1.13.0",
+      "hyper-connections==0.4.10",
+      "idna @ file:///C:/miniconda3/conda-bld/idna_1761912043388/work",
+      "iniconfig==2.3.0",
+      "ipykernel @ file:///D:/bld/bld/rattler-build_ipykernel_1761567966/work",
+      "ipython @ file:///D:/bld/bld/rattler-build_ipython_1767621201/work",
+      "ipython_pygments_lexers @ file:///home/conda/feedstock_root/build_artifacts/ipython_pygments_lexers_1737123620466/work",
+      "jaraco.classes @ file:///C:/b/abs_6erueoob1v/croot/jaraco.classes_1755516340851/work",
+      "jaraco.context @ file:///C:/Users/dev-admin/buildout/perseverance-python-buildout/croot/jaraco.context_1731721000658/work",
+      "jaraco.functools @ file:///C:/b/abs_a1jv6v_pzp/croot/jaraco.functools_1740408129620/work",
+      "jedi @ file:///home/conda/feedstock_root/build_artifacts/jedi_1733300866624/work",
+      "jiter==0.14.0",
+      "jmespath==1.1.0",
+      "joblib==1.5.3",
+      "jsonpatch @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/jsonpatch_1729054776004/work",
+      "jsonpointer @ file:///C:/b/abs_73u73l7pl9/croot/jsonpointer_1753788460913/work",
+      "jupyter_client @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_jupyter_client_1767954655/work",
+      "jupyter_core @ file:///D:/bld/bld/rattler-build_jupyter_core_1760643889/work",
+      "keras==3.13.2",
+      "keyring @ file:///C:/miniconda3/conda-bld/keyring_1763637203252/work",
+      "kiwisolver==1.4.9",
+      "lazy-loader==0.5",
+      "libclang==18.1.1",
+      "libmambapy @ file:///C:/miniconda3/conda-bld/mamba-split_1763111608356/work/libmambapy",
+      "linear-attention-transformer==0.19.1",
+      "linformer==0.2.3",
+      "llvmlite==0.47.0",
+      "local-attention==1.11.2",
+      "lxml==6.0.2",
+      "markdown-it-py @ file:///C:/b/abs_3espcrdl35/croot/markdown-it-py_1756299213703/work",
+      "matplotlib-inline @ file:///home/conda/feedstock_root/build_artifacts/matplotlib-inline_1761214490209/work",
+      "matplotlib==3.10.8",
+      "mdurl @ file:///C:/miniconda3/conda-bld/mdurl_1758552277768/work",
+      "menuinst @ file:///C:/miniconda3/conda-bld/menuinst_1765382397455/work",
+      "ml_dtypes==0.5.4",
+      "mne-bids==0.18.0",
+      "mne==1.12.1",
+      "more-itertools @ file:///C:/miniconda3/conda-bld/more-itertools_1761121564395/work",
+      "mpmath==1.3.0",
+      "msgpack @ file:///C:/b/abs_4b3t4uhz3r/croot/msgpack-python_1750958631084/work",
+      "multidict==6.7.1",
+      "namex==0.1.0",
+      "nest_asyncio @ file:///home/conda/feedstock_root/build_artifacts/nest-asyncio_1733325553580/work",
+      "networkx==3.6.1",
+      "numba==0.65.1",
+      "numcodecs==0.16.5",
+      "numpy==2.4.2",
+      "openai==2.32.0",
+      "opencv-python==4.13.0.92",
+      "openneuro-py==2026.4.1",
+      "openpyxl==3.1.5",
+      "opt_einsum==3.4.0",
+      "optree==0.19.0",
+      "packaging @ file:///C:/miniconda3/conda-bld/packaging_1761049099114/work",
+      "pandas==3.0.2",
+      "parso @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_parso_1755974222/work",
+      "pillow==12.1.1",
+      "pkce @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/pkce_1729049216383/work",
+      "platformdirs @ file:///C:/miniconda3/conda-bld/platformdirs_1762356623609/work",
+      "playwright==1.58.0",
+      "pluggy @ file:///C:/b/abs_dfec_m79vo/croot/pluggy_1733170145382/work",
+      "pooch==1.9.0",
+      "product_key_memory==0.3.0",
+      "prompt_toolkit @ file:///home/conda/feedstock_root/build_artifacts/prompt-toolkit_1756321756983/work",
+      "propcache==0.4.1",
+      "protobuf==7.34.0",
+      "psutil @ file:///D:/bld/bld/rattler-build_psutil_1767012395/work",
+      "pure_eval @ file:///home/conda/feedstock_root/build_artifacts/pure_eval_1733569405015/work",
+      "pycairo==1.29.0",
+      "pycosat @ file:///C:/b/abs_18nblzzn70/croot/pycosat_1736868434419/work",
+      "pycparser @ file:///C:/miniconda3/conda-bld/pycparser_1757496153123/work",
+      "pydantic @ file:///C:/miniconda3/conda-bld/pydantic_1764083582233/work",
+      "pydantic-settings @ file:///C:/miniconda3/conda-bld/pydantic-settings_1764165236385/work",
+      "pydantic_core @ file:///C:/miniconda3/conda-bld/pydantic-core_1764009799098/work",
+      "pyee==13.0.1",
+      "pymatreader==1.2.2",
+      "pyparsing==3.3.2",
+      "pypdf==6.8.0",
+      "pytest==9.0.3",
+      "python-dateutil @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_python-dateutil_1751104122/work",
+      "python-docx==1.2.0",
+      "python-dotenv @ file:///C:/b/abs_71cpoh9hpg/croot/python-dotenv_1745613639902/work",
+      "python-pptx==1.0.2",
+      "pywin32 @ file:///D:/bld/bld/rattler-build_pywin32_1756487139/work",
+      "pywin32-ctypes @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/pywin32-ctypes_1729046491215/work",
+      "pyzmq @ file:///D:/bld/bld/rattler-build_pyzmq_1757387025/work",
+      "rarfile==4.2",
+      "readchar @ file:///C:/miniconda3/conda-bld/readchar_1760613474723/work",
+      "reportlab==4.4.10",
+      "requests @ file:///C:/miniconda3/conda-bld/requests_1762359611326/work",
+      "rich @ file:///C:/miniconda3/conda-bld/rich_1760375661587/work",
+      "rlPyCairo==0.4.0",
+      "rotary-embedding-torch==0.8.9",
+      "ruamel.yaml @ file:///C:/miniconda3/conda-bld/ruamel.yaml_1762536064547/work",
+      "ruamel.yaml.clib @ file:///C:/miniconda3/conda-bld/ruamel.yaml.clib_1762530094515/work",
+      "s3fs==2026.4.0",
+      "safetensors==0.7.0",
+      "scikit-learn==1.8.0",
+      "scipy==1.17.1",
+      "semver @ file:///C:/miniconda3/conda-bld/semver_1761903323755/work",
+      "setuptools==80.9.0",
+      "shellingham @ file:///C:/miniconda3/conda-bld/shellingham_1761912227081/work",
+      "six @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_six_1753199211/work",
+      "skorch==1.3.1",
+      "sniffio==1.3.1",
+      "soundfile==0.13.1",
+      "soupsieve==2.8.3",
+      "stack_data @ file:///home/conda/feedstock_root/build_artifacts/stack_data_1733569443808/work",
+      "svglib==1.6.0",
+      "sympy==1.14.0",
+      "tabulate==0.10.0",
+      "tensorboard-data-server==0.7.2",
+      "tensorboard==2.20.0",
+      "tensorboardX==2.6.5",
+      "tensorflow==2.20.0",
+      "termcolor==3.3.0",
+      "threadpoolctl==3.6.0",
+      "timm==0.4.12",
+      "tinycss2==1.5.1",
+      "tomli @ file:///C:/b/abs_88e598m6o8/croot/tomli_1753774604115/work",
+      "torch-einops-utils==0.0.30",
+      "torch==2.12.0.dev20260408+cu128",
+      "torchaudio==2.11.0.dev20260407+cu128",
+      "torchinfo==1.8.0",
+      "torchvision==0.27.0.dev20260407+cu128",
+      "tornado @ file:///D:/bld/tornado_1765836389830/work",
+      "tqdm @ file:///C:/miniconda3/conda-bld/tqdm_1762863407729/work",
+      "traitlets @ file:///home/conda/feedstock_root/build_artifacts/traitlets_1733367359838/work",
+      "truststore==0.10.4",
+      "typer-slim==0.20.0",
+      "typer==0.25.0",
+      "typing-inspection @ file:///C:/miniconda3/conda-bld/typing-inspection_1760614188477/work",
+      "typing_extensions @ file:///C:/b/abs_ecq8gc0vbm/croot/typing_extensions_1756281142218/work",
+      "tzdata==2026.2",
+      "urllib3 @ file:///C:/miniconda3/conda-bld/urllib3_1765399243000/work",
+      "volcengine-python-sdk==5.0.23",
+      "wcmatch==10.1",
+      "wcwidth @ file:///home/conda/feedstock_root/build_artifacts/wcwidth_1769427165918/work",
+      "webencodings==0.5.1",
+      "wfdb==4.3.1",
+      "wheel==0.45.1",
+      "win_inet_pton @ file:///C:/miniconda3/conda-bld/win_inet_pton_1761746278300/work",
+      "wrapt==2.1.1",
+      "xlsxwriter==3.2.9",
+      "xmltodict==1.0.4",
+      "yarl==1.23.0",
+      "zarr==3.2.0",
+      "zstandard @ file:///C:/miniconda3/conda-bld/zstandard_1758189089298/work"
+    ]
+  },
+  "determinism": {
+    "seed": 42,
+    "deterministic_algorithms": true,
+    "torch_warn_only": true,
+    "cudnn_deterministic": true,
+    "cudnn_benchmark": false,
+    "dataloader_worker_seed_base": 42,
+    "batch_order": {
+      "policy": "seeded_sampler_or_shuffle_false",
+      "sampler_seed": 42
+    },
+    "python_seed": 42,
+    "python_hash_seed": 42,
+    "pythonhashseed_env": "42",
+    "numpy_seed": 42,
+    "torch_seed": 42,
+    "torch_available": true
+  },
+  "checkpoint_selection": {
+    "rule": "best_monitored_epoch",
+    "monitor": "val_loss",
+    "mode": "min",
+    "tie_break": "earliest_epoch",
+    "restore_best": true
+  },
+  "crop_policy": {
+    "name": "exact_single_crop",
+    "selection": "route_defined",
+    "tie_break": "mean_score"
+  },
+  "environment_lock": {
+    "files": [
+      {
+        "path": "environment.lock",
+        "sha256": "711d331e3c4d9ed9f6b66ec79fbd4d7b986be5121ba144a15565bf1560375a57"
+      },
+      {
+        "path": "requirements.lock",
+        "sha256": "255c4dca5a5203b8e4a66cbb9800ab54148243e7208e93e7c777dc65432d4f8a"
+      }
+    ]
+  },
+  "metric_inputs": {
+    "score_matrix_csv": "score_matrix.csv",
+    "score_matrix_sha256": "cc04668fc338ec1170365ccb5e0b60d1c7c15e2528ec7f1d324fe353be7deec7"
+  },
+  "run_mode": "candidate",
+  "prediction_scope": "test_only",
+  "evaluation_split": "test",
+  "evaluation_subjects": [
+    "DEP1018",
+    "DEP1023",
+    "DEP1025",
+    "DEP1034",
+    "HC1005",
+    "HC1011",
+    "HC1013",
+    "HC1015",
+    "HC1033",
+    "HC1034",
+    "HC1039",
+    "HC1047"
+  ],
+  "split_subject_counts": {
+    "train": 36,
+    "val": 12,
+    "test": 12
+  },
+  "training_epochs": 80,
+  "source_training_epochs": 80,
+  "training_epochs_overridden": false,
+  "score_matrix_evidence": "genuine",
+  "raw_data_sources": [
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1003timedata.mat",
+      "kind": "mat",
+      "sha256": "05d23c1f588db0a6dae03fef9ed2adf375c94ebf6ef368c2604319183a8f1572",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1003timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1008timedata.mat",
+      "kind": "mat",
+      "sha256": "4e239d21145300b093d31fb991831601a0a725512925d493baf1fc4c8f6b8743",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1008timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1010timedata.mat",
+      "kind": "mat",
+      "sha256": "b6b4a94a8b552beffca8f1ae08a1cc78830f3228552db0d34630af17e03745a4",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1010timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1011timedata.mat",
+      "kind": "mat",
+      "sha256": "edc156be493f1a365d7ac64ddc1d6730245939b3170ebd191dfe9ff5883afb1a",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1011timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1015timedata.mat",
+      "kind": "mat",
+      "sha256": "361f52e049e1935b6d7737fe3843b0005c31359bdb5a6807df94fa39e6e55c58",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1015timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1016timedata.mat",
+      "kind": "mat",
+      "sha256": "30a4c3c4f45ba7adc9036b1cc9c7e702c645c18a7efb5bad63c40b128fe582f1",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1016timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1018timedata.mat",
+      "kind": "mat",
+      "sha256": "f6b9d4474bfaf455cb94d94b874eae161c5593a6901b4d758c43f8273c82dd98",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1018timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1019timedata.mat",
+      "kind": "mat",
+      "sha256": "1bc147c96e1295505c1b87fde21518ce261f37dcac6169b1bc2c4f88d89fc892",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1019timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1021timedata.mat",
+      "kind": "mat",
+      "sha256": "6a0f0255c99850edb94b087ea20a9897f8141b88107004898d1e56a09318ff54",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1021timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1022timedata.mat",
+      "kind": "mat",
+      "sha256": "650890de71447c9d11dc1ecfc69372818cb05c7d8e8a810cd16cad51ce9aff61",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1022timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1023timedata.mat",
+      "kind": "mat",
+      "sha256": "7fee15f6f95e4b30bab1b27a68217d125e995a153ffe8f01fd825653582b02d2",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1023timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1024timedata.mat",
+      "kind": "mat",
+      "sha256": "01276ecde18c6626603359eef34ae5ec0b21718ec599075d8fa109b9dbe9eed0",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1024timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1025timedata.mat",
+      "kind": "mat",
+      "sha256": "73e5188acd70d18f2a9b510688e6ba961b5869f834abbbb4688878ffc07dcd0c",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1025timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1027timedata.mat",
+      "kind": "mat",
+      "sha256": "9b0c48f58762b6645301d55cfeb48bbce4c53cb9e6fb969ee122bce6c074c816",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1027timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1028timedata.mat",
+      "kind": "mat",
+      "sha256": "c38051930c0f982078e84c703c2d3fec122d336fbaaef2338cef56d4f0117213",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1028timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1030timedata.mat",
+      "kind": "mat",
+      "sha256": "226daa6fca7f6a789bd483df2dd5d7e6dc6e6cab176d62affcc5519dbe4581a1",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1030timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1031timedata.mat",
+      "kind": "mat",
+      "sha256": "b9cc0daef4e706fb8a52723718eebf6e76b546bb28e2258bd1fc2bd45f6b96f5",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1031timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1032timedata.mat",
+      "kind": "mat",
+      "sha256": "0258fdf5c1ed60e09bce06d811df467913f2ff3e0ef54e83122a2b75c7ae0a08",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1032timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1033timedata.mat",
+      "kind": "mat",
+      "sha256": "7d2db045fd537ca71997c286a68f27d3f558a6e05a09242798ac9ef20becf8e1",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1033timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\抑郁症患者\\DEP1034timedata.mat",
+      "kind": "mat",
+      "sha256": "e412992199f2be009771b25b634efd331d21a996d936e495f273971f4a17ba77",
+      "exists": true,
+      "root_relative_path": "抑郁症患者/DEP1034timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1003timedata.mat",
+      "kind": "mat",
+      "sha256": "c0436eed4f2f0e43f3ab3007577cce591cc20155a580062af41eaca76510eefa",
+      "exists": true,
+      "root_relative_path": "正常人/HC1003timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1005timedata.mat",
+      "kind": "mat",
+      "sha256": "943d860ac5109020f4a461eb69710d7c47f18daeb9f460d830bb3f4a375756a3",
+      "exists": true,
+      "root_relative_path": "正常人/HC1005timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1006timedata.mat",
+      "kind": "mat",
+      "sha256": "9524470a33ba30e66d33a1b2f49efcd1a9f031baa23956385711a3fe54f0944e",
+      "exists": true,
+      "root_relative_path": "正常人/HC1006timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1007timedata.mat",
+      "kind": "mat",
+      "sha256": "b10400d40bac67af54ed79d0f2f725675177486d98d09e2dfc2281b10e8b5471",
+      "exists": true,
+      "root_relative_path": "正常人/HC1007timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1010timedata.mat",
+      "kind": "mat",
+      "sha256": "5ee5d9a91ae3dcd39e45b06590687ebc43408241e3a1381a6032168f357d6543",
+      "exists": true,
+      "root_relative_path": "正常人/HC1010timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1011timedata.mat",
+      "kind": "mat",
+      "sha256": "611317934bf1920446c540943cbefa78749ebbd122f6525c1e8908cedbfd6a3e",
+      "exists": true,
+      "root_relative_path": "正常人/HC1011timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1013timedata.mat",
+      "kind": "mat",
+      "sha256": "93d85cec68c515961aae2b26ab842630b36b373ee7278faec25a781399c5d1ee",
+      "exists": true,
+      "root_relative_path": "正常人/HC1013timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1014timedata.mat",
+      "kind": "mat",
+      "sha256": "fdcd9596c3e658a7c1ec98b066c5d14c556c41af1e11cd4619e4f0fc6eefbe21",
+      "exists": true,
+      "root_relative_path": "正常人/HC1014timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1015timedata.mat",
+      "kind": "mat",
+      "sha256": "c343b72adb20386c1bb3e553db01442ee2d983e709596d30a193d6848afc354e",
+      "exists": true,
+      "root_relative_path": "正常人/HC1015timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1016timedata.mat",
+      "kind": "mat",
+      "sha256": "930d436a02cecc86a84b3d03ff9a7afb1b8116451d534014af053b112e52db10",
+      "exists": true,
+      "root_relative_path": "正常人/HC1016timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1017timedata.mat",
+      "kind": "mat",
+      "sha256": "3122af879358dd50fb9f03e2baea4cd2f9d08fffe92aac24f9d6c63a0bb9549c",
+      "exists": true,
+      "root_relative_path": "正常人/HC1017timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1018timedata.mat",
+      "kind": "mat",
+      "sha256": "fdd394a9b3eab5fa235971cd750335942465a25e463bed6d5ec32d8c508aefb4",
+      "exists": true,
+      "root_relative_path": "正常人/HC1018timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1019timedata.mat",
+      "kind": "mat",
+      "sha256": "65c5f286df24dbdb01a2fc960e1418e011ad43bdab04cfd2489fc54dab60838d",
+      "exists": true,
+      "root_relative_path": "正常人/HC1019timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1021timedata.mat",
+      "kind": "mat",
+      "sha256": "6c0087bef3404701c78c426426bfefdb8f1ff0c05b4c2f5654571323337105ec",
+      "exists": true,
+      "root_relative_path": "正常人/HC1021timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1022timedata.mat",
+      "kind": "mat",
+      "sha256": "c1d905600383507ab665712fbf5d69cc1656d49c37a7759eff266605c7a11617",
+      "exists": true,
+      "root_relative_path": "正常人/HC1022timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1024timedata.mat",
+      "kind": "mat",
+      "sha256": "2693ae4fdd18785fd66b874d359415c31ee30848821f2ca6f41c2c349d6ec536",
+      "exists": true,
+      "root_relative_path": "正常人/HC1024timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1025timedata.mat",
+      "kind": "mat",
+      "sha256": "66cbac012475ebe9b97c84112ac7d1cbed7f4245539a0c70191f4914813541e0",
+      "exists": true,
+      "root_relative_path": "正常人/HC1025timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1026timedata.mat",
+      "kind": "mat",
+      "sha256": "e488ab17f3133a646ff373e7dd5575c4b77968002fe154ec7acb095f88865214",
+      "exists": true,
+      "root_relative_path": "正常人/HC1026timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1028timedata.mat",
+      "kind": "mat",
+      "sha256": "c53edd6bfad6606baf7251cdc20d40d0f36755c83e67bc38c1d5dabdea9ffb21",
+      "exists": true,
+      "root_relative_path": "正常人/HC1028timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1029timedata.mat",
+      "kind": "mat",
+      "sha256": "cbf3a35689a472f745e835b652cf7ffd08fb8ed1ec5c487e3f3a54a63c4c3ab1",
+      "exists": true,
+      "root_relative_path": "正常人/HC1029timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1032timedata.mat",
+      "kind": "mat",
+      "sha256": "c7d6b7561b586d42ad3b9b42e7c50290d947984b7021f9ba259bc4981abef263",
+      "exists": true,
+      "root_relative_path": "正常人/HC1032timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1033timedata.mat",
+      "kind": "mat",
+      "sha256": "55675a9af12ad06aaf35be5ae198219394ba1c97297e0a86d7ba33ea2bb7d1e0",
+      "exists": true,
+      "root_relative_path": "正常人/HC1033timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1034timedata.mat",
+      "kind": "mat",
+      "sha256": "81f72e0f2e4acbc3447e9a0f9b588dbfb024474becb153b4875b10ed53de9925",
+      "exists": true,
+      "root_relative_path": "正常人/HC1034timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1035timedata.mat",
+      "kind": "mat",
+      "sha256": "68e21b34350cf9c0e778d8a794374972652a003e5754951d99aecc74e6dd7753",
+      "exists": true,
+      "root_relative_path": "正常人/HC1035timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1038timedata.mat",
+      "kind": "mat",
+      "sha256": "117891319f498b576513acc885c338eae595d6e312deffcf0cddae70f2549eac",
+      "exists": true,
+      "root_relative_path": "正常人/HC1038timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1039timedata.mat",
+      "kind": "mat",
+      "sha256": "c64ef58b78cd6719921b3b18ad4ff37fa568f3da091a8a52e1fbcd4eea6c6e54",
+      "exists": true,
+      "root_relative_path": "正常人/HC1039timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1040timedata.mat",
+      "kind": "mat",
+      "sha256": "ac7ee6e617dc4e104e51f070acc9cd4b9918dff21e0352665a3d4fe82e647149",
+      "exists": true,
+      "root_relative_path": "正常人/HC1040timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1042timedata.mat",
+      "kind": "mat",
+      "sha256": "1066f4f15535f22938d00ca6b7fbfd40957492348a1ce341adfe322b144676e9",
+      "exists": true,
+      "root_relative_path": "正常人/HC1042timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1046timedata.mat",
+      "kind": "mat",
+      "sha256": "b9aa84d5d62794ef49c0230268f39f6ab8769e0522cc9e304959b3ac21e43f4d",
+      "exists": true,
+      "root_relative_path": "正常人/HC1046timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1047timedata.mat",
+      "kind": "mat",
+      "sha256": "b829c565d7eb878b0fcedb41ec7eb0ebac40c098004403add6eae89db8be0147",
+      "exists": true,
+      "root_relative_path": "正常人/HC1047timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1048timedata.mat",
+      "kind": "mat",
+      "sha256": "35d51912cc4944830707b1eb074370c83cdca41b1750a234abd38fe7eccc61a0",
+      "exists": true,
+      "root_relative_path": "正常人/HC1048timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1049timedata.mat",
+      "kind": "mat",
+      "sha256": "f735c6a448a37a92ae83201104766190dc497ca0a5db2de1339ffe79a041fce8",
+      "exists": true,
+      "root_relative_path": "正常人/HC1049timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1050timedata.mat",
+      "kind": "mat",
+      "sha256": "b311309079082939fc60450b6cf5e7662c2d80472124ee387811481488a7c301",
+      "exists": true,
+      "root_relative_path": "正常人/HC1050timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1051timedata.mat",
+      "kind": "mat",
+      "sha256": "850fe58ee3aa53bbf87ac8ee247872a5eeda454dd18211922aeba8c3077bf14e",
+      "exists": true,
+      "root_relative_path": "正常人/HC1051timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1053timedata.mat",
+      "kind": "mat",
+      "sha256": "812f65ee196f30ad12c093b3930caa77980a0469e84261b99558e2bbc8966ad3",
+      "exists": true,
+      "root_relative_path": "正常人/HC1053timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1054timedata.mat",
+      "kind": "mat",
+      "sha256": "d2959d38b8dec7eaf26337dd265cd8b0c299fa03448f278682ea0504512749f1",
+      "exists": true,
+      "root_relative_path": "正常人/HC1054timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1056timedata.mat",
+      "kind": "mat",
+      "sha256": "2d7558b6fe6bdbf459735425e656bac6ec2466d71dbaccc2f19a152c1e3ae4ef",
+      "exists": true,
+      "root_relative_path": "正常人/HC1056timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1057timedata.mat",
+      "kind": "mat",
+      "sha256": "f75a844a6264d8a494366db889abec5161cf55610f2459684a18405c33f725e7",
+      "exists": true,
+      "root_relative_path": "正常人/HC1057timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1067timedata.mat",
+      "kind": "mat",
+      "sha256": "63ae93a7bfdd50421ded411bc354b256a0f0a9b6638d366b2a61593e2e33b4c3",
+      "exists": true,
+      "root_relative_path": "正常人/HC1067timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    },
+    {
+      "path": "D:\\hust-bci-er\\scratch\\local_data\\hust_bci_er_train\\训练集\\正常人\\HC1068timedata.mat",
+      "kind": "mat",
+      "sha256": "7750e86a1f37993c4fb5f4e5ddab31b973eb663ea61aad3b0e584b00900bc44e",
+      "exists": true,
+      "root_relative_path": "正常人/HC1068timedata.mat",
+      "root_env": "HUST_BCI_ER_DATA_ROOT"
+    }
+  ],
+  "model_name": "fbstcnet",
+  "model_kwargs": {
+    "sfreq": 250,
+    "variant": "P",
+    "n_bands": 12,
+    "filterbank_type": "cheby2",
+    "filter_order": 4,
+    "stopband_ripple": 30.0,
+    "transition_bandwidth": 2.0,
+    "F1": 32,
+    "F2": 64,
+    "st_alpha": 0.1,
+    "alpha1": 20,
+    "alpha2": 5,
+    "pool_size": 100,
+    "pool_stride": 10,
+    "power_drop_prob": 0.35,
+    "gamma": 300
+  },
+  "model_filterbank_params": {
+    "filterbank_type": "cheby2",
+    "implementation": "magnitude_response_fft",
+    "phase_response": "discarded",
+    "sfreq": 250.0,
+    "bands": [
+      [
+        4.0,
+        8.0
+      ],
+      [
+        8.0,
+        12.0
+      ],
+      [
+        12.0,
+        16.0
+      ],
+      [
+        16.0,
+        20.0
+      ],
+      [
+        20.0,
+        24.0
+      ],
+      [
+        24.0,
+        28.0
+      ],
+      [
+        28.0,
+        32.0
+      ],
+      [
+        32.0,
+        36.0
+      ],
+      [
+        36.0,
+        40.0
+      ],
+      [
+        40.0,
+        44.0
+      ],
+      [
+        44.0,
+        48.0
+      ],
+      [
+        48.0,
+        52.0
+      ]
+    ],
+    "order": 4,
+    "stopband_ripple_db": 30.0,
+    "transition_bw_hz": 2.0
+  }
+}
