@@ -1,25 +1,25 @@
 {
   "audit_schema_version": 2,
-  "route_id": "conformer_srfnet_whitening_eps3e4_average",
+  "route_id": "srfnet_whitening_eps3e4_component",
   "git_commit": "f0bf7fd6ac135d60e538a4fff9ae8e2103283fec",
-  "config_path": "configs/routes/models/conformer_srfnet_whitening_eps3e4_average.yaml",
+  "config_path": "outputs/score_fusion_full/20260516_135417/component_routes/srfnet_whitening_eps3e4_component.yaml",
   "config_snapshot_path": "config_snapshot.yaml",
-  "config_sha256": "cb16c277016304000b89f7732c2447d5f77911b3ef2df11bf26946a588e146f8",
+  "config_sha256": "e07fdc6d1e5d6c42676754547863fa2c4ed7726d9fc6722246a063035e9e6224",
   "dataset_manifest_path": "dataset_manifest.yaml",
   "dataset_manifest_sha256": "f34ee805f26f0f410435acf40b9d7f3f6cfbd5367e84ca9f094b10f773932aa6",
   "split_manifest_path": "split_manifest.yaml",
   "split_id": "p1_seed42_fold0",
-  "source_split_id": "route_component_split_v1",
+  "source_split_id": "p1_seed42_fold0",
   "split_sha256": "a08282f079a77e92a61c834d83a99e8923b1954bccad1f184a61f94d0a78ed41",
   "seed": 42,
   "source_seed": 42,
-  "command": "python scripts/assemble_score_route.py --route D:/hust-bci-er/configs/routes/models/conformer_srfnet_whitening_eps3e4_average.yaml --component-score conformer_component=outputs/score_fusion_full/20260516_135417/component_scores/conformer_component.csv --component-score srfnet_whitening_eps3e4_component=outputs/score_fusion_full/20260516_135417/component_scores/srfnet_whitening_eps3e4_component.csv --output outputs/score_fusion_full/20260516_135417/conformer_srfnet_whitening_eps3e4_average/predictions.csv",
+  "command": "python scripts/run_candidate_route.py --route outputs/score_fusion_full/20260516_135417/component_routes/srfnet_whitening_eps3e4_component.yaml --run-dir outputs/score_fusion_full/20260516_135417/components/srfnet_whitening_eps3e4_component --seed 42 --data-root D:/hust-bci-er/scratch/local_data/hust_bci_er_train/训练集",
   "primary_metric": "exact_single_crop_expected_BA",
   "metrics": {
-    "exact_single_crop_expected_BA": 0.6139133333333333
+    "exact_single_crop_expected_BA": 0.6122706666666667
   },
   "prediction_csv": "predictions.csv",
-  "prediction_sha256": "ce3ae3a9953b331335364629015fb87b839baaf384b1ca2601080139735fa8c9",
+  "prediction_sha256": "98897ab8ae2b53db0b1befb088cf722315036118693c97f75b6910b40b26c5d7",
   "prediction_record_level": "trial",
   "top4_group_keys": [
     "subject_id"
@@ -315,13 +315,10 @@
     "restore_best": true
   },
   "crop_policy": {
-    "name": "exact_single_crop",
+    "name": "sliding_window_vote",
     "selection": "route_defined",
-    "tie_break": "stable_input_order"
+    "tie_break": "mean_score"
   },
-  "metric_group_keys": [
-    "subject_id"
-  ],
   "environment_lock": {
     "files": [
       {
@@ -336,7 +333,7 @@
   },
   "metric_inputs": {
     "score_matrix_csv": "score_matrix.csv",
-    "score_matrix_sha256": "2bc5418e50387f92c60a80ee3bda3fb97254311d260304197f01740253ca1cd9"
+    "score_matrix_sha256": "b8fd943fdc420f4d98ce9824c9a930ff4b398b92e6674bcf92bcb3b704c5b5ae"
   },
   "run_mode": "candidate",
   "prediction_scope": "test_only",
@@ -360,8 +357,8 @@
     "val": 12,
     "test": 12
   },
-  "training_epochs": 0,
-  "source_training_epochs": 0,
+  "training_epochs": 80,
+  "source_training_epochs": 80,
   "training_epochs_overridden": false,
   "score_matrix_evidence": "genuine",
   "raw_data_sources": [
@@ -846,54 +843,6 @@
       "root_env": "HUST_BCI_ER_DATA_ROOT"
     }
   ],
-  "score_fusion": {
-    "score_node": "conformer_srfnet_whitening_eps3e4_average",
-    "method": "z_average",
-    "components": [
-      "conformer_component",
-      "srfnet_whitening_eps3e4_component"
-    ],
-    "weights": null,
-    "query_component": null,
-    "context_components": [],
-    "alpha": null,
-    "temperature": null
-  },
-  "component_score_inputs": [
-    {
-      "component_id": "conformer_component",
-      "path": "outputs/score_fusion_full/20260516_135417/component_scores/conformer_component.csv",
-      "sha256": "46c9505371e2cf8d9facfaae12e416cc28c1529e010be29a0c11b7a8ca19baf5"
-    },
-    {
-      "component_id": "srfnet_whitening_eps3e4_component",
-      "path": "outputs/score_fusion_full/20260516_135417/component_scores/srfnet_whitening_eps3e4_component.csv",
-      "sha256": "957f2a9f3e3ba885d69c76de0cd1cdf91de1f7b5c11b089fb4008644a768b064"
-    }
-  ],
-  "component_run_inputs": [
-    {
-      "component_id": "conformer_component",
-      "component_route_id": "sliding_window_conformer_lite",
-      "run_dir": "outputs/candidate_all_models/20260516_132255/sliding_window_conformer_lite",
-      "local_run_manifest_sha256": "9dfa332ec828298bcd558a91cf429fac42c338861928dd2fbdafceb744a02012",
-      "score_matrix_sha256": "6923e5435e17995dd993eae80b4fb4d896f2b4977145c5abd33f1bd17ae407f9",
-      "evidence_manifest_path": "reports/route_summaries/evidence/sliding_window_conformer_lite_manifest.json",
-      "evidence_manifest_sha256": "d37798691064f590815025cb33ac49bdb095046fb56d54a7c13169c661c9d196",
-      "evidence_audit_report_path": "reports/route_summaries/evidence/sliding_window_conformer_lite_audit_report.json",
-      "evidence_audit_report_sha256": "73b458c62ce0adad43cb424a267ae500e1e6197d1d3cf16f562791b3261bc7e2"
-    },
-    {
-      "component_id": "srfnet_whitening_eps3e4_component",
-      "component_route_id": "srfnet_whitening_eps3e4_component",
-      "run_dir": "outputs/score_fusion_full/20260516_135417/components/srfnet_whitening_eps3e4_component",
-      "local_run_manifest_sha256": "b74ba5cdd893d77b9d401ac1d9b4acd1555850f281372e56f5442761a1f39004",
-      "score_matrix_sha256": "b8fd943fdc420f4d98ce9824c9a930ff4b398b92e6674bcf92bcb3b704c5b5ae",
-      "evidence_manifest_path": "reports/route_summaries/evidence/srfnet_whitening_eps3e4_component_manifest.json",
-      "evidence_manifest_sha256": "326c0f52024150bc0787c99a342fbf4e07eae75d9161f5c4914562e178563662",
-      "evidence_audit_report_path": "reports/route_summaries/evidence/srfnet_whitening_eps3e4_component_audit_report.json",
-      "evidence_audit_report_sha256": "7a2e53bad8b86575a5302a5cacf90247a97ef8673296017f560a7f4d6d28e8d6"
-    }
-  ],
-  "component_evidence_note": "component_run_inputs points to committed compact evidence manifests/audit reports; run_dir paths are local reproduction context."
+  "model_name": "srfnet",
+  "model_kwargs": {}
 }

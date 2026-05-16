@@ -1,7 +1,7 @@
 route_id: conformer_srfnet_whitening_eps3e4_average
 status: CANDIDATE
 dataset_version: train_v1
-split_id: route_component_split_v1
+split_id: p1_seed42_fold0
 seed: 42
 input_window_sec: 10
 preprocessing: [whitening_eps3e4]

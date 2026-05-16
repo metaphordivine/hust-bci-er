@@ -874,15 +874,26 @@
   "component_run_inputs": [
     {
       "component_id": "conformer_component",
+      "component_route_id": "sliding_window_conformer_lite",
       "run_dir": "outputs/candidate_all_models/20260516_132255/sliding_window_conformer_lite",
-      "manifest_sha256": "9dfa332ec828298bcd558a91cf429fac42c338861928dd2fbdafceb744a02012",
-      "score_matrix_sha256": "6923e5435e17995dd993eae80b4fb4d896f2b4977145c5abd33f1bd17ae407f9"
+      "local_run_manifest_sha256": "9dfa332ec828298bcd558a91cf429fac42c338861928dd2fbdafceb744a02012",
+      "score_matrix_sha256": "6923e5435e17995dd993eae80b4fb4d896f2b4977145c5abd33f1bd17ae407f9",
+      "evidence_manifest_path": "reports/route_summaries/evidence/sliding_window_conformer_lite_manifest.json",
+      "evidence_manifest_sha256": "d37798691064f590815025cb33ac49bdb095046fb56d54a7c13169c661c9d196",
+      "evidence_audit_report_path": "reports/route_summaries/evidence/sliding_window_conformer_lite_audit_report.json",
+      "evidence_audit_report_sha256": "73b458c62ce0adad43cb424a267ae500e1e6197d1d3cf16f562791b3261bc7e2"
     },
     {
       "component_id": "srfnet_whitening_eps1e3_component",
+      "component_route_id": "srfnet_whitening_eps1e3_component",
       "run_dir": "outputs/score_fusion_full/20260516_135417/components/srfnet_whitening_eps1e3_component",
-      "manifest_sha256": "37da2eebdb1f35c5cf07da2a7ee5f908496e13c4af2b6a3457dd5c385b90e61e",
-      "score_matrix_sha256": "cf00f13d5f2f8fbcb3257953770fd9ab5d3997d3fe163b752efdff9526849d70"
+      "local_run_manifest_sha256": "37da2eebdb1f35c5cf07da2a7ee5f908496e13c4af2b6a3457dd5c385b90e61e",
+      "score_matrix_sha256": "cf00f13d5f2f8fbcb3257953770fd9ab5d3997d3fe163b752efdff9526849d70",
+      "evidence_manifest_path": "reports/route_summaries/evidence/srfnet_whitening_eps1e3_component_manifest.json",
+      "evidence_manifest_sha256": "379a0311ef4373075b48a76c538696c236d8ee7ee91d9665d512fe391e3d9b6f",
+      "evidence_audit_report_path": "reports/route_summaries/evidence/srfnet_whitening_eps1e3_component_audit_report.json",
+      "evidence_audit_report_sha256": "335626acbddfdafc239fc7d346a9a50b7b822d24d8a68b3c3ec64a35d2bcc966"
     }
-  ]
+  ],
+  "component_evidence_note": "component_run_inputs points to committed compact evidence manifests/audit reports; run_dir paths are local reproduction context."
 }

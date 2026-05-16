@@ -883,21 +883,37 @@
   "component_run_inputs": [
     {
       "component_id": "srfnet_whitening_eps1e3_component",
+      "component_route_id": "srfnet_whitening_eps1e3_component",
       "run_dir": "outputs/score_fusion_full/20260516_135417/components/srfnet_whitening_eps1e3_component",
-      "manifest_sha256": "37da2eebdb1f35c5cf07da2a7ee5f908496e13c4af2b6a3457dd5c385b90e61e",
-      "score_matrix_sha256": "cf00f13d5f2f8fbcb3257953770fd9ab5d3997d3fe163b752efdff9526849d70"
+      "local_run_manifest_sha256": "37da2eebdb1f35c5cf07da2a7ee5f908496e13c4af2b6a3457dd5c385b90e61e",
+      "score_matrix_sha256": "cf00f13d5f2f8fbcb3257953770fd9ab5d3997d3fe163b752efdff9526849d70",
+      "evidence_manifest_path": "reports/route_summaries/evidence/srfnet_whitening_eps1e3_component_manifest.json",
+      "evidence_manifest_sha256": "379a0311ef4373075b48a76c538696c236d8ee7ee91d9665d512fe391e3d9b6f",
+      "evidence_audit_report_path": "reports/route_summaries/evidence/srfnet_whitening_eps1e3_component_audit_report.json",
+      "evidence_audit_report_sha256": "335626acbddfdafc239fc7d346a9a50b7b822d24d8a68b3c3ec64a35d2bcc966"
     },
     {
       "component_id": "srfnet_whitening_eps3e4_component",
+      "component_route_id": "srfnet_whitening_eps3e4_component",
       "run_dir": "outputs/score_fusion_full/20260516_135417/components/srfnet_whitening_eps3e4_component",
-      "manifest_sha256": "b74ba5cdd893d77b9d401ac1d9b4acd1555850f281372e56f5442761a1f39004",
-      "score_matrix_sha256": "b8fd943fdc420f4d98ce9824c9a930ff4b398b92e6674bcf92bcb3b704c5b5ae"
+      "local_run_manifest_sha256": "b74ba5cdd893d77b9d401ac1d9b4acd1555850f281372e56f5442761a1f39004",
+      "score_matrix_sha256": "b8fd943fdc420f4d98ce9824c9a930ff4b398b92e6674bcf92bcb3b704c5b5ae",
+      "evidence_manifest_path": "reports/route_summaries/evidence/srfnet_whitening_eps3e4_component_manifest.json",
+      "evidence_manifest_sha256": "326c0f52024150bc0787c99a342fbf4e07eae75d9161f5c4914562e178563662",
+      "evidence_audit_report_path": "reports/route_summaries/evidence/srfnet_whitening_eps3e4_component_audit_report.json",
+      "evidence_audit_report_sha256": "7a2e53bad8b86575a5302a5cacf90247a97ef8673296017f560a7f4d6d28e8d6"
     },
     {
       "component_id": "srfnet_long_component",
+      "component_route_id": "sliding_window_srfnet",
       "run_dir": "outputs/candidate_all_models/20260516_132255/sliding_window_srfnet",
-      "manifest_sha256": "20341c224d07ba0a2bf6871493812d53af06880cb9584953dc5354cf1f4198e0",
-      "score_matrix_sha256": "0a4716426dda00c08aadc02ec11d70b58262f0387b2841f96f911a82e9c7b4c7"
+      "local_run_manifest_sha256": "20341c224d07ba0a2bf6871493812d53af06880cb9584953dc5354cf1f4198e0",
+      "score_matrix_sha256": "0a4716426dda00c08aadc02ec11d70b58262f0387b2841f96f911a82e9c7b4c7",
+      "evidence_manifest_path": "reports/route_summaries/evidence/sliding_window_srfnet_manifest.json",
+      "evidence_manifest_sha256": "d3e70e2b1fbe9a4861b1de74a748784ec7030d5ca505cfe8bcf7cc8e95619124",
+      "evidence_audit_report_path": "reports/route_summaries/evidence/sliding_window_srfnet_audit_report.json",
+      "evidence_audit_report_sha256": "d596836112600539ee01e1ccc5eb88b9abfc2f249e7f60ca70daae3589c3ae44"
     }
-  ]
+  ],
+  "component_evidence_note": "component_run_inputs points to committed compact evidence manifests/audit reports; run_dir paths are local reproduction context."
 }
