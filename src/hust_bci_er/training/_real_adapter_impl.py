@@ -22,6 +22,7 @@ from hust_bci_er.audit.run_manifest import (
 )
 from hust_bci_er.config.schema import validate_route_config
 from hust_bci_er.contracts.records import PredictionRecord
+from hust_bci_er.data.windowing import FixedCropSpec, fixed_crop_slices
 from hust_bci_er.evaluation.prediction_writer import write_predictions
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
 # build_model and classifier imports are lazy (inside run_real_classifier_route / _predict_scores)
@@ -254,15 +255,11 @@ def _make_fixed_crops(
     skip_preproc: bool = False,
 ) -> list[dict[str, Any]]:
     """Create non-overlapping fixed crops from each source trial."""
-    window_samples = int(round(window_sec * SFREQ))
+    spec = FixedCropSpec(window_sec=window_sec, n_crops=n_crops)
     crops: list[dict[str, Any]] = []
     for trial in trials:
         x_full = trial["x"].astype(np.float32)
-        for crop_id in range(n_crops):
-            start = crop_id * window_samples
-            stop = start + window_samples
-            if stop > x_full.shape[1]:
-                break
+        for crop_id, (start, stop, start_sec) in enumerate(fixed_crop_slices(x_full.shape[1], spec, sampling_rate_hz=SFREQ)):
             x = x_full[:, start:stop].copy()
             if not skip_preproc:
                 x = _apply_preprocessing(x, preproc, ea_transform=ea_transform)
@@ -273,7 +270,7 @@ def _make_fixed_crops(
                 "cohort": trial["cohort"],
                 "trial_id": trial["trial_id"],
                 "crop_id": crop_id,
-                "window_start_sec": start / SFREQ,
+                "window_start_sec": start_sec,
             })
     return crops
 

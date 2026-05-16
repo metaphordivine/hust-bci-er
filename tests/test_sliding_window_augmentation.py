@@ -6,7 +6,10 @@ import yaml
 
 from hust_bci_er.contracts.records import EEGTrial
 from hust_bci_er.data.windowing import (
+    FixedCropSpec,
     SlidingWindowSpec,
+    fixed_crop_slices,
+    fixed_crop_start_times,
     sliding_windows_for_trial,
     split_first_sliding_windows,
     window_slices,
@@ -64,3 +67,21 @@ def test_window_slices_scale_with_sample_count():
 def test_window_slices_keep_constant_length_when_sample_count_is_odd():
     slices = window_slices(101, SlidingWindowSpec(source_trial_sec=10, window_sec=4, stride_sec=2))
     assert [stop - start for start, stop, _ in slices] == [40, 40, 40, 40]
+
+
+def test_fixed_crop_slices_are_non_overlapping_and_do_not_left_shift():
+    spec = FixedCropSpec(window_sec=10, n_crops=5)
+
+    assert fixed_crop_start_times(spec) == (0, 10, 20, 30, 40)
+    assert fixed_crop_slices(12500, spec, sampling_rate_hz=250) == (
+        (0, 2500, 0),
+        (2500, 5000, 10),
+        (5000, 7500, 20),
+        (7500, 10000, 30),
+        (10000, 12500, 40),
+    )
+
+
+def test_fixed_crop_slices_reject_short_trials():
+    with pytest.raises(ValueError, match="fixed crops require"):
+        fixed_crop_slices(12499, FixedCropSpec(window_sec=10, n_crops=5), sampling_rate_hz=250)

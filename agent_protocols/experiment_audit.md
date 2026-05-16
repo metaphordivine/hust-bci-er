@@ -76,6 +76,10 @@ Use `top4_group_keys` when a prediction table combines repeated folds or seeds.
 Candidate and promoted gates must prove semantic correctness:
 
 - `RUN_REPRODUCIBILITY_LOCKED` verifies environment, deterministic seed policy, dataloader worker seed policy, checkpoint selection, crop policy, and lock-file hashes are present.
+- `EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE` verifies the audited route file is the exact config snapshot recorded by the run.
+- `EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION` verifies `manifest.git_commit` contains the route file and the implementation paths required to execute it.
+- `ROUTE_MODEL_KWARGS_PASSTHROUGH` verifies route-level `model.*` kwargs are recorded in manifest provenance and therefore reached the builder path.
+- `METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE` verifies the score matrix shape matches the declared metric contract; `exact_single_crop_expected_BA` requires exactly five crop score columns.
 - `RUN_SPLIT_EVIDENCE_CONSISTENT` verifies subject lists or fold definitions match `trial_rows` subject membership.
 - `PRIMARY_METRIC_RECOMPUTE` recomputes the route's declared `evaluation.primary_metric`.
 - `PREDICTION_TOP4_RANKING` verifies `pred_top4` is derived from the score column by the repository Top-4 policy.
@@ -84,6 +88,20 @@ Candidate and promoted gates must prove semantic correctness:
 - `RUN_DATASET_CHECKSUM_SCHEMA` and `RUN_DATASET_CHECKSUM_COVERAGE` verify dataset checksum evidence uses unique paths, lowercase sha256 values, and covers all declared data sources.
 - If split evidence is provided only as `trial_rows`, the audit derives subject membership from those rows, including per-fold rows when a `fold` field is present.
 - `RUN_DATASET_CHECKSUM_EXTRA` reports checksum paths that are not declared in `data_sources`; candidate/promoted gates should not carry unresolved dataset checksum warnings.
+- Route schema validation must reject invalid `augmentation.search_space` cross products before a run starts. Search candidates must keep `input_window_sec`, window parameters, and metric-required crop counts mutually compatible.
+
+Before marking any route as `CANDIDATE`, the evidence chain must prove:
+
+1. The route config is the exact config used by the run.
+2. `manifest.config_sha256` matches the audited route file.
+3. `manifest.git_commit` contains the route and implementation code needed to run it.
+4. Summary reproduce commands use repository-relative paths, not local absolute paths.
+5. Route `model.*` kwargs are passed to `build_model` and recorded in manifest provenance.
+6. Augmentation crop count matches `score_matrix.csv` columns and evaluation metric semantics.
+7. `search_space` is validated by full cross product, not only base values.
+8. Dataset manifest crop provenance covers every crop in `score_matrix.csv`.
+9. Metric parse or recompute failures are fatal for candidate/promoted gates.
+10. New route/model/adapter work includes negative tests for dangerous invalid configurations.
 
 For `promoted` gate, add:
 

@@ -1,6 +1,9 @@
 from pathlib import Path
 import csv
 import json
+import subprocess
+
+import yaml
 
 from hust_bci_er.audit.manifest import sha256_file
 from hust_bci_er.contracts.prediction import prediction_schema
@@ -11,6 +14,8 @@ from scripts.audit_experiment import (
     check_promotion_audit,
     check_reproducibility_manifest,
     check_run_gate_eligibility,
+    check_evidence_lineage,
+    check_route_model_kwargs_passthrough,
     compare_metric,
     dataset_checksum_errors,
     dataset_label_scope_errors,
@@ -71,6 +76,12 @@ def test_candidate_gate_blocks_missing_run_artifacts():
 def test_smoke_gate_keeps_missing_run_as_warn():
     report = run_audit(ROUTE, None, gate="smoke")
     assert report["overall"] == "WARN"
+
+
+def test_audit_report_paths_are_repo_relative_for_portability():
+    report = run_audit(ROUTE, None, gate="smoke")
+    assert report["route_config"] == "configs/routes/models/ea_deformer.yaml"
+    assert not Path(report["route_config"]).is_absolute()
 
 
 def test_candidate_run_gate_accepts_test_scope_and_verified_raw_source(tmp_path):
@@ -300,6 +311,62 @@ def test_raw_data_sources_kind_must_match_dataset_evidence(tmp_path):
     assert rules["RAW_DATA_SOURCES_DATASET_MATCH"] == "FAIL"
 
 
+def test_route_model_kwargs_passthrough_requires_manifest_provenance():
+    checks = []
+    check_route_model_kwargs_passthrough(
+        {"model_kwargs": {"drop_prob": 0.5}},
+        {"model": {"name": "shallow_conv_net", "drop_prob": 0.25}},
+        checks,
+        gate="candidate",
+    )
+
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["ROUTE_MODEL_KWARGS_PASSTHROUGH"] == "FAIL"
+
+
+def test_evidence_lineage_requires_config_sha_to_match_worktree():
+    route_data = yaml.safe_load(ROUTE.read_text(encoding="utf-8"))
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    checks = []
+
+    check_evidence_lineage(
+        {
+            "audit_schema_version": 2,
+            "git_commit": head,
+            "config_sha256": "0" * 64,
+        },
+        ROUTE,
+        route_data,
+        checks,
+        gate="candidate",
+    )
+
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE"] == "FAIL"
+    assert rules["EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION"] == "PASS"
+
+
+def test_evidence_lineage_requires_commit_to_contain_route():
+    route_data = yaml.safe_load(ROUTE.read_text(encoding="utf-8"))
+    checks = []
+
+    check_evidence_lineage(
+        {
+            "audit_schema_version": 2,
+            "git_commit": "f" * 40,
+            "config_sha256": sha256_file(ROUTE),
+        },
+        ROUTE,
+        route_data,
+        checks,
+        gate="candidate",
+    )
+
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE"] == "PASS"
+    assert rules["EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION"] == "FAIL"
+
+
 def test_genuine_score_matrix_requires_crop_provenance(tmp_path):
     matrix = tmp_path / "score_matrix.csv"
     fieldnames = ["subject_id", "trial_id", "y_true", "crop_0", "crop_1", "crop_2", "crop_3", "crop_4"]
@@ -331,6 +398,42 @@ def test_genuine_score_matrix_requires_crop_provenance(tmp_path):
         pass
     rules = {check["rule_id"]: check["status"] for check in checks}
     assert rules["SCORE_MATRIX_CROP_PROVENANCE"] == "FAIL"
+
+
+def test_exact_metric_rejects_score_matrix_with_extra_crop_column(tmp_path):
+    matrix = tmp_path / "score_matrix.csv"
+    fieldnames = ["subject_id", "trial_id", "y_true", "crop_0", "crop_1", "crop_2", "crop_3", "crop_4", "crop_5"]
+    with matrix.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for idx in range(8):
+            writer.writerow(
+                {
+                    "subject_id": "S1",
+                    "trial_id": f"t{idx}",
+                    "y_true": 1 if idx < 4 else 0,
+                    "crop_0": "0.9",
+                    "crop_1": "0.8",
+                    "crop_2": "0.7",
+                    "crop_3": "0.2",
+                    "crop_4": "0.1",
+                    "crop_5": "0.0",
+                }
+            )
+    checks = []
+
+    try:
+        recompute_exact_metric_from_matrix(
+            matrix,
+            metric_name="exact_single_crop_expected_BA",
+            manifest={"metric_group_keys": ["subject_id"]},
+            checks=checks,
+        )
+    except ValueError:
+        pass
+
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    assert rules["METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE"] == "FAIL"
 
 
 def test_score_matrix_scope_must_match_split_trial_keys(tmp_path):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping
@@ -104,10 +105,28 @@ def prediction_metric_rows(
 
 
 def crop_score_columns(fields: set[str]) -> list[str]:
-    for columns in ([f"crop_{idx}" for idx in range(5)], [f"crop{idx}" for idx in range(5)]):
-        if all(col in fields for col in columns):
-            return columns
+    for pattern, template in (
+        (re.compile(r"^crop_(\d+)$"), "crop_{}"),
+        (re.compile(r"^crop(\d+)$"), "crop{}"),
+    ):
+        indices = sorted(
+            int(match.group(1))
+            for field in fields
+            for match in [pattern.fullmatch(field)]
+            if match is not None
+        )
+        if indices == [0, 1, 2, 3, 4]:
+            return [template.format(idx) for idx in range(5)]
     return []
+
+
+def crop_score_shape_error(fields: set[str]) -> str | None:
+    score_like = sorted(field for field in fields if re.fullmatch(r"crop_?\d+", field))
+    if crop_score_columns(fields):
+        return None
+    if score_like:
+        return "score matrix metric requires exactly crop_0..crop_4 score columns; found " + ", ".join(score_like)
+    return "score matrix CSV must include crop_0..crop_4 score columns"
 
 
 def group_columns(fields: set[str], schema: dict[str, str | None], raw_keys: tuple[str, ...]) -> list[str]:
@@ -150,6 +169,9 @@ def score_matrix_metric_rows(
     score_cols = crop_score_columns(fields)
     truth_col = schema["y_true"]
     trial_col = schema["trial_id"]
+    shape_error = crop_score_shape_error(fields)
+    if shape_error is not None:
+        raise ValueError(shape_error)
     if truth_col is None or trial_col is None or len(score_cols) != 5:
         raise ValueError("score matrix CSV must include trial_id, y_true, and crop_0..crop_4 columns")
     keys = group_columns(fields, schema, metric_group_keys)

@@ -34,6 +34,7 @@ def write_bound_summary(
     manifest_hash: str | None = None,
     manifest_payload: dict | None = None,
     manifest_path: str = "reports/audits/manifest.json",
+    reproduce: str = "test",
 ) -> None:
     reports = root / "reports" / "route_summaries"
     reports.mkdir(parents=True)
@@ -61,7 +62,7 @@ def write_bound_summary(
                 f"manifest_path: {manifest_path}",
                 f"manifest_sha256: {manifest_hash}",
                 "decision: keep",
-                "reproduce: test",
+                f"reproduce: {reproduce}",
                 "",
             ]
         ),
@@ -122,3 +123,15 @@ def test_advanced_summary_rejects_missing_manifest_primary_metric(monkeypatch, t
 
     assert check_summary_consistency.main() == 1
     assert "summary manifest primary_metric missing or invalid" in capsys.readouterr().out
+
+
+def test_summary_rejects_local_absolute_reproduce_path(monkeypatch, tmp_path, capsys):
+    write_route(tmp_path)
+    write_bound_summary(
+        tmp_path,
+        reproduce="python scripts/repo_doctor.py experiment --route D:/repo/configs/routes/models/r.yaml --run outputs/r/run --gate candidate",
+    )
+    monkeypatch.setattr(check_summary_consistency, "ROOT", tmp_path)
+
+    assert check_summary_consistency.main() == 1
+    assert "summary reproduce command contains local absolute path" in capsys.readouterr().out

@@ -98,3 +98,29 @@ def test_sliding_window_search_space_is_validated():
     data["augmentation"]["search_space"] = {"window_sec": [4, 12]}
     errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
     assert any("search_space.window_sec" in err for err in errors)
+
+
+def test_sliding_window_search_space_cross_product_must_match_exact_metric_shape():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["window_sec"] = 5
+    data["input_window_sec"] = 5
+    data["augmentation"]["search_space"] = {
+        "source_trial_sec": [10],
+        "window_sec": [5],
+        "stride_sec": [1, 2],
+    }
+
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+
+    assert any("METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE" in err for err in errors)
+
+
+def test_sliding_window_search_space_rejects_input_window_mismatch():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"window_sec": [4]}
+
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+
+    assert any("SEARCH_SPACE_CROSS_PRODUCT_VALID" in err for err in errors)

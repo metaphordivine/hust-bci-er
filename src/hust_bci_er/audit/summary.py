@@ -63,6 +63,8 @@ def render_route_summary(
             break
     run_dir = str(audit_report.get("run_dir", ""))
     run_dir_for_reproduce = repo_relative_path(run_dir, root=root, field="run_dir") if run_dir else ""
+    route_config = str(audit_report.get("route_config", ""))
+    route_config_for_reproduce = repo_relative_path(route_config, root=root, field="route_config") if route_config else ""
     lines = [
         f"# {route_id} Summary",
         "",
@@ -73,7 +75,7 @@ def render_route_summary(
         f"primary_metric: {metric}",
         f"primary_metric_value: {metric_value}",
         f"decision: {audit_report.get('overall', '')}",
-        f"reproduce: python scripts/repo_doctor.py experiment --route {audit_report.get('route_config', '')} --run {run_dir_for_reproduce} --gate {audit_report.get('gate', '')}",
+        f"reproduce: python scripts/repo_doctor.py experiment --route {route_config_for_reproduce} --run {run_dir_for_reproduce} --gate {audit_report.get('gate', '')}",
         f"dataset: {route_data.get('dataset_version', '')}",
         f"split: {route_data.get('split_id', '')}",
         f"seed: {route_data.get('seed', '')}",

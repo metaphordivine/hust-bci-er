@@ -29,8 +29,24 @@ class SlidingWindowSpec:
         return int(np.floor((self.source_trial_sec - self.window_sec) / self.stride_sec + 1e-9)) + 1
 
 
+@dataclass(frozen=True)
+class FixedCropSpec:
+    window_sec: float
+    n_crops: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.window_sec, (int, float)) or self.window_sec <= 0:
+            raise ValueError("window_sec must be positive")
+        if not isinstance(self.n_crops, int) or self.n_crops <= 0:
+            raise ValueError("n_crops must be a positive integer")
+
+
 def window_start_times(spec: SlidingWindowSpec) -> tuple[float, ...]:
     return tuple(round(idx * spec.stride_sec, 10) for idx in range(spec.n_windows))
+
+
+def fixed_crop_start_times(spec: FixedCropSpec) -> tuple[float, ...]:
+    return tuple(round(idx * spec.window_sec, 10) for idx in range(spec.n_crops))
 
 
 def sliding_window_spec_from_config(config: dict[str, Any]) -> SlidingWindowSpec:
@@ -59,6 +75,25 @@ def window_slices(n_times: int, spec: SlidingWindowSpec) -> tuple[tuple[int, int
             start = stop - window_len
         slices.append((start, stop, start_sec))
     return tuple(slices)
+
+
+def fixed_crop_slices(n_times: int, spec: FixedCropSpec, *, sampling_rate_hz: float) -> tuple[tuple[int, int, float], ...]:
+    if not isinstance(n_times, int) or n_times <= 0:
+        raise ValueError("n_times must be a positive integer")
+    if not isinstance(sampling_rate_hz, (int, float)) or sampling_rate_hz <= 0:
+        raise ValueError("sampling_rate_hz must be positive")
+
+    window_len = int(round(spec.window_sec * sampling_rate_hz))
+    if window_len <= 0:
+        raise ValueError("window must span at least one sample")
+    required = window_len * spec.n_crops
+    if required > n_times:
+        raise ValueError(f"fixed crops require at least {required} samples, got {n_times}")
+
+    return tuple(
+        (crop_id * window_len, (crop_id + 1) * window_len, start_sec)
+        for crop_id, start_sec in enumerate(fixed_crop_start_times(spec))
+    )
 
 
 def sliding_windows_for_trial(trial: EEGTrial, spec: SlidingWindowSpec) -> tuple[EEGWindow, ...]:

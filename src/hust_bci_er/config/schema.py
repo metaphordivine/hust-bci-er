@@ -6,6 +6,7 @@ It can be replaced by Pydantic later without changing the command contract.
 
 from __future__ import annotations
 
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -210,7 +211,7 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         if not isinstance(apply_to_splits, list) or not apply_to_splits or any(split not in valid_splits for split in apply_to_splits):
             errors.append("augmentation.apply_to_splits must be a non-empty list drawn from train/val/test")
 
-    validate_augmentation_search_space(augmentation, errors)
+    validate_augmentation_search_space(data, augmentation, errors)
 
     aggregate = augmentation.get("aggregate_to_trial")
     if not isinstance(aggregate, dict):
@@ -222,28 +223,87 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         errors.append("augmentation.aggregate_to_trial.tie_break must be mean_score, lower, or higher")
 
 
-def validate_augmentation_search_space(augmentation: dict[str, Any], errors: list[str]) -> None:
+def sliding_window_count(source_trial_sec: float, window_sec: float, stride_sec: float) -> int:
+    return int((source_trial_sec - window_sec) / stride_sec + 1e-9) + 1
+
+
+def route_primary_metric(data: dict[str, Any]) -> str | None:
+    evaluation = data.get("evaluation")
+    if not isinstance(evaluation, dict):
+        return None
+    metric = evaluation.get("primary_metric")
+    return str(metric) if metric is not None else None
+
+
+def validate_augmentation_search_space(data: dict[str, Any], augmentation: dict[str, Any], errors: list[str]) -> None:
     search_space = augmentation.get("search_space")
-    if search_space is None:
-        return
-    if not isinstance(search_space, dict):
+    if search_space is not None and not isinstance(search_space, dict):
         errors.append("augmentation.search_space must be a mapping")
         return
 
     allowed = {"source_trial_sec", "window_sec", "stride_sec"}
-    for key, values in search_space.items():
-        if key not in allowed:
-            errors.append(f"augmentation.search_space has unsupported field: {key}")
+    parsed_search: dict[str, list[float]] = {}
+    if isinstance(search_space, dict):
+        for key, values in search_space.items():
+            if key not in allowed:
+                errors.append(f"augmentation.search_space has unsupported field: {key}")
+                continue
+            if not isinstance(values, list) or not values:
+                errors.append(f"augmentation.search_space.{key} must be a non-empty list")
+                continue
+            parsed = [validate_positive_number(value, f"augmentation.search_space.{key}", errors) for value in values]
+            parsed = [value for value in parsed if value is not None]
+            parsed_search[key] = parsed
+            source_trial_sec = float(augmentation.get("source_trial_sec")) if isinstance(augmentation.get("source_trial_sec"), (int, float)) else None
+            if key in {"window_sec", "stride_sec"} and source_trial_sec is not None:
+                if any(value > source_trial_sec for value in parsed):
+                    errors.append(f"augmentation.search_space.{key} values must be <= augmentation.source_trial_sec")
+
+    values_by_key: dict[str, list[float]] = {}
+    for key in allowed:
+        base_value = augmentation.get(key)
+        if not isinstance(base_value, (int, float)) or base_value <= 0:
+            return
+        candidates = [float(base_value)]
+        candidates.extend(parsed_search.get(key, []))
+        values_by_key[key] = sorted(set(candidates))
+
+    input_window_sec = data.get("input_window_sec")
+    if isinstance(input_window_sec, (int, float)):
+        mismatched_windows = [
+            value for value in values_by_key["window_sec"]
+            if abs(float(input_window_sec) - value) > 1e-9
+        ]
+        if mismatched_windows:
+            errors.append(
+                "SEARCH_SPACE_CROSS_PRODUCT_VALID: input_window_sec must match every "
+                "augmentation.window_sec/search_space.window_sec candidate"
+            )
+
+    metric = route_primary_metric(data)
+    requires_five_crops = metric == "exact_single_crop_expected_BA"
+    for source_trial_sec, window_sec, stride_sec in product(
+        values_by_key["source_trial_sec"],
+        values_by_key["window_sec"],
+        values_by_key["stride_sec"],
+    ):
+        combo = (
+            f"source_trial_sec={source_trial_sec:g}, "
+            f"window_sec={window_sec:g}, stride_sec={stride_sec:g}"
+        )
+        if window_sec > source_trial_sec:
+            errors.append(f"SEARCH_SPACE_CROSS_PRODUCT_VALID: window_sec must be <= source_trial_sec for {combo}")
             continue
-        if not isinstance(values, list) or not values:
-            errors.append(f"augmentation.search_space.{key} must be a non-empty list")
+        if stride_sec > source_trial_sec:
+            errors.append(f"SEARCH_SPACE_CROSS_PRODUCT_VALID: stride_sec must be <= source_trial_sec for {combo}")
             continue
-        parsed = [validate_positive_number(value, f"augmentation.search_space.{key}", errors) for value in values]
-        parsed = [value for value in parsed if value is not None]
-        source_trial_sec = float(augmentation.get("source_trial_sec")) if isinstance(augmentation.get("source_trial_sec"), (int, float)) else None
-        if key in {"window_sec", "stride_sec"} and source_trial_sec is not None:
-            if any(value > source_trial_sec for value in parsed):
-                errors.append(f"augmentation.search_space.{key} values must be <= augmentation.source_trial_sec")
+        n_windows = sliding_window_count(source_trial_sec, window_sec, stride_sec)
+        if requires_five_crops and n_windows != 5:
+            errors.append(
+                "METRIC_SCORE_MATRIX_SHAPE_COMPATIBLE: exact_single_crop_expected_BA "
+                f"requires exactly 5 sliding-window crops, got {n_windows} for {combo}"
+            )
+
 
 
 def validate_non_negative_number(value: Any, field: str, errors: list[str]) -> float | None:

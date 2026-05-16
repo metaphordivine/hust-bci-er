@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +27,7 @@ REQUIRED_EVIDENCE_FIELDS = {
     "manifest_sha256",
     "primary_metric_value",
 }
+LOCAL_ABSOLUTE_PATH_RE = re.compile(r"(?i)(?:\b[A-Z]:[\\/]|/home/|/Users/)")
 
 
 def sha256_file(path: Path) -> str:
@@ -155,6 +157,9 @@ def main() -> int:
         if missing:
             errors.append(f"summary missing tokens {missing}: {summary.relative_to(ROOT)}")
         fields = summary_fields(text)
+        reproduce = fields.get("reproduce", "")
+        if LOCAL_ABSOLUTE_PATH_RE.search(reproduce):
+            errors.append(f"summary reproduce command contains local absolute path: {summary.relative_to(ROOT)}")
         if routes[route_id].get("status") in SUMMARY_REQUIRED_STATUSES:
             missing_fields = sorted(field for field in REQUIRED_EVIDENCE_FIELDS if not fields.get(field))
             if missing_fields:
