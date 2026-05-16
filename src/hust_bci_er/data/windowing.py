@@ -129,13 +129,24 @@ def fixed_crop_slices(n_times: int, spec: FixedCropSpec) -> tuple[tuple[int, int
     if not isinstance(n_times, int) or n_times <= 0:
         raise ValueError("n_times must be a positive integer")
 
-    window_len = int(round(spec.window_sec / spec.source_trial_sec * n_times))
+    samples_per_sec = n_times / spec.source_trial_sec
+    rounded_sfreq = int(round(samples_per_sec))
+    if rounded_sfreq <= 0 or abs(samples_per_sec - rounded_sfreq) > 1e-9:
+        raise ValueError("n_times must exactly cover source_trial_sec at an integer sample rate")
+
+    window_len_float = spec.window_sec * rounded_sfreq
+    window_len = int(round(window_len_float))
+    if abs(window_len_float - window_len) > 1e-9:
+        raise ValueError("window_sec must align with the inferred sample rate")
     if window_len <= 0:
         raise ValueError("window must span at least one sample")
 
     slices: list[tuple[int, int, float]] = []
-    for idx, start_sec in enumerate(fixed_crop_start_times(spec)):
-        start = idx * window_len
+    for start_sec in fixed_crop_start_times(spec):
+        start_float = start_sec * rounded_sfreq
+        start = int(round(start_float))
+        if abs(start_float - start) > 1e-9:
+            raise ValueError("fixed crop start must align with the inferred sample rate")
         stop = start + window_len
         if stop > n_times:
             raise ValueError("n_times is too short for requested fixed crops")

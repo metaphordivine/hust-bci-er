@@ -212,6 +212,21 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         if window_sec * n_crops > source_trial_sec + 1e-9:
             errors.append("augmentation.n_crops * augmentation.window_sec must be <= augmentation.source_trial_sec")
 
+    inference = data.get("inference") if isinstance(data.get("inference"), dict) else {}
+    evaluation = data.get("evaluation") if isinstance(data.get("evaluation"), dict) else {}
+    requires_exact_five_crops = name == "split_first_fixed_crops" and (
+        inference.get("crop_policy") == "exact_single_crop"
+        or evaluation.get("primary_metric") == "exact_single_crop_expected_BA"
+    )
+    if requires_exact_five_crops and n_crops is not None and n_crops != 5:
+        errors.append("split_first_fixed_crops exact_single_crop routes require augmentation.n_crops == 5")
+
+    search_space = augmentation.get("search_space")
+    if requires_exact_five_crops and isinstance(search_space, dict) and "n_crops" in search_space:
+        crop_values = search_space.get("n_crops")
+        if isinstance(crop_values, list) and any(value != 5 for value in crop_values):
+            errors.append("split_first_fixed_crops exact_single_crop routes require augmentation.search_space.n_crops values to be 5")
+
     apply_to_splits = augmentation.get("apply_to_splits")
     if apply_to_splits is not None:
         valid_splits = {"train", "val", "test"}

@@ -105,8 +105,8 @@ def test_fixed_crops_keep_original_trial_inside_one_split():
 
 def test_fixed_crop_slices_reject_too_short_sample_count():
     spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5)
-    with pytest.raises(ValueError, match="too short"):
-        fixed_crop_slices(12499, spec)
+    with pytest.raises(ValueError, match="source_trial_sec"):
+        fixed_crop_slices(12497, spec)
 
 
 def test_split_first_fixed_crop_guard_rejects_original_trial_across_splits():
