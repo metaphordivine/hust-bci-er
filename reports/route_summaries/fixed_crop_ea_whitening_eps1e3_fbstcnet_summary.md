@@ -1,0 +1,18 @@
+# fixed_crop_ea_whitening_eps1e3_fbstcnet Summary
+
+route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet
+route_status: IDEA
+audit_decision: PASS
+gate: candidate
+primary_metric: exact_single_crop_expected_BA
+primary_metric_value: 0.7036413333333332
+decision: PASS
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/fixed_crop_ea_whitening_eps1e3_fbstcnet.yaml --run outputs/fixed_crop_ea_whitening_eps1e3_fbstcnet/candidate_20260516_seed42 --gate candidate
+dataset: train_v1
+split: p1_seed42_fold0
+seed: 42
+protocol: p1_repeated_group_kfold
+risk notes: generated draft; review before committing.
+audit_report_path: outputs/fixed_crop_ea_whitening_eps1e3_fbstcnet/candidate_20260516_seed42/audit_report.json
+manifest_path: outputs/fixed_crop_ea_whitening_eps1e3_fbstcnet/candidate_20260516_seed42/manifest.json
+manifest_sha256: bf53e2c1eabc5427d7542b71d597ca256458b5dd44485117ace3d6d5dba8eeeb
