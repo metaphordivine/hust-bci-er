@@ -57,6 +57,8 @@ def tangent_vector(matrix: np.ndarray, *, include_diagonal: bool = True) -> np.n
     offset = 0 if include_diagonal else 1
     rows, cols = np.triu_indices(mat.shape[0], k=offset)
     values = mat[rows, cols].copy()
+    # Off-diagonal sqrt(2) scaling preserves the Frobenius inner product after
+    # symmetric-matrix vectorization.
     off_diag = rows != cols
     values[off_diag] *= np.sqrt(2.0)
     return values.astype(np.float32)

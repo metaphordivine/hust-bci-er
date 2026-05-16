@@ -46,4 +46,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "IDEA route: FBCNet-style temporal filter-bank, per-band spatial filters, and log-variance features. No train-time augmentation."
+notes: "IDEA route: FBCNet-style learned temporal filter responses, per-band spatial filters, and log-variance features. Diagnostic first; full P1 evidence requires protocol runner execution."

@@ -40,3 +40,44 @@ def test_apply_transforms_only_changes_train_split():
     assert not np.allclose(train[0]["x"], windows[0]["x"])
     assert np.allclose(val[0]["x"], windows[0]["x"])
     assert np.allclose(windows[0]["x"], 1.0)
+
+
+def test_apply_transform_chain_is_order_independent_with_window_metadata():
+    windows = [
+        {
+            "subject_id": "S01",
+            "trial_id": "t1",
+            "crop_id": 0,
+            "window_start_sec": 0.0,
+            "x": np.ones((4, 32), dtype=np.float32),
+        },
+        {
+            "subject_id": "S02",
+            "trial_id": "t2",
+            "crop_id": 1,
+            "window_start_sec": 10.0,
+            "x": np.ones((4, 32), dtype=np.float32) * 2.0,
+        },
+    ]
+    transforms = [
+        {"name": "gaussian_noise", "std": 0.01, "apply_to_splits": ["train"]},
+        {"name": "time_mask", "max_width": 4, "apply_to_splits": ["train"]},
+    ]
+
+    forward = apply_transforms_to_windows(windows, transforms, seed=7, split="train")
+    reversed_out = apply_transforms_to_windows(list(reversed(windows)), transforms, seed=7, split="train")
+
+    by_trial = {item["trial_id"]: item["x"] for item in forward}
+    by_trial_reversed = {item["trial_id"]: item["x"] for item in reversed_out}
+    for trial_id in by_trial:
+        np.testing.assert_allclose(by_trial[trial_id], by_trial_reversed[trial_id])
+
+
+def test_time_shift_uses_zero_padding_not_wraparound():
+    class FixedShiftRng:
+        def integers(self, *args, **kwargs):
+            return 1
+
+    x = np.arange(8, dtype=np.float32).reshape(1, 8)
+    y = time_shift(x, rng=FixedShiftRng(), max_shift=2)
+    np.testing.assert_array_equal(y, np.array([[0, 0, 1, 2, 3, 4, 5, 6]], dtype=np.float32))

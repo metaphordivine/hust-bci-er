@@ -2,7 +2,8 @@
 
 The model keeps the auditable core of FBCNet for this repository: parallel
 temporal filter-bank responses, per-band spatial filters, and log-variance
-features over temporal segments.
+features over temporal segments. ``n_bands`` is the number of learned temporal
+filter responses, not a declaration of physical frequency bands.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ def segment_log_variance(x: torch.Tensor, n_segments: int = 4, eps: float = 1e-6
     n_times = x.shape[-1]
     if n_times < n_segments:
         raise ValueError("time dimension must be >= n_segments")
+    # Keep equal-length segments; any remainder is ignored explicitly.
     usable = (n_times // n_segments) * n_segments
     x = x[..., :usable].reshape(x.shape[0], x.shape[1], x.shape[2], n_segments, usable // n_segments)
     var = x.var(dim=-1, unbiased=False).clamp_min(eps)

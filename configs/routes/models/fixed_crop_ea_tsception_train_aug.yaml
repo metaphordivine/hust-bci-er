@@ -28,6 +28,7 @@ augmentation:
       apply_to_splits: [train]
 model:
   name: tsception
+  channel_montage: hust_30_a2
   n_filters: 8
   temporal_pool_size: 8
   classifier_hidden_dim: 64
@@ -54,4 +55,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "IDEA route: TSception with train-only lightweight window augmentation. Validation/test evidence remains unaugmented."
+notes: "IDEA route: TSception with HUST montage hemispheric branches and train-only lightweight window augmentation. Validation/test evidence remains unaugmented; full P1 evidence requires protocol runner execution."

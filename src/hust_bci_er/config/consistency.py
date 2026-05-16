@@ -41,6 +41,15 @@ def model_factory_keys(root: Path) -> set[str]:
     raise ValueError("BUILDERS mapping not found")
 
 
+def graph_factory_keys(root: Path) -> set[str]:
+    tree = ast.parse((root / "src" / "hust_bci_er" / "models" / "factory.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "GRAPH_BUILDERS" for target in node.targets):
+            if isinstance(node.value, ast.Dict):
+                return {key.value for key in node.value.keys if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+    raise ValueError("GRAPH_BUILDERS mapping not found")
+
+
 def route_component_names(root: Path) -> dict[str, set[str]]:
     out = {"models": set(), "preprocessing": set(), "features": set(), "score_routes": set()}
     for path in (root / "configs" / "routes" / "models").glob("*.yaml"):
@@ -51,7 +60,10 @@ def route_component_names(root: Path) -> dict[str, set[str]]:
             if model.get("name") == "score_fusion" and data.get("route_id"):
                 out["score_routes"].add(str(data["route_id"]))
         for item in data.get("preprocessing") or []:
-            out["preprocessing"].add(str(item))
+            if isinstance(item, dict):
+                out["preprocessing"].add(str(item.get("name")))
+            else:
+                out["preprocessing"].add(str(item))
         for item in data.get("features") or []:
             out["features"].add(str(item))
     return out
@@ -66,6 +78,8 @@ def registry_consistency_errors(root: Path) -> list[str]:
     errors: list[str] = []
     if model_factory_keys(root) != registry.TORCH_BACKBONES:
         errors.append("TORCH_BACKBONES must match models.factory BUILDERS")
+    if graph_factory_keys(root) != registry.GRAPH_MODELS:
+        errors.append("GRAPH_MODELS must match models.factory GRAPH_BUILDERS")
     used = route_component_names(root)
     unknown_models = sorted(used["models"] - registry.MODELS)
     unknown_preprocessing = sorted(used["preprocessing"] - registry.PREPROCESSING)

@@ -258,6 +258,16 @@ def test_apply_preprocessing_all_known_steps_accepted():
                 pytest.fail(f"KNOWN_PREPROC entry '{step}' unexpectedly raised: {e}")
 
 
+def test_apply_preprocessing_accepts_parameterized_bandpass():
+    pytest.importorskip("scipy.signal")
+    x = _random_window()
+    out = _apply_preprocessing(
+        x.copy(),
+        [{"name": "bandpass", "low_hz": 4.0, "high_hz": 45.0, "order": 4}],
+    )
+    assert out.shape == x.shape
+
+
 # ---------------------------------------------------------------------------
 # _fit_ea_on_windows
 # ---------------------------------------------------------------------------
@@ -610,6 +620,8 @@ def test_run_real_classifier_route_passes_model_kwargs_to_builder(tmp_path, monk
     )
 
     assert captured == {"n_filters_time": 24, "drop_prob": 0.25}
+    manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["model_kwargs"] == {"n_filters_time": 24, "drop_prob": 0.25}
 
 
 def test_run_real_classifier_route_fixed_crop_augmentation_is_genuine(tmp_path, monkeypatch):

@@ -147,36 +147,71 @@ KNOWN_PREPROC = frozenset({
 })
 
 
-def _apply_preprocessing(x: np.ndarray, preproc_names: list[str], *, ea_transform: np.ndarray | None = None) -> np.ndarray:
+def _preprocessing_step(item: Any) -> tuple[str, dict[str, Any]]:
+    if isinstance(item, str):
+        return item, {}
+    if isinstance(item, Mapping):
+        name = str(item.get("name") or "")
+        params = {key: value for key, value in item.items() if key != "name"}
+        return name, params
+    return str(item), {}
+
+
+def _preprocessing_names(preproc_items: Sequence[Any]) -> list[str]:
+    return [_preprocessing_step(item)[0] for item in preproc_items]
+
+
+def _apply_preprocessing(x: np.ndarray, preproc_names: Sequence[Any], *, ea_transform: np.ndarray | None = None) -> np.ndarray:
     """Apply a sequence of preprocessing steps to one window [channels, time]."""
-    for name in preproc_names:
+    for item in preproc_names:
+        name, params = _preprocessing_step(item)
         if name not in KNOWN_PREPROC:
             raise ValueError(f"unknown preprocessing step: {name}")
         if name == "zscore":
+            if params:
+                raise ValueError("zscore preprocessing does not accept parameters")
             x = zscore_per_channel(x)
         elif name == "robust_zscore":
+            if params:
+                raise ValueError("robust_zscore preprocessing does not accept parameters")
             from hust_bci_er.preprocessing.normalization import robust_zscore_per_channel
             x = robust_zscore_per_channel(x)
         elif name == "whitening_eps1e3":
+            if params:
+                raise ValueError("whitening_eps1e3 preprocessing does not accept parameters")
             x = channel_whiten(x, eps=1e-3)
         elif name == "whitening_eps3e4":
+            if params:
+                raise ValueError("whitening_eps3e4 preprocessing does not accept parameters")
             x = channel_whiten(x, eps=3e-4)
         elif name == "shrinkage_whitening":
+            if params:
+                raise ValueError("shrinkage_whitening preprocessing does not accept parameters")
             x = channel_whiten(x, eps=1e-3, shrinkage_alpha=0.1)
         elif name == "euclidean_alignment":
+            if params:
+                raise ValueError("euclidean_alignment preprocessing does not accept parameters")
             if ea_transform is not None:
                 x = apply_ea_transform(x, ea_transform)
         elif name == "car":
+            if params:
+                raise ValueError("car preprocessing does not accept parameters")
             from hust_bci_er.preprocessing.normalization import common_average_reference
             x = common_average_reference(x)
         elif name == "bandpass":
             from hust_bci_er.preprocessing.filtering import bandpass_filter
-            x = bandpass_filter(x, sfreq=SFREQ, low_hz=1.0, high_hz=min(45.0, SFREQ / 2.0 - 1.0), order=4)
+            x = bandpass_filter(
+                x,
+                sfreq=SFREQ,
+                low_hz=float(params.get("low_hz", 1.0)),
+                high_hz=float(params.get("high_hz", min(45.0, SFREQ / 2.0 - 1.0))),
+                order=int(params.get("order", 4)),
+            )
     return x
 
 
-def _validate_adapter_preprocessing(preproc_names: list[str]) -> None:
-    unknown = [name for name in preproc_names if name not in KNOWN_PREPROC]
+def _validate_adapter_preprocessing(preproc_names: Sequence[Any]) -> None:
+    unknown = [name for name in _preprocessing_names(preproc_names) if name not in KNOWN_PREPROC]
     if unknown:
         raise ValueError(f"unknown preprocessing step(s): {', '.join(sorted(set(unknown)))}")
 
@@ -307,7 +342,7 @@ def _fit_ea_on_windows(train_windows: list[dict[str, Any]], preproc: list[str]) 
     Must be called after window creation so EA sees all training windows,
     not just the first window_sec of each trial.
     """
-    if "euclidean_alignment" not in preproc:
+    if "euclidean_alignment" not in _preprocessing_names(preproc):
         return None
     return fit_ea_transform([w["x"] for w in train_windows])
 
@@ -389,8 +424,7 @@ def _predict_scores(
     offset = 0
     with torch.no_grad():
         for x_batch, y_batch in loader:
-            # All factory backbones expect [B, 1, C, T]; add EEG channel dim
-            x_batch = x_batch.to(device).float().unsqueeze(1)
+            x_batch = x_batch.to(device).float()
             logits = logits_from_output(model(x_batch))
             probs = torch.softmax(logits, dim=1)[:, 1].detach().cpu().numpy()
             preds = (probs >= 0.5).astype(int)
@@ -979,6 +1013,7 @@ def run_real_classifier_route(
         json.dumps({
             "adapter": "torch_classifier",
             "model_name": model_name,
+            "model_kwargs": model_kwargs,
             "best_epoch": result.best_epoch,
             "best_metric": result.best_metric,
             "epochs_ran": len(result.history),
@@ -991,6 +1026,7 @@ def run_real_classifier_route(
             "evaluation_split": eval_split,
             "score_matrix_evidence": score_matrix_evidence,
             "augmentation_transforms": train_transform_configs,
+            "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
         }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -1014,6 +1050,8 @@ def run_real_classifier_route(
         score_matrix_csv=score_matrix_path,
     )
     manifest["run_mode"] = run_mode
+    manifest["model_name"] = model_name
+    manifest["model_kwargs"] = model_kwargs
     manifest["prediction_scope"] = prediction_scope
     manifest["evaluation_split"] = eval_split
     manifest["evaluation_subjects"] = sorted(test_subjects if eval_split == "test" else val_subjects)
@@ -1028,6 +1066,12 @@ def run_real_classifier_route(
     manifest["score_matrix_evidence"] = score_matrix_evidence
     manifest["augmentation_transforms"] = train_transform_configs
     manifest["augmentation_transform_scope"] = "train_only" if train_transform_configs else "none"
+    manifest["declared_protocol"] = str(route_data["evaluation"]["protocol"])
+    manifest["adapter_execution_protocol"] = "single_subject_holdout_split"
+    manifest["protocol_evidence_scope"] = (
+        "one materialized split/fold from the declared route protocol; "
+        "full repeated/nested protocol evidence must be produced by run_evaluation_protocol.py"
+    )
     if run_mode in {"full_subjects", "candidate"}:
         ds = yaml.safe_load(dataset_path.read_text(encoding="utf-8")) or {}
         manifest["raw_data_sources"] = ds.get("raw_data_sources") or []

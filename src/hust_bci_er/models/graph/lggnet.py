@@ -14,18 +14,12 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from hust_bci_er.models.eeg_montage import contiguous_region_indices, even_region_indices, region_indices_for_montage
 from hust_bci_er.models.heads.classification import MLPHead
 
 
 def even_region_sizes(n_channels: int, n_regions: int) -> tuple[int, ...]:
-    if n_channels <= 0:
-        raise ValueError("n_channels must be positive")
-    if n_regions <= 0:
-        raise ValueError("n_regions must be positive")
-    if n_regions > n_channels:
-        raise ValueError("n_regions must not exceed n_channels")
-    base, extra = divmod(n_channels, n_regions)
-    return tuple(base + (1 if idx < extra else 0) for idx in range(n_regions))
+    return tuple(len(indices) for indices in even_region_indices(n_channels, n_regions))
 
 
 class TemporalKernelFusion(nn.Module):
@@ -75,29 +69,40 @@ class TemporalKernelFusion(nn.Module):
 
 
 class RegionAggregator(nn.Module):
-    """Aggregate channel features into contiguous local brain regions."""
+    """Aggregate channel features into configured local brain regions."""
 
-    def __init__(self, region_sizes: Sequence[int]) -> None:
+    def __init__(self, region_indices: Sequence[Sequence[int]]) -> None:
         super().__init__()
-        if not region_sizes or any(size <= 0 for size in region_sizes):
-            raise ValueError("region_sizes must contain positive integers")
-        self.region_sizes = tuple(int(size) for size in region_sizes)
+        if not region_indices:
+            raise ValueError("region_indices must not be empty")
+        parsed = tuple(tuple(int(idx) for idx in region) for region in region_indices)
+        if any(not region for region in parsed):
+            raise ValueError("region_indices must contain non-empty regions")
+        flat = [idx for region in parsed for idx in region]
+        if min(flat) < 0:
+            raise ValueError("region indices must be non-negative")
+        if len(set(flat)) != len(flat):
+            raise ValueError("region indices must be disjoint")
+        self.region_indices = parsed
 
     @property
     def n_regions(self) -> int:
-        return len(self.region_sizes)
+        return len(self.region_indices)
 
     @property
     def n_channels(self) -> int:
-        return sum(self.region_sizes)
+        return max(max(region) for region in self.region_indices) + 1
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim != 3:
             raise ValueError("region aggregation input must be shaped [batch, channels, features]")
-        if x.shape[1] != self.n_channels:
-            raise ValueError(f"expected {self.n_channels} channels, got {x.shape[1]}")
-        chunks = torch.split(x, self.region_sizes, dim=1)
-        return torch.stack([chunk.mean(dim=1) for chunk in chunks], dim=1)
+        if x.shape[1] <= max(max(region) for region in self.region_indices):
+            raise ValueError(f"expected at least {self.n_channels} channels, got {x.shape[1]}")
+        pooled = []
+        for region in self.region_indices:
+            idx = torch.as_tensor(region, device=x.device, dtype=torch.long)
+            pooled.append(x.index_select(1, idx).mean(dim=1))
+        return torch.stack(pooled, dim=1)
 
 
 class GraphConvolution(nn.Module):
@@ -138,36 +143,48 @@ class LGGNet(nn.Module):
         n_classes: int = 2,
         n_regions: int = 5,
         region_sizes: Sequence[int] | None = None,
+        region_indices: Sequence[Sequence[int]] | None = None,
         temporal_filters: int = 8,
         temporal_kernel_sizes: Sequence[int] = (31, 63, 125),
         temporal_pool_size: int = 4,
         graph_hidden_dim: int = 32,
         classifier_hidden_dim: int = 64,
         dropout: float = 0.3,
+        channel_montage: str | None = None,
     ) -> None:
         super().__init__()
         del n_times
-        if region_sizes is None:
-            region_sizes = even_region_sizes(n_channels, n_regions)
-        if sum(region_sizes) != n_channels:
-            raise ValueError("sum(region_sizes) must equal n_channels")
+        if region_indices is not None and region_sizes is not None:
+            raise ValueError("declare either region_indices or region_sizes, not both")
+        if region_indices is None:
+            if region_sizes is not None:
+                if sum(int(size) for size in region_sizes) != n_channels:
+                    raise ValueError("sum(region_sizes) must equal n_channels")
+                region_indices = contiguous_region_indices(region_sizes)
+            else:
+                region_indices = region_indices_for_montage(
+                    channel_montage=channel_montage,
+                    n_channels=n_channels,
+                    n_regions=n_regions,
+                )
         if graph_hidden_dim <= 0:
             raise ValueError("graph_hidden_dim must be positive")
         self.n_channels = int(n_channels)
-        self.region_sizes = tuple(int(size) for size in region_sizes)
+        self.channel_montage = channel_montage or "sequential"
+        self.region_indices = tuple(tuple(int(idx) for idx in region) for region in region_indices)
         self.temporal = TemporalKernelFusion(
             n_filters=temporal_filters,
             kernel_sizes=temporal_kernel_sizes,
             pool_size=temporal_pool_size,
             dropout=dropout,
         )
-        self.region_aggregator = RegionAggregator(self.region_sizes)
-        self.adjacency_logits = nn.Parameter(torch.zeros(len(self.region_sizes), len(self.region_sizes)))
+        self.region_aggregator = RegionAggregator(self.region_indices)
+        self.adjacency_logits = nn.Parameter(torch.zeros(len(self.region_indices), len(self.region_indices)))
         self.graph_conv = GraphConvolution(temporal_filters, graph_hidden_dim)
         self.node_norm = nn.LayerNorm(graph_hidden_dim)
         self.dropout = nn.Dropout(dropout)
         self.classifier = MLPHead(
-            graph_hidden_dim * len(self.region_sizes),
+            graph_hidden_dim * len(self.region_indices),
             n_classes=n_classes,
             hidden_dim=classifier_hidden_dim,
             dropout=dropout,
@@ -177,6 +194,7 @@ class LGGNet(nn.Module):
         temporal = self.temporal(x)
         # Log-power summaries are stable across different temporal crop lengths.
         power = torch.log(temporal.pow(2).mean(dim=-1).clamp_min(1e-6))
+        # [B, C, n_filters] so RegionAggregator pools over the channel axis.
         channel_features = power.transpose(1, 2)
         return self.region_aggregator(channel_features)
 
@@ -201,10 +219,12 @@ def build_lggnet(n_channels: int, n_times: int, n_classes: int = 2, **kwargs) ->
         n_classes=n_classes,
         n_regions=int(kwargs.get("n_regions", 5)),
         region_sizes=kwargs.get("region_sizes"),
+        region_indices=kwargs.get("region_indices"),
         temporal_filters=int(kwargs.get("temporal_filters", 8)),
         temporal_kernel_sizes=tuple(kwargs.get("temporal_kernel_sizes", (31, 63, 125))),
         temporal_pool_size=int(kwargs.get("temporal_pool_size", 4)),
         graph_hidden_dim=int(kwargs.get("graph_hidden_dim", 32)),
         classifier_hidden_dim=int(kwargs.get("classifier_hidden_dim", 64)),
         dropout=float(kwargs.get("dropout", 0.3)),
+        channel_montage=kwargs.get("channel_montage"),
     )

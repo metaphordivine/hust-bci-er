@@ -54,6 +54,8 @@ def connectivity_features(
 
     ``subject_id`` and trial identifiers are intentionally not accepted here;
     this function only consumes numeric EEG windows.
+    ``abs_pearson`` discards correlation sign, so use it only when direction is
+    intentionally irrelevant.
     """
 
     if method == "pearson":

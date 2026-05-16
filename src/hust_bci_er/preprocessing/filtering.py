@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 
@@ -40,12 +42,24 @@ def bandpass_filter(
     order: int = 4,
     axis: int = -1,
 ) -> np.ndarray:
-    """Apply zero-phase Butterworth bandpass filtering along the time axis."""
+    """Apply zero-phase Butterworth bandpass filtering along the time axis.
+
+    Very short signals use ``padlen=0`` to keep scipy from failing; callers
+    should treat that path as a degraded boundary-quality fallback.
+    """
 
     signal = np.asarray(x, dtype=np.float64)
     sos = butter_bandpass_sos(low_hz=low_hz, high_hz=high_hz, sfreq=sfreq, order=order)
     from scipy.signal import sosfiltfilt
 
     n_times = signal.shape[axis]
-    filtered = sosfiltfilt(sos, signal, axis=axis, padlen=_safe_padlen(sos, n_times))
+    padlen = _safe_padlen(sos, n_times)
+    if padlen == 0:
+        warnings.warn(
+            "bandpass_filter used padlen=0 because the signal is shorter than scipy's default padding; "
+            "boundary quality is degraded for this diagnostic-length window.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    filtered = sosfiltfilt(sos, signal, axis=axis, padlen=padlen)
     return filtered.astype(np.float32)

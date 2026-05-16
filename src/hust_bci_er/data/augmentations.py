@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -48,7 +49,14 @@ def time_shift(x: np.ndarray, *, rng: np.random.Generator, max_shift: int = 12) 
     if max_shift == 0:
         return signal.copy()
     shift = int(rng.integers(-max_shift, max_shift + 1))
-    return np.roll(signal, shift=shift, axis=-1).astype(np.float32)
+    shifted = np.zeros_like(signal)
+    if shift > 0:
+        shifted[:, shift:] = signal[:, :-shift]
+    elif shift < 0:
+        shifted[:, :shift] = signal[:, -shift:]
+    else:
+        shifted[:, :] = signal
+    return shifted.astype(np.float32)
 
 
 AUGMENTATION_TRANSFORMS = {
@@ -87,6 +95,19 @@ def transform_configs_from_route(route_data: Mapping[str, Any]) -> list[dict[str
     return [normalize_transform_config(item) for item in transforms]
 
 
+def _window_rng_seed(seed: int, window: Mapping[str, Any], ordinal: int) -> int:
+    stable_keys = ("subject_id", "trial_id", "crop_id", "window_start_sec")
+    stable_values = [str(window.get(key, "")) for key in stable_keys]
+    fallback_ordinal = "" if any(stable_values) else str(ordinal)
+    parts = [
+        str(int(seed)),
+        *stable_values,
+        fallback_ordinal,
+    ]
+    digest = hashlib.sha256("\0".join(parts).encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="little", signed=False)
+
+
 def apply_transforms_to_windows(
     windows: list[dict[str, Any]],
     transform_configs: Sequence[Mapping[str, Any]],
@@ -94,15 +115,22 @@ def apply_transforms_to_windows(
     seed: int,
     split: str,
 ) -> list[dict[str, Any]]:
+    """Apply configured transforms to training windows only.
+
+    Each window gets an independent deterministic RNG seeded from run seed and
+    stable window metadata, so augmentation does not depend on list order when
+    those metadata fields are present.
+    """
+
     if split != "train" or not transform_configs:
         return windows
-    rng = _rng(seed)
+    normalized_configs = [normalize_transform_config(config) for config in transform_configs]
     augmented: list[dict[str, Any]] = []
-    for window in windows:
+    for ordinal, window in enumerate(windows):
         item = dict(window)
         x = np.asarray(item["x"], dtype=np.float32)
-        for config in transform_configs:
-            normalized = normalize_transform_config(config)
+        rng = _rng(_window_rng_seed(seed, item, ordinal))
+        for normalized in normalized_configs:
             fn = AUGMENTATION_TRANSFORMS[normalized["name"]]
             x = fn(x, rng=rng, **normalized["params"])
         item["x"] = x.astype(np.float32)

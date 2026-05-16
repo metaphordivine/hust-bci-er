@@ -56,4 +56,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "IDEA route: FBCNet-style backbone with train-only lightweight window augmentation. Validation/test evidence remains unaugmented."
+notes: "IDEA route: FBCNet-style learned filter-response backbone with train-only lightweight window augmentation. Validation/test evidence remains unaugmented; full P1 evidence requires protocol runner execution."

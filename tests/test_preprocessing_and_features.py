@@ -34,6 +34,14 @@ def test_bandpass_filter_shape_and_finiteness():
     assert np.isfinite(y).all()
 
 
+def test_bandpass_filter_short_signal_warns_about_padlen_fallback():
+    pytest.importorskip("scipy.signal")
+    x = np.random.default_rng(22).normal(size=(4, 20))
+    with pytest.warns(RuntimeWarning, match="padlen=0"):
+        y = bandpass_filter(x, sfreq=250.0, low_hz=4.0, high_hz=45.0, order=4)
+    assert y.shape == x.shape
+
+
 def test_connectivity_correlation_is_symmetric():
     x = np.random.default_rng(3).normal(size=(6, 200))
     corr = channel_correlation_matrix(x)
@@ -58,4 +66,9 @@ def test_tangent_space_projector_fit_transform_shape():
     features = TangentSpaceProjector(eps=1e-4, shrinkage_alpha=0.1).fit_transform(windows)
     assert features.shape == (4, 6 * 7 // 2)
     assert np.isfinite(features).all()
+
+
+def test_tangent_space_projector_transform_requires_fit():
+    with pytest.raises(ValueError, match="must be fit"):
+        TangentSpaceProjector().transform([np.zeros((6, 20), dtype=np.float32)])
 

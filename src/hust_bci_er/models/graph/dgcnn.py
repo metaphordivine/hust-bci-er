@@ -6,12 +6,17 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from hust_bci_er.models.eeg_montage import channel_names_for_montage
 from hust_bci_er.models.heads.classification import MLPHead
 from hust_bci_er.models.graph.lggnet import normalize_adjacency
 
 
 class ChebGraphConv(nn.Module):
-    """Chebyshev graph convolution with a dense normalized adjacency."""
+    """Chebyshev recurrence over a dense normalized adjacency.
+
+    The route uses a learnable channel adjacency. This keeps the localized
+    polynomial graph-filter idea without claiming a fixed anatomical Laplacian.
+    """
 
     def __init__(self, input_dim: int, output_dim: int, k_order: int = 3) -> None:
         super().__init__()
@@ -50,6 +55,7 @@ class DGCNN(nn.Module):
         temporal_kernel_size: int = 63,
         classifier_hidden_dim: int = 64,
         dropout: float = 0.4,
+        channel_montage: str | None = None,
     ) -> None:
         super().__init__()
         del n_times
@@ -58,6 +64,8 @@ class DGCNN(nn.Module):
         if node_features <= 0 or graph_hidden_dim <= 0:
             raise ValueError("feature dimensions must be positive")
         self.n_channels = int(n_channels)
+        self.channel_montage = channel_montage or "sequential"
+        self.channel_names = channel_names_for_montage(channel_montage, n_channels)
         self.temporal_encoder = nn.Sequential(
             nn.Conv2d(1, node_features, kernel_size=(1, temporal_kernel_size), padding=(0, temporal_kernel_size // 2), bias=False),
             nn.BatchNorm2d(node_features),
@@ -84,7 +92,8 @@ class DGCNN(nn.Module):
             x = x.unsqueeze(1)
         if x.ndim != 4 or x.shape[1] != 1:
             raise ValueError("DGCNN input must be shaped [batch, channels, time] or [batch, 1, channels, time]")
-        encoded = self.temporal_encoder(x).squeeze(-1)
+        # AdaptiveAvgPool2d fixes the time axis to 1 before the explicit squeeze.
+        encoded = self.temporal_encoder(x).squeeze(dim=-1)
         return encoded.transpose(1, 2)
 
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
@@ -108,4 +117,5 @@ def build_dgcnn(n_channels: int, n_times: int, n_classes: int = 2, **kwargs) -> 
         temporal_kernel_size=int(kwargs.get("temporal_kernel_size", 63)),
         classifier_hidden_dim=int(kwargs.get("classifier_hidden_dim", 64)),
         dropout=float(kwargs.get("dropout", 0.4)),
+        channel_montage=kwargs.get("channel_montage"),
     )

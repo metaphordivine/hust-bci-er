@@ -232,3 +232,34 @@ def test_augmentation_transforms_must_be_train_only():
     ]
     errors = validate_route_config(data, path=Path("fixed_crop_ea_tsception_train_aug.yaml"))
     assert any("cannot alter val/test evidence" in err for err in errors)
+
+
+def test_bandpass_preprocessing_accepts_route_parameters():
+    data = load_route("configs/routes/models/ea_deformer.yaml")
+    data["preprocessing"] = [
+        {"name": "bandpass", "low_hz": 4.0, "high_hz": 45.0, "order": 4},
+        "zscore",
+    ]
+    assert validate_route_config(data, path=Path("ea_deformer.yaml")) == []
+
+    data["preprocessing"][0]["high_hz"] = 200.0
+    errors = validate_route_config(data, path=Path("ea_deformer.yaml"))
+    assert any("high_hz" in err for err in errors)
+
+
+def test_time_mask_width_must_fit_window_samples():
+    data = load_route("configs/routes/models/fixed_crop_ea_tsception_train_aug.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["transforms"] = [
+        {"name": "time_mask", "max_width": 2500, "apply_to_splits": ["train"]}
+    ]
+    errors = validate_route_config(data, path=Path("fixed_crop_ea_tsception_train_aug.yaml"))
+    assert any("max_width" in err and "250Hz" in err for err in errors)
+
+
+def test_graph_and_hemisphere_routes_require_declared_montage():
+    data = load_route("configs/routes/models/fixed_crop_ea_tsception.yaml")
+    data["model"] = dict(data["model"])
+    data["model"].pop("channel_montage")
+    errors = validate_route_config(data, path=Path("fixed_crop_ea_tsception.yaml"))
+    assert any("channel_montage" in err for err in errors)

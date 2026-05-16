@@ -66,7 +66,11 @@ MODEL_IMPLEMENTATION_PATHS = {
     "srfnet": "src/hust_bci_er/models/backbones/srfnet.py",
     "shallow_conv_net": "src/hust_bci_er/models/backbones/shallow_conv_net.py",
     "cbramod": "src/hust_bci_er/models/backbones/cbramod.py",
+    "dgcnn": "src/hust_bci_er/models/graph/dgcnn.py",
+    "fbcnet": "src/hust_bci_er/models/backbones/fbcnet.py",
     "fbstcnet": "src/hust_bci_er/models/backbones/fbstcnet.py",
+    "lggnet": "src/hust_bci_er/models/graph/lggnet.py",
+    "tsception": "src/hust_bci_er/models/backbones/tsception.py",
     "toy_centroid": "src/hust_bci_er/training/toy_adapter.py",
 }
 MISSING_MODEL_IMPL_MAPPING_PREFIX = "__missing_model_impl_mapping__:"
@@ -281,6 +285,10 @@ def route_implementation_paths(route_data: dict[str, Any], route_rel_path: str) 
             paths.add(model_file)
         else:
             paths.add(f"{MISSING_MODEL_IMPL_MAPPING_PREFIX}{model_name}")
+        if model_name in {"dgcnn", "lggnet", "tsception"}:
+            paths.add("src/hust_bci_er/models/eeg_montage.py")
+        if model_name in {"dgcnn", "fbcnet", "lggnet", "tsception"}:
+            paths.add("src/hust_bci_er/models/heads/classification.py")
     training = route_data.get("training")
     adapter_name = training.get("job_adapter") if isinstance(training, dict) else None
     trainer_name = training.get("trainer") if isinstance(training, dict) else None

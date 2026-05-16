@@ -18,6 +18,7 @@ augmentation:
     tie_break: mean_score
 model:
   name: dgcnn
+  channel_montage: hust_30_a2
   node_features: 16
   graph_hidden_dim: 32
   k_order: 3
@@ -46,4 +47,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "IDEA route: DGCNN-style learnable electrode adjacency plus Chebyshev graph convolution. No train-time augmentation."
+notes: "IDEA route: DGCNN-style learnable electrode adjacency over the HUST 30-channel montage plus Chebyshev graph recurrence. Diagnostic first; full P1 evidence requires protocol runner execution."
