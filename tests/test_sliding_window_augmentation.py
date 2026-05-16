@@ -93,7 +93,7 @@ def test_fixed_crops_keep_original_trial_inside_one_split():
         trial_id="t1",
         split="train",
     )
-    spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5)
+    spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5, sampling_rate_hz=1)
 
     crops = fixed_crops_for_trial(trial, spec)
 
@@ -109,8 +109,14 @@ def test_fixed_crop_slices_reject_too_short_sample_count():
         fixed_crop_slices(12497, spec)
 
 
-def test_split_first_fixed_crop_guard_rejects_original_trial_across_splits():
+def test_fixed_crop_slices_reject_too_long_sample_count():
     spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5)
+    with pytest.raises(ValueError, match="source_trial_sec"):
+        fixed_crop_slices(15000, spec)
+
+
+def test_split_first_fixed_crop_guard_rejects_original_trial_across_splits():
+    spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5, sampling_rate_hz=1)
     trials = [
         EEGTrial(np.zeros((2, 50)), 0, "s1", "t1", "train"),
         EEGTrial(np.zeros((2, 50)), 0, "s1", "t1", "test"),

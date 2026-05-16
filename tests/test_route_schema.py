@@ -100,6 +100,20 @@ def test_sliding_window_search_space_is_validated():
     assert any("search_space.window_sec" in err for err in errors)
 
 
+def test_augmentation_search_space_rejects_fields_for_other_augmentation_type():
+    data = load_route("configs/routes/models/sliding_window_eegnet.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"n_crops": [1]}
+    errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
+    assert any("unsupported field: n_crops" in err for err in errors)
+
+    data = load_route("configs/routes/models/fixed_crop_pure_deformer_lite.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["search_space"] = {"stride_sec": [1]}
+    errors = validate_route_config(data, path=Path("fixed_crop_pure_deformer_lite.yaml"))
+    assert any("unsupported field: stride_sec" in err for err in errors)
+
+
 def test_fixed_crop_augmentation_requires_valid_crop_grid():
     data = load_route("configs/routes/models/ea_deformer.yaml")
     data["route_id"] = "fixed_crop_ea_deformer"

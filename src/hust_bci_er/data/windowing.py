@@ -101,9 +101,10 @@ class FixedCropSpec:
     source_trial_sec: float
     window_sec: float
     n_crops: int
+    sampling_rate_hz: float = 250.0
 
     def __post_init__(self) -> None:
-        for field_name in ("source_trial_sec", "window_sec"):
+        for field_name in ("source_trial_sec", "window_sec", "sampling_rate_hz"):
             value = getattr(self, field_name)
             if not isinstance(value, (int, float)) or value <= 0:
                 raise ValueError(f"{field_name} must be positive")
@@ -122,6 +123,7 @@ def fixed_crop_spec_from_config(config: dict[str, Any]) -> FixedCropSpec:
         source_trial_sec=float(config["source_trial_sec"]),
         window_sec=float(config["window_sec"]),
         n_crops=int(config["n_crops"]),
+        sampling_rate_hz=float(config.get("sampling_rate_hz", 250.0)),
     )
 
 
@@ -129,24 +131,26 @@ def fixed_crop_slices(n_times: int, spec: FixedCropSpec) -> tuple[tuple[int, int
     if not isinstance(n_times, int) or n_times <= 0:
         raise ValueError("n_times must be a positive integer")
 
-    samples_per_sec = n_times / spec.source_trial_sec
-    rounded_sfreq = int(round(samples_per_sec))
-    if rounded_sfreq <= 0 or abs(samples_per_sec - rounded_sfreq) > 1e-9:
-        raise ValueError("n_times must exactly cover source_trial_sec at an integer sample rate")
+    expected_source_len_float = spec.source_trial_sec * spec.sampling_rate_hz
+    expected_source_len = int(round(expected_source_len_float))
+    if abs(expected_source_len_float - expected_source_len) > 1e-9:
+        raise ValueError("source_trial_sec must align with sampling_rate_hz")
+    if n_times != expected_source_len:
+        raise ValueError("n_times must exactly equal source_trial_sec * sampling_rate_hz")
 
-    window_len_float = spec.window_sec * rounded_sfreq
+    window_len_float = spec.window_sec * spec.sampling_rate_hz
     window_len = int(round(window_len_float))
     if abs(window_len_float - window_len) > 1e-9:
-        raise ValueError("window_sec must align with the inferred sample rate")
+        raise ValueError("window_sec must align with sampling_rate_hz")
     if window_len <= 0:
         raise ValueError("window must span at least one sample")
 
     slices: list[tuple[int, int, float]] = []
     for start_sec in fixed_crop_start_times(spec):
-        start_float = start_sec * rounded_sfreq
+        start_float = start_sec * spec.sampling_rate_hz
         start = int(round(start_float))
         if abs(start_float - start) > 1e-9:
-            raise ValueError("fixed crop start must align with the inferred sample rate")
+            raise ValueError("fixed crop start must align with sampling_rate_hz")
         stop = start + window_len
         if stop > n_times:
             raise ValueError("n_times is too short for requested fixed crops")

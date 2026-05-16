@@ -256,7 +256,12 @@ def validate_augmentation_search_space(augmentation: dict[str, Any], errors: lis
         errors.append("augmentation.search_space must be a mapping")
         return
 
-    allowed = {"source_trial_sec", "window_sec", "stride_sec", "n_crops"}
+    if augmentation.get("name") == "split_first_sliding_window":
+        allowed = {"source_trial_sec", "window_sec", "stride_sec"}
+    elif augmentation.get("name") == "split_first_fixed_crops":
+        allowed = {"source_trial_sec", "window_sec", "n_crops"}
+    else:
+        allowed = {"source_trial_sec", "window_sec", "stride_sec", "n_crops"}
     for key, values in search_space.items():
         if key not in allowed:
             errors.append(f"augmentation.search_space has unsupported field: {key}")
