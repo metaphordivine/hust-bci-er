@@ -89,7 +89,7 @@ def test_cbramod_rejects_unknown_classifier_pooling():
 # ---------------------------------------------------------------------------
 
 def test_fbstcnet_rejects_mismatched_band_count():
-    with pytest.raises(ValueError, match="n_bands must match len\(bands\)"):
+    with pytest.raises(ValueError, match=r"n_bands must match len\(bands\)"):
         FBSTCNet(
             n_chans=30,
             n_outputs=2,
@@ -279,3 +279,23 @@ def test_build_model_passes_classifier_pooling_to_cbramod():
         classifier_pooling="mean",
     )
     assert model.classifier_pooling == "mean"
+
+
+def test_build_model_passes_cbramod_patch_embedding_width():
+    model = build_model(
+        "cbramod",
+        n_channels=30,
+        n_times=250,
+        n_classes=2,
+        patch_size=125,
+        d_model=250,
+        n_layer=1,
+        nhead=10,
+        classifier_pooling="mean",
+        conv_out_channels=50,
+        group_norm_groups=10,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 250))
+    assert tuple(out.shape) == (2, 2)

@@ -34,6 +34,15 @@ routes:
   - route_id: fixed_crop_ea_cbramod
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_cbramod_candidate
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_cbramod_patch125
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_cbramod_patch500
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_deformer
     owner: metaphordivine
     blocker:
@@ -148,6 +157,9 @@ routes:
   - route_id: tuned_sliding_window_cbramod
     owner: metaphordivine
     blocker:
+  - route_id: tuned_sliding_window_cbramod_source14_stride2
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: tuned_sliding_window_deformer_lite
     owner: metaphordivine
     blocker: missing_real_candidate_run
