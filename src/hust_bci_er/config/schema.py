@@ -186,15 +186,20 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         errors.append(f"unknown augmentation component: {name}")
         return
 
-    if name != "split_first_sliding_window":
+    if name not in {"split_first_sliding_window", "split_first_fixed_crops"}:
         return
 
     if augmentation.get("split_first") is not True:
-        errors.append("split_first_sliding_window requires split_first: true")
+        errors.append(f"{name} requires split_first: true")
 
     source_trial_sec = validate_positive_number(augmentation.get("source_trial_sec"), "augmentation.source_trial_sec", errors)
     window_sec = validate_positive_number(augmentation.get("window_sec"), "augmentation.window_sec", errors)
-    stride_sec = validate_positive_number(augmentation.get("stride_sec"), "augmentation.stride_sec", errors)
+    stride_sec = None
+    n_crops = None
+    if name == "split_first_sliding_window":
+        stride_sec = validate_positive_number(augmentation.get("stride_sec"), "augmentation.stride_sec", errors)
+    else:
+        n_crops = validate_positive_int(augmentation.get("n_crops"), "augmentation.n_crops", errors)
 
     input_window_sec = data.get("input_window_sec")
     if window_sec is not None and isinstance(input_window_sec, (int, float)) and abs(float(input_window_sec) - window_sec) > 1e-9:
@@ -203,6 +208,9 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         errors.append("augmentation.window_sec must be <= augmentation.source_trial_sec")
     if source_trial_sec is not None and stride_sec is not None and stride_sec > source_trial_sec:
         errors.append("augmentation.stride_sec must be <= augmentation.source_trial_sec")
+    if source_trial_sec is not None and window_sec is not None and n_crops is not None:
+        if window_sec * n_crops > source_trial_sec + 1e-9:
+            errors.append("augmentation.n_crops * augmentation.window_sec must be <= augmentation.source_trial_sec")
 
     apply_to_splits = augmentation.get("apply_to_splits")
     if apply_to_splits is not None:
@@ -216,8 +224,9 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
     if not isinstance(aggregate, dict):
         errors.append("augmentation.aggregate_to_trial must be a mapping")
         return
-    if aggregate.get("method") != "majority_vote":
-        errors.append("augmentation.aggregate_to_trial.method must be majority_vote")
+    allowed_methods = {"majority_vote", "mean_score"}
+    if aggregate.get("method") not in allowed_methods:
+        errors.append("augmentation.aggregate_to_trial.method must be majority_vote or mean_score")
     if aggregate.get("tie_break") not in {None, "mean_score", "lower", "higher"}:
         errors.append("augmentation.aggregate_to_trial.tie_break must be mean_score, lower, or higher")
 
@@ -230,7 +239,7 @@ def validate_augmentation_search_space(augmentation: dict[str, Any], errors: lis
         errors.append("augmentation.search_space must be a mapping")
         return
 
-    allowed = {"source_trial_sec", "window_sec", "stride_sec"}
+    allowed = {"source_trial_sec", "window_sec", "stride_sec", "n_crops"}
     for key, values in search_space.items():
         if key not in allowed:
             errors.append(f"augmentation.search_space has unsupported field: {key}")
@@ -238,12 +247,20 @@ def validate_augmentation_search_space(augmentation: dict[str, Any], errors: lis
         if not isinstance(values, list) or not values:
             errors.append(f"augmentation.search_space.{key} must be a non-empty list")
             continue
-        parsed = [validate_positive_number(value, f"augmentation.search_space.{key}", errors) for value in values]
-        parsed = [value for value in parsed if value is not None]
+        if key == "n_crops":
+            parsed_int = [validate_positive_int(value, f"augmentation.search_space.{key}", errors) for value in values]
+            parsed = [float(value) for value in parsed_int if value is not None]
+        else:
+            parsed = [validate_positive_number(value, f"augmentation.search_space.{key}", errors) for value in values]
+            parsed = [value for value in parsed if value is not None]
         source_trial_sec = float(augmentation.get("source_trial_sec")) if isinstance(augmentation.get("source_trial_sec"), (int, float)) else None
         if key in {"window_sec", "stride_sec"} and source_trial_sec is not None:
             if any(value > source_trial_sec for value in parsed):
                 errors.append(f"augmentation.search_space.{key} values must be <= augmentation.source_trial_sec")
+        if key == "n_crops" and source_trial_sec is not None and isinstance(augmentation.get("window_sec"), (int, float)):
+            window_sec = float(augmentation["window_sec"])
+            if any(value * window_sec > source_trial_sec + 1e-9 for value in parsed):
+                errors.append("augmentation.search_space.n_crops values must fit inside augmentation.source_trial_sec")
 
 
 def validate_non_negative_number(value: Any, field: str, errors: list[str]) -> float | None:

@@ -18,6 +18,11 @@
 - `differential_entropy`
 - `hjorth`
 
+## Augmentation
+
+- `split_first_fixed_crops`
+- `split_first_sliding_window`
+
 ## Torch Backbones
 
 - `cbramod`

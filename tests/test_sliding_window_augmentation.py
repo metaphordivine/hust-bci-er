@@ -6,7 +6,11 @@ import yaml
 
 from hust_bci_er.contracts.records import EEGTrial
 from hust_bci_er.data.windowing import (
+    FixedCropSpec,
     SlidingWindowSpec,
+    fixed_crop_slices,
+    fixed_crop_start_times,
+    fixed_crops_for_trial,
     sliding_windows_for_trial,
     split_first_sliding_windows,
     window_slices,
@@ -64,3 +68,33 @@ def test_window_slices_scale_with_sample_count():
 def test_window_slices_keep_constant_length_when_sample_count_is_odd():
     slices = window_slices(101, SlidingWindowSpec(source_trial_sec=10, window_sec=4, stride_sec=2))
     assert [stop - start for start, stop, _ in slices] == [40, 40, 40, 40]
+
+
+def test_fixed_crop_counts_match_candidate_exact_metric_setup():
+    spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5)
+    assert fixed_crop_start_times(spec) == (0, 10, 20, 30, 40)
+    assert fixed_crop_slices(12500, spec) == (
+        (0, 2500, 0),
+        (2500, 5000, 10),
+        (5000, 7500, 20),
+        (7500, 10000, 30),
+        (10000, 12500, 40),
+    )
+
+
+def test_fixed_crops_keep_original_trial_inside_one_split():
+    trial = EEGTrial(
+        x=np.arange(2 * 50).reshape(2, 50),
+        y=1,
+        subject_id="s1",
+        trial_id="t1",
+        split="train",
+    )
+    spec = FixedCropSpec(source_trial_sec=50, window_sec=10, n_crops=5)
+
+    crops = fixed_crops_for_trial(trial, spec)
+
+    assert [crop.crop_id for crop in crops] == [0, 1, 2, 3, 4]
+    assert [crop.window_start_sec for crop in crops] == [0, 10, 20, 30, 40]
+    assert all(crop.split == "train" for crop in crops)
+    assert crops[2].x.tolist() == np.arange(2 * 50).reshape(2, 50)[:, 20:30].tolist()

@@ -98,3 +98,25 @@ def test_sliding_window_search_space_is_validated():
     data["augmentation"]["search_space"] = {"window_sec": [4, 12]}
     errors = validate_route_config(data, path=Path("sliding_window_eegnet.yaml"))
     assert any("search_space.window_sec" in err for err in errors)
+
+
+def test_fixed_crop_augmentation_requires_valid_crop_grid():
+    data = load_route("configs/routes/models/ea_deformer.yaml")
+    data["route_id"] = "fixed_crop_ea_deformer"
+    data["input_window_sec"] = 10
+    data["augmentation"] = {
+        "name": "split_first_fixed_crops",
+        "split_first": True,
+        "source_trial_sec": 50,
+        "window_sec": 10,
+        "n_crops": 5,
+        "apply_to_splits": ["train", "val", "test"],
+        "aggregate_to_trial": {"method": "mean_score", "tie_break": "mean_score"},
+    }
+    data["inference"] = {"top4": True, "crop_policy": "exact_single_crop"}
+    assert validate_route_config(data, path=Path("fixed_crop_ea_deformer.yaml")) == []
+
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["n_crops"] = 6
+    errors = validate_route_config(data, path=Path("fixed_crop_ea_deformer.yaml"))
+    assert any("n_crops" in err and "source_trial_sec" in err for err in errors)
