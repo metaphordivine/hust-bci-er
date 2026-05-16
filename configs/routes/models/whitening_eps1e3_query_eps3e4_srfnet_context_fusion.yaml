@@ -1,5 +1,5 @@
 route_id: whitening_eps1e3_query_eps3e4_srfnet_context_fusion
-status: IDEA
+status: CANDIDATE
 dataset_version: train_v1
 split_id: route_component_split_v1
 seed: 42

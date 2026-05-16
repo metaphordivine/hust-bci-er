@@ -1,5 +1,5 @@
 route_id: conformer_srfnet_whitening_eps3e4_average
-status: IDEA
+status: CANDIDATE
 dataset_version: train_v1
 split_id: route_component_split_v1
 seed: 42
