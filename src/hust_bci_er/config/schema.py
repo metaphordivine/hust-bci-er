@@ -281,9 +281,15 @@ def validate_augmentation_search_space(augmentation: dict[str, Any], errors: lis
                 return []
             return [int(value) for value in raw_values if isinstance(value, int) and value > 0]
 
+        source_values = numeric_candidates("source_trial_sec", augmentation.get("source_trial_sec"))
         window_values = numeric_candidates("window_sec", augmentation.get("window_sec"))
         crop_values = integer_candidates("n_crops", augmentation.get("n_crops"))
-        if any(window_sec * n_crops > source_trial_sec + 1e-9 for window_sec in window_values for n_crops in crop_values):
+        if any(
+            window_sec * n_crops > candidate_source_sec + 1e-9
+            for candidate_source_sec in source_values
+            for window_sec in window_values
+            for n_crops in crop_values
+        ):
             errors.append("augmentation.search_space fixed-crop combinations must fit inside augmentation.source_trial_sec")
 
 
