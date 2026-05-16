@@ -32,6 +32,24 @@ def test_fbstcnet_fusion_routes_record_initial_weights():
     assert whitening.weights == (0.40, 0.30, 0.30)
 
 
+def test_fbstcnet_query_context_routes_are_registered():
+    fbst = score_route_by_id("fbstcnet_as_query_srfnet_context_fusion")
+    assert fbst is not None
+    assert fbst.method == "query_context"
+    assert fbst.query_component == "fixed_crop_ea_fbstcnet_component"
+    assert fbst.context_components == ("srfnet_long_component", "conformer_component")
+    assert fbst.alpha == 0.25
+    assert fbst.temperature == 0.75
+
+    srf = score_route_by_id("srfnet_as_query_fbstcnet_context_fusion")
+    assert srf is not None
+    assert srf.method == "query_context"
+    assert srf.query_component == "srfnet_long_component"
+    assert srf.context_components == ("fixed_crop_ea_fbstcnet_component", "conformer_component")
+    assert srf.alpha == 0.25
+    assert srf.temperature == 0.75
+
+
 def test_score_route_lookup_by_id_and_node():
     route = score_route_by_id("conformer_srfnet_score_average")
     assert route is not None

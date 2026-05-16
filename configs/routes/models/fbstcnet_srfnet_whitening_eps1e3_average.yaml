@@ -17,5 +17,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "IDEA only. Weighted z-average target weights are FBSTCNet 0.40, SRFNet reference 0.30, whitening SRFNet eps1e3 0.30; preprocessing describes component provenance, not a unified preprocessing pass."
-
+notes: "IDEA only. Weighted z-average target weights are fixed-crop EA+zscore FBSTCNet 0.40, sliding-window SRFNet reference 0.30, whitening eps1e3 SRFNet 0.30; preprocessing describes component provenance, not a unified preprocessing pass."

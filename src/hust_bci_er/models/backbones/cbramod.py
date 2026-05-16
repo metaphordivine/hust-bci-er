@@ -33,6 +33,15 @@ class PatchEmbeddingCBraMod(nn.Module):
         super().__init__()
         self.patch_size = patch_size
         self.d_model = d_model
+        if conv_out_channels <= 0:
+            raise ValueError(f"CBraMod requires positive conv_out_channels, got {conv_out_channels}")
+        if group_norm_groups <= 0:
+            raise ValueError(f"CBraMod requires positive group_norm_groups, got {group_norm_groups}")
+        if conv_out_channels % group_norm_groups != 0:
+            raise ValueError(
+                "CBraMod requires conv_out_channels divisible by group_norm_groups, "
+                f"got conv_out_channels={conv_out_channels} and group_norm_groups={group_norm_groups}"
+            )
 
         time_branch_width = patch_size
         for kernel_size, stride, _, padding in conv_kernels:

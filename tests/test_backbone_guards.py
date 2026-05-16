@@ -84,6 +84,19 @@ def test_cbramod_rejects_unknown_classifier_pooling():
         CBraMod(n_chans=30, n_outputs=2, n_times=256, classifier_pooling="max")
 
 
+def test_cbramod_rejects_invalid_group_norm_groups():
+    with pytest.raises(ValueError, match="group_norm_groups"):
+        CBraMod(
+            n_chans=30,
+            n_outputs=2,
+            n_times=250,
+            patch_size=125,
+            d_model=250,
+            conv_out_channels=50,
+            group_norm_groups=8,
+        )
+
+
 # ---------------------------------------------------------------------------
 # FBSTCNet band-count guard
 # ---------------------------------------------------------------------------

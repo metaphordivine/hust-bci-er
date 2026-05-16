@@ -56,5 +56,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "Fixed-crop EA FBSTCNet mixed-branch ablation: lighter connectivity window gamma=200."
-
+notes: "Fixed-crop EA FBSTCNet mixed-branch ablation: shorter connectivity window gamma=200."

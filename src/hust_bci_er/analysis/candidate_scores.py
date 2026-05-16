@@ -11,8 +11,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from hust_bci_er.contracts.prediction import prediction_schema
-from hust_bci_er.evaluation.exact_single_crop import exact_ba_from_matrix, top4_predictions
+from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema
+from hust_bci_er.evaluation.exact_single_crop import top4_predictions
 from hust_bci_er.evaluation.metrics import balanced_accuracy
 from hust_bci_er.evaluation.report import crop_score_columns, parse_binary, parse_finite_float, score_matrix_metric_rows
 
@@ -92,10 +92,8 @@ def load_score_matrix_run(path: Path, *, label: str | None = None) -> ScoreMatri
     - Each ``subject_id`` group must contain exactly **8 rows** with
       exactly **4 positive** ``y_true`` values.
 
-    These constraints are validated lazily during :func:`analyze_score_matrices`
-    (inside :func:`_diagnose_run`) rather than at load time, so that
-    :func:`load_score_matrix_run` can still return a :class:`ScoreMatrixRun`
-    for inspection when the caller wants early access to metadata.
+    Structural constraints are validated at load time. Exact metric values are
+    still computed during :func:`analyze_score_matrices`.
     """
     score_matrix_path = Path(path)
     manifest_path = score_matrix_path.parent / "manifest.json"
@@ -117,9 +115,9 @@ def load_score_matrix_run(path: Path, *, label: str | None = None) -> ScoreMatri
     route_id = str(manifest.get("route_id") or score_matrix_path.parent.name)
     run_label = label or route_id
     primary_metric = str(manifest.get("primary_metric") or DEFAULT_METRIC)
-    group_keys = _metric_group_keys(manifest, fields)
+    group_keys = _metric_group_keys(manifest, fields, schema)
 
-    return ScoreMatrixRun(
+    run = ScoreMatrixRun(
         label=run_label,
         route_id=route_id,
         score_matrix_path=score_matrix_path,
@@ -132,6 +130,8 @@ def load_score_matrix_run(path: Path, *, label: str | None = None) -> ScoreMatri
         manifest_path=manifest_path if manifest_path.exists() else None,
         primary_metric=primary_metric,
     )
+    _validate_score_matrix_groups(run)
+    return run
 
 
 def analyze_score_matrices(paths: Sequence[Path], *, top_errors: int = 40) -> CandidateScoreAnalysis:
@@ -172,7 +172,7 @@ def render_markdown_report(analysis: CandidateScoreAnalysis) -> str:
             "",
             "## Leaderboard",
             "",
-            "| route | exact_single_crop_expected_BA | mean_score_top4_BA | DEP BA | HC BA | groups | trials |",
+            "| route | exact_single_crop_expected_BA | mean_score_top4_BA | DEP exact BA | HC exact BA | groups | trials |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -240,7 +240,7 @@ def render_markdown_report(analysis: CandidateScoreAnalysis) -> str:
 
     lines.extend(["", "## Score Correlation", ""])
     lines.extend(_render_matrix(analysis.correlation_matrix))
-    lines.extend(["", "## Top-4 Disagreement", ""])
+    lines.extend(["", "## Mean-score Top-4 Disagreement", ""])
     lines.extend(_render_matrix(analysis.disagreement_matrix))
 
     lines.extend(
@@ -284,10 +284,15 @@ def _diagnose_run(run: ScoreMatrixRun) -> RouteDiagnostic:
         metric_group_keys=run.group_keys,
     )
     exact_ba = float(np.mean([float(row["metric_value"]) for row in subject_rows]))
+    exact_by_cohort: dict[str, list[float]] = defaultdict(list)
+    for row in subject_rows:
+        cohort = _cohort(str(row["subject_id"]))
+        if cohort is not None:
+            exact_by_cohort[cohort].append(float(row["metric_value"]))
+
     groups = _group_rows(run)
     mean_ba_rows: list[tuple[str, float]] = []
     crop_values: list[list[float]] = [[] for _ in run.score_columns]
-    cohort_values: dict[str, list[float]] = defaultdict(list)
     n_trials = 0
 
     for _, rows in sorted(groups.items()):
@@ -298,9 +303,6 @@ def _diagnose_run(run: ScoreMatrixRun) -> RouteDiagnostic:
         mean_ba = balanced_accuracy(y_true, mean_pred)
         subject_id = str(rows[0][run.subject_column])
         mean_ba_rows.append((subject_id, mean_ba))
-        cohort = _cohort(subject_id)
-        if cohort is not None:
-            cohort_values[cohort].append(mean_ba)
         for idx in range(matrix.shape[1]):
             crop_pred = top4_predictions(matrix[:, idx])
             crop_values[idx].append(balanced_accuracy(y_true, crop_pred))
@@ -311,8 +313,8 @@ def _diagnose_run(run: ScoreMatrixRun) -> RouteDiagnostic:
         score_matrix_path=run.score_matrix_path,
         exact_ba=exact_ba,
         mean_score_top4_ba=float(np.mean([value for _, value in mean_ba_rows])),
-        dep_ba=_mean_or_none(cohort_values["DEP"]),
-        hc_ba=_mean_or_none(cohort_values["HC"]),
+        dep_ba=_mean_or_none(exact_by_cohort["DEP"]),
+        hc_ba=_mean_or_none(exact_by_cohort["HC"]),
         n_groups=len(groups),
         n_trials=n_trials,
         crop_ba=tuple(float(np.mean(values)) for values in crop_values),
@@ -482,6 +484,10 @@ def _score_matrix_and_truth(run: ScoreMatrixRun, rows: Sequence[Mapping[str, str
             f"got shape {matrix.shape}: {run.label} group={context}. "
             "This diagnostic tool only supports the Top-4 candidate score-matrix format."
         )
+    trial_ids = [str(row[run.trial_column]) for row in rows]
+    if len(set(trial_ids)) != len(trial_ids):
+        context = "|".join(str(rows[0][key]) for key in run.group_keys)
+        raise ValueError(f"Top-4 format requires unique trial_id values per group: {run.label} group={context}")
     if int(y_true.sum()) != 4:
         context = "|".join(str(rows[0][key]) for key in run.group_keys)
         raise ValueError(
@@ -489,6 +495,11 @@ def _score_matrix_and_truth(run: ScoreMatrixRun, rows: Sequence[Mapping[str, str
             f"got {int(y_true.sum())}: {run.label} group={context}"
         )
     return matrix, y_true
+
+
+def _validate_score_matrix_groups(run: ScoreMatrixRun) -> None:
+    for _, rows in sorted(_group_rows(run).items()):
+        _score_matrix_and_truth(run, rows)
 
 
 def _group_rows(run: ScoreMatrixRun) -> dict[tuple[str, ...], list[Mapping[str, str]]]:
@@ -503,13 +514,26 @@ def _alignment_key(run: ScoreMatrixRun, row: Mapping[str, str]) -> tuple[str, ..
     return tuple(str(row[key]) for key in key_fields) + (str(row[run.trial_column]),)
 
 
-def _metric_group_keys(manifest: Mapping[str, Any], fields: set[str]) -> tuple[str, ...]:
+def _metric_group_keys(manifest: Mapping[str, Any], fields: set[str], schema: Mapping[str, str | None]) -> tuple[str, ...]:
     raw = manifest.get("metric_group_keys") or manifest.get("top4_group_keys")
     if isinstance(raw, list) and raw:
-        return tuple(str(item) for item in raw if str(item) in fields)
-    keys = [key for key in ("seed", "fold", "subject_id") if key in fields]
-    if "subject_id" not in keys:
+        keys: list[str] = []
+        missing: list[str] = []
+        for item in raw:
+            key = str(item)
+            column = canonical_prediction_column(key, dict(schema)) or (key if key in fields else None)
+            if column is None:
+                missing.append(key)
+            else:
+                keys.append(column)
+        if missing:
+            raise ValueError(f"score matrix is missing manifest group key(s): {missing}")
+        return tuple(keys)
+    keys = [key for key in ("seed", "fold") if key in fields]
+    subject_key = schema.get("subject_id")
+    if subject_key is None:
         raise ValueError("score matrix is missing subject_id group key")
+    keys.append(subject_key)
     return tuple(keys)
 
 

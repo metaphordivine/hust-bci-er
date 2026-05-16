@@ -25,9 +25,9 @@ python scripts/analyze_candidate_scores.py \
 The report includes:
 
 - `exact_single_crop_expected_BA` and mean-score Top-4 BA by route.
-- DEP/HC cohort BA and per-crop Top-4 BA.
+- DEP/HC exact cohort BA and per-crop Top-4 BA.
 - Score calibration summaries.
-- Pairwise score correlation and Top-4 disagreement matrices.
+- Pairwise score correlation and mean-score Top-4 disagreement matrices.
 - Frequent Top-4 error samples across models.
 
 ## Step 2: FBSTCNet Ablations
@@ -114,4 +114,3 @@ python scripts/repo_doctor.py experiment --route <route_config> --run <run_dir> 
 
 No route in this plan should be changed to `CANDIDATE` or `PROMOTED` unless the
 corresponding audit report supports that lifecycle change.
-
