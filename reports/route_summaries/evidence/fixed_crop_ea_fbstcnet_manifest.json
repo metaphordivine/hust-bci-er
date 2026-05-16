@@ -1,7 +1,7 @@
 {
   "audit_schema_version": 2,
   "route_id": "fixed_crop_ea_fbstcnet",
-  "git_commit": "f0bf7fd6ac135d60e538a4fff9ae8e2103283fec",
+  "git_commit": "d7596a283011d16e0eff0f9546962999b3a708bd",
   "config_path": "configs/routes/models/fixed_crop_ea_fbstcnet.yaml",
   "config_snapshot_path": "config_snapshot.yaml",
   "config_sha256": "cce4cefa0ddff9d40a25e1bc0a9b7379e82056174633d5cdaa6f77185d2ef9b5",

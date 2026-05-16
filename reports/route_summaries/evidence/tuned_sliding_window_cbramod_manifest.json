@@ -1,7 +1,7 @@
 {
   "audit_schema_version": 2,
   "route_id": "tuned_sliding_window_cbramod",
-  "git_commit": "f0bf7fd6ac135d60e538a4fff9ae8e2103283fec",
+  "git_commit": "d7596a283011d16e0eff0f9546962999b3a708bd",
   "config_path": "configs/routes/models/tuned_sliding_window_cbramod.yaml",
   "config_snapshot_path": "config_snapshot.yaml",
   "config_sha256": "35b91f201f6d452f4fc6f74844deefc2bd4e72f4b6a807d697bf0b194c21c654",

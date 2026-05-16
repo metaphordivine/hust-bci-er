@@ -15,4 +15,4 @@ protocol: p1_repeated_group_kfold
 risk notes: candidate audit passed; improves over sliding_window_fbstcnet 0.602884 by +0.083260; compact evidence is stored under reports.
 audit_report_path: reports/route_summaries/evidence/fixed_crop_ea_fbstcnet_audit_report.json
 manifest_path: reports/route_summaries/evidence/fixed_crop_ea_fbstcnet_manifest.json
-manifest_sha256: 80e5965000c2b6b5e66d377883f7df7f5c70d56d80b98888747b70b06989e635
+manifest_sha256: 0b2ab35375070515def5ff0dab8a1c2dcc8196b85dc4e555b55efe75f39c9f9b

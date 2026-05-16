@@ -1,7 +1,7 @@
 {
   "audit_schema_version": 2,
   "route_id": "sparse_sliding_window_shallow_conv_net",
-  "git_commit": "f0bf7fd6ac135d60e538a4fff9ae8e2103283fec",
+  "git_commit": "d7596a283011d16e0eff0f9546962999b3a708bd",
   "config_path": "configs/routes/models/sparse_sliding_window_shallow_conv_net.yaml",
   "config_snapshot_path": "config_snapshot.yaml",
   "config_sha256": "3ea397fd2a0aa823be1a6f67ef7faebadd937b70b44c0143fc683e6f7d8ebddf",

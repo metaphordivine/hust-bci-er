@@ -15,4 +15,4 @@ protocol: p1_repeated_group_kfold
 risk notes: candidate audit passed; improves over sliding_window_cbramod 0.506853 by +0.064819; compact evidence is stored under reports.
 audit_report_path: reports/route_summaries/evidence/tuned_sliding_window_cbramod_audit_report.json
 manifest_path: reports/route_summaries/evidence/tuned_sliding_window_cbramod_manifest.json
-manifest_sha256: fd1ac9b50e030246ebb425ae92414348e1884143cd197f31233a51476c921b62
+manifest_sha256: 4f54788a7bc65b377f8a4b20d8278ad1e5a3158df8392ffad8878353a211e016
