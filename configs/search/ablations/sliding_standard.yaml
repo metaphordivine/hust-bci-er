@@ -1,0 +1,45 @@
+# Standard ablation variants for sliding-window route family.
+# Each variant removes or varies one component relative to baseline.
+
+variants:
+  - name: no_zscore
+    description: Remove zscore preprocessing
+    overrides:
+      preprocessing: []
+
+  - name: window_4s
+    description: Smaller window (4s instead of 6s)
+    overrides:
+      input_window_sec: 4
+      augmentation.window_sec: 4
+
+  - name: window_8s
+    description: Larger window (8s instead of 6s)
+    overrides:
+      input_window_sec: 8
+      augmentation.window_sec: 8
+
+  - name: stride_2s
+    description: Sparser stride (2s instead of 1s)
+    overrides:
+      augmentation.stride_sec: 2
+
+  - name: no_weight_decay
+    description: Zero weight decay
+    overrides:
+      training.optimizer.weight_decay: 0.0
+
+  - name: low_lr
+    description: Lower learning rate (5e-4 instead of 1e-3)
+    overrides:
+      training.optimizer.lr: 0.0005
+
+  - name: no_grad_clip
+    description: Disable gradient clipping
+    remove:
+      - training.grad_clip_norm
+
+  - name: patience_20
+    description: Higher early stopping patience (20 vs 12)
+    overrides:
+      training.early_stopping.patience: 20

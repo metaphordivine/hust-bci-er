@@ -1,0 +1,43 @@
+# Ablation variants for ea_deformer (Euclidean Alignment + Deformer, single-crop).
+# EA is the defining component; core ablations focus on preprocessing and regularization.
+
+variants:
+  - name: no_ea
+    description: Remove Euclidean Alignment (keep zscore only)
+    overrides:
+      preprocessing: [zscore]
+
+  - name: no_zscore
+    description: Remove zscore (keep EA only)
+    overrides:
+      preprocessing: [euclidean_alignment]
+
+  - name: no_preproc
+    description: Remove all preprocessing (raw signal)
+    overrides:
+      preprocessing: []
+
+  - name: no_weight_decay
+    description: Zero weight decay
+    overrides:
+      training.optimizer.weight_decay: 0.0
+
+  - name: low_lr
+    description: Lower learning rate (5e-4 instead of 1e-3)
+    overrides:
+      training.optimizer.lr: 0.0005
+
+  - name: no_grad_clip
+    description: Disable gradient clipping
+    remove:
+      - training.grad_clip_norm
+
+  - name: patience_20
+    description: Higher early stopping patience (20 vs 12)
+    overrides:
+      training.early_stopping.patience: 20
+
+  - name: robust_zscore
+    description: Replace zscore with robust zscore
+    overrides:
+      preprocessing: [euclidean_alignment, robust_zscore]
