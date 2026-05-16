@@ -1,0 +1,18 @@
+# fbstcnet_as_query_srfnet_context_fusion Summary
+
+route_id: fbstcnet_as_query_srfnet_context_fusion
+route_status: IDEA
+audit_decision: PASS
+gate: candidate
+primary_metric: exact_single_crop_expected_BA
+primary_metric_value: 0.6933813333333333
+decision: PASS
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/fbstcnet_as_query_srfnet_context_fusion.yaml --run outputs/score_fusion_fbstcnet/20260516_fixed_ea_component/fbstcnet_as_query_srfnet_context_fusion --gate candidate
+dataset: train_v1
+split: p1_seed42_fold0
+seed: 42
+protocol: p1_repeated_group_kfold
+risk notes: generated draft; review before committing.
+audit_report_path: outputs/score_fusion_fbstcnet/20260516_fixed_ea_component/fbstcnet_as_query_srfnet_context_fusion/audit_report.json
+manifest_path: outputs/score_fusion_fbstcnet/20260516_fixed_ea_component/fbstcnet_as_query_srfnet_context_fusion/manifest.json
+manifest_sha256: 026a456ff2024c67d5bd1df796398119d5450d8216d3e9643d7ec8679b88ec52
