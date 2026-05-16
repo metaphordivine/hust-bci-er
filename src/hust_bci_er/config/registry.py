@@ -47,6 +47,7 @@ FEATURES = {
 }
 
 AUGMENTATION = {
+    "split_first_fixed_crops",
     "split_first_sliding_window",
 }
 

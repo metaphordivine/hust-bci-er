@@ -380,6 +380,43 @@ def test_route_summary_normalizes_repo_relative_evidence_paths(tmp_path):
         )
 
 
+def test_route_summary_prefers_manifest_config_path_over_windows_audit_path(tmp_path):
+    root = tmp_path
+    run_dir = root / "outputs" / "r1" / "run"
+    run_dir.mkdir(parents=True)
+    manifest = run_dir / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "route_id": "r1",
+                "config_path": "configs/routes/models/r1.yaml",
+                "primary_metric": "top4_BA",
+                "metrics": {"top4_BA": 0.5},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = render_route_summary(
+        route_data={"route_id": "r1", "status": "CANDIDATE", "dataset_version": "d1", "split_id": "s1", "seed": 42, "evaluation": {"protocol": "p1", "primary_metric": "top4_BA"}},
+        audit_report={
+            "route_id": "r1",
+            "overall": "PASS",
+            "gate": "candidate",
+            "route_config": r"D:\author\checkout\configs\routes\models\windows_only.yaml",
+            "run_dir": r"D:\author\checkout\outputs\r1\run",
+            "metrics": {"top4_BA": 0.5},
+        },
+        manifest_path=manifest,
+        root=root,
+    )
+
+    assert "--route configs/routes/models/r1.yaml" in summary
+    assert "--run outputs/r1/run" in summary
+    assert "D:\\" not in summary
+    assert "windows_only" not in summary
+
+
 def test_promotion_cli_derives_top4_requirement_from_route_config(monkeypatch, tmp_path):
     from scripts import check_promotion_audit as promotion_cli
 

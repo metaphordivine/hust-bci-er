@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     text = render_route_summary(
         route_data=load_mapping(args.route),
         audit_report=load_mapping(args.audit_report),
+        audit_report_path=args.audit_report,
         manifest_path=args.manifest,
     )
     if args.output:

@@ -4,6 +4,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from hust_bci_er.models.backbones.cbramod import CBraMod
+from hust_bci_er.models.backbones.deformer_lite import EEGDeformerLite
 from hust_bci_er.models.backbones.fbstcnet import (
     FBSTCNet,
     Cheby2FilterBank,
@@ -12,6 +13,33 @@ from hust_bci_er.models.backbones.fbstcnet import (
     aggregate_crop_logits,
 )
 from hust_bci_er.models.factory import build_model
+
+
+# ---------------------------------------------------------------------------
+# Deformer pooling guards
+# ---------------------------------------------------------------------------
+
+def test_deformer_attention_pooling_forward_shape():
+    model = EEGDeformerLite(
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        conv_channels=8,
+        embedding_dim=16,
+        transformer_depth=1,
+        num_heads=4,
+        pooling="attention",
+        classifier_hidden_dim=8,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_deformer_rejects_unknown_pooling():
+    with pytest.raises(ValueError, match="pooling must be"):
+        EEGDeformerLite(n_channels=30, n_times=256, pooling="median")
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +64,26 @@ def test_cbramod_rejects_longer_than_initialized_input():
         model(torch.randn(2, 30, 401))
 
 
+def test_cbramod_mean_pooling_forward_shape():
+    model = CBraMod(
+        n_chans=30,
+        n_outputs=2,
+        n_times=400,
+        patch_size=200,
+        n_layer=1,
+        classifier_pooling="mean",
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 400))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_cbramod_rejects_unknown_classifier_pooling():
+    with pytest.raises(ValueError, match="classifier_pooling"):
+        CBraMod(n_chans=30, n_outputs=2, n_times=256, classifier_pooling="max")
+
+
 # ---------------------------------------------------------------------------
 # FBSTCNet band-count guard
 # ---------------------------------------------------------------------------
@@ -49,6 +97,18 @@ def test_fbstcnet_rejects_mismatched_band_count():
             sfreq=200.0,
             n_bands=12,
             bands=[(4.0, 8.0), (8.0, 12.0)],
+        )
+
+
+def test_fbstcnet_rejects_invalid_grouped_spatial_width():
+    with pytest.raises(ValueError, match="F2 must be divisible by F1"):
+        FBSTCNet(
+            n_chans=30,
+            n_outputs=2,
+            n_times=256,
+            sfreq=200.0,
+            F1=32,
+            F2=48,
         )
 
 
@@ -194,3 +254,28 @@ def test_build_model_passes_cheby2_params_to_fbstcnet():
     assert params["order"] == 6
     assert params["stopband_ripple_db"] == 40.0
     assert params["transition_bw_hz"] == 1.5
+
+
+def test_build_model_passes_attention_pooling_to_deformer():
+    model = build_model(
+        "deformer_lite",
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        pooling="attention",
+        classifier_hidden_dim=8,
+    )
+    assert model.pooling == "attention"
+    assert model.attention_pool is not None
+
+
+def test_build_model_passes_classifier_pooling_to_cbramod():
+    model = build_model(
+        "cbramod",
+        n_channels=30,
+        n_times=400,
+        n_classes=2,
+        n_layer=1,
+        classifier_pooling="mean",
+    )
+    assert model.classifier_pooling == "mean"
