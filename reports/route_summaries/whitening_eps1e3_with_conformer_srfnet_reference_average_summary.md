@@ -1,0 +1,19 @@
+# whitening_eps1e3_with_conformer_srfnet_reference_average Summary
+
+route_id: whitening_eps1e3_with_conformer_srfnet_reference_average
+route_status: CANDIDATE
+audit_decision: PASS
+gate: candidate
+primary_metric: exact_single_crop_expected_BA
+primary_metric_value: 0.657988
+decision: PASS
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/whitening_eps1e3_with_conformer_srfnet_reference_average.yaml --run outputs/score_fusion_full/20260516_135417/whitening_eps1e3_with_conformer_srfnet_reference_average --gate candidate
+dataset: train_v1
+split: p1_seed42_fold0
+source_split: route_component_split_v1
+seed: 42
+protocol: p1_repeated_group_kfold
+risk notes: score-fusion candidate assembled from PASS component score matrices with committed compact component evidence; handcrafted component routes remain IDEA because no real handcrafted score artifact exists.
+audit_report_path: reports/route_summaries/evidence/whitening_eps1e3_with_conformer_srfnet_reference_average_audit_report.json
+manifest_path: reports/route_summaries/evidence/whitening_eps1e3_with_conformer_srfnet_reference_average_manifest.json
+manifest_sha256: e8c7fdf34f95736ba7d5ca41425e04e25223abdf6cc758f9a13a0cc12f89125e

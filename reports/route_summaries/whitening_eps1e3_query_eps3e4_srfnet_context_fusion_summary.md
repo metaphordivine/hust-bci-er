@@ -1,0 +1,19 @@
+# whitening_eps1e3_query_eps3e4_srfnet_context_fusion Summary
+
+route_id: whitening_eps1e3_query_eps3e4_srfnet_context_fusion
+route_status: CANDIDATE
+audit_decision: PASS
+gate: candidate
+primary_metric: exact_single_crop_expected_BA
+primary_metric_value: 0.6496813333333332
+decision: PASS
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/whitening_eps1e3_query_eps3e4_srfnet_context_fusion.yaml --run outputs/score_fusion_full/20260516_135417/whitening_eps1e3_query_eps3e4_srfnet_context_fusion --gate candidate
+dataset: train_v1
+split: p1_seed42_fold0
+source_split: route_component_split_v1
+seed: 42
+protocol: p1_repeated_group_kfold
+risk notes: score-fusion candidate assembled from PASS component score matrices with committed compact component evidence; handcrafted component routes remain IDEA because no real handcrafted score artifact exists.
+audit_report_path: reports/route_summaries/evidence/whitening_eps1e3_query_eps3e4_srfnet_context_fusion_audit_report.json
+manifest_path: reports/route_summaries/evidence/whitening_eps1e3_query_eps3e4_srfnet_context_fusion_manifest.json
+manifest_sha256: 3626d6f959e223a9ac1c4a74a83ee2cec70e894569a0e7a0d43f82e35903afb9
