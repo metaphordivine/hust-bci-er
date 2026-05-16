@@ -7,7 +7,7 @@ gate: candidate
 primary_metric: exact_single_crop_expected_BA
 primary_metric_value: 0.6028840000000001
 decision: PASS
-reproduce: python scripts/repo_doctor.py experiment --route D:\hust-bci-er\configs\routes\models\sliding_window_fbstcnet.yaml --run outputs/candidate_all_models/20260516_132255/sliding_window_fbstcnet --gate candidate
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/sliding_window_fbstcnet.yaml --run outputs/candidate_all_models/20260516_132255/sliding_window_fbstcnet --gate candidate
 dataset: train_v1
 split: p1_seed42_fold0
 seed: 42

@@ -29,28 +29,28 @@ routes:
     owner: unassigned
     blocker: missing_real_candidate_run
   - route_id: ea_deformer
-    owner: unassigned
+    owner: metaphordivine
     blocker:
   - route_id: sliding_window_conformer_lite
-    owner: unassigned
+    owner: metaphordivine
     blocker:
   - route_id: sliding_window_deformer_lite
-    owner: unassigned
+    owner: metaphordivine
     blocker:
   - route_id: sliding_window_eegnet
-    owner: unassigned
+    owner: metaphordivine
     blocker:
   - route_id: sliding_window_cbramod
-    owner: unassigned
+    owner: metaphordivine
     blocker:
   - route_id: sliding_window_fbstcnet
-    owner: unassigned
+    owner: metaphordivine
     blocker:
   - route_id: sliding_window_shallow_conv_net
-    owner: unassigned
+    owner: metaphordivine
     blocker:
   - route_id: sliding_window_srfnet
-    owner: unassigned
+    owner: metaphordivine
     blocker:
   - route_id: toy_eegnet
     owner: ci

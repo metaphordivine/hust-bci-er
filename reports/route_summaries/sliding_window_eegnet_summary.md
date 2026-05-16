@@ -7,7 +7,7 @@ gate: candidate
 primary_metric: exact_single_crop_expected_BA
 primary_metric_value: 0.637912
 decision: PASS
-reproduce: python scripts/repo_doctor.py experiment --route D:\hust-bci-er\configs\routes\models\sliding_window_eegnet.yaml --run outputs/candidate_all_models/20260516_132255/sliding_window_eegnet --gate candidate
+reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/sliding_window_eegnet.yaml --run outputs/candidate_all_models/20260516_132255/sliding_window_eegnet --gate candidate
 dataset: train_v1
 split: p1_seed42_fold0
 seed: 42
