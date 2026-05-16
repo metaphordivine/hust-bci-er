@@ -15,4 +15,4 @@ protocol: p1_repeated_group_kfold
 risk notes: candidate audit passed; compact manifest/audit evidence is stored under reports.
 audit_report_path: reports/route_summaries/evidence/sliding_window_conformer_lite_audit_report.json
 manifest_path: reports/route_summaries/evidence/sliding_window_conformer_lite_manifest.json
-manifest_sha256: 9dfa332ec828298bcd558a91cf429fac42c338861928dd2fbdafceb744a02012
+manifest_sha256: d37798691064f590815025cb33ac49bdb095046fb56d54a7c13169c661c9d196
