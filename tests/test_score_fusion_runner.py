@@ -2,6 +2,9 @@ import csv
 import json
 from pathlib import Path
 
+import yaml
+
+from hust_bci_er.audit.manifest import sha256_file
 from scripts import export_component_scores, run_score_fusion_routes
 
 
@@ -101,3 +104,67 @@ def test_score_fusion_runner_writes_prediction_matrix_metric_and_manifest(tmp_pa
         "conformer_component",
         "srfnet_long_component",
     }
+
+
+def _write_source_manifest(root: Path, *, seed: int, fold: int) -> Path:
+    root.mkdir(parents=True)
+    split = {
+        "split_id": f"split_seed{seed}_fold{fold}",
+        "train_subjects": [f"train{fold}"],
+        "val_subjects": [],
+        "test_subjects": ["s1"],
+        "trial_rows": [
+            {"subject_id": f"train{fold}", "trial_id": "t0", "original_trial_id": f"train{fold}::t0", "split": "train"},
+            *[
+                {"subject_id": "s1", "trial_id": f"t{idx}", "original_trial_id": f"s1::t{idx}", "split": "test"}
+                for idx in range(8)
+            ],
+        ],
+    }
+    split_path = root / "split.yaml"
+    split_path.write_text(yaml.safe_dump(split, sort_keys=False), encoding="utf-8")
+    manifest = {
+        "seed": seed,
+        "fold": fold,
+        "split_id": split["split_id"],
+        "split_manifest_path": "split.yaml",
+        "split_sha256": sha256_file(split_path),
+    }
+    manifest_path = root / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest_path
+
+
+def test_score_fusion_manifest_merges_multiple_source_splits(tmp_path):
+    conformer_matrix = tmp_path / "conformer_score_matrix.csv"
+    srfnet_matrix = tmp_path / "srfnet_score_matrix.csv"
+    conformer_component = tmp_path / "conformer_component.csv"
+    srfnet_component = tmp_path / "srfnet_component.csv"
+    _write_score_matrix(conformer_matrix, base=0.0)
+    _write_score_matrix(srfnet_matrix, base=1.0)
+    assert export_component_scores.export_component_scores_from_score_matrix(conformer_matrix, "conformer_component", conformer_component) == 0
+    assert export_component_scores.export_component_scores_from_score_matrix(srfnet_matrix, "srfnet_long_component", srfnet_component) == 0
+    source_a = _write_source_manifest(tmp_path / "source_a", seed=42, fold=0)
+    source_b = _write_source_manifest(tmp_path / "source_b", seed=42, fold=1)
+    output_dir = tmp_path / "run"
+    rc, info = run_score_fusion_routes.assemble_score_fusion(
+        ROUTE,
+        {"conformer_component": conformer_component, "srfnet_long_component": srfnet_component},
+        output_dir,
+    )
+    assert rc == 0
+
+    run_score_fusion_routes._write_score_fusion_manifest(
+        ROUTE,
+        output_dir,
+        {"conformer_component": conformer_component, "srfnet_long_component": srfnet_component},
+        source_manifest_paths=[source_a, source_b],
+        score_matrix_evidence=info["score_matrix_evidence"],
+    )
+
+    split = yaml.safe_load((output_dir / "split_manifest.yaml").read_text(encoding="utf-8"))
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert split["status"] == "merged_source_protocol_splits"
+    assert {fold["fold"] for fold in split["fold_definitions"]} == {"seed42_fold0", "seed42_fold1"}
+    assert {str(row["fold"]) for row in split["trial_rows"]} == {"seed42_fold0", "seed42_fold1"}
+    assert manifest["score_fusion_source_evidence"]["split_evidence"] == "merged_source_protocol_splits"

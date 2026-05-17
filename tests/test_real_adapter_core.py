@@ -162,6 +162,19 @@ def test_build_score_matrix_five_fixed_crops_are_genuine():
         assert result[0][f"crop_{i}"] == f"{0.55 + i * 0.01:.8f}"
 
 
+def test_build_score_matrix_applies_p2_fixed_crop_policy():
+    rows = _make_window_rows("t1", n_windows=5, base_score=0.55)
+    result, evidence = _build_score_matrix(
+        rows,
+        crop_policy={"name": "crop3", "selection": "fixed_index", "crop_index": 2},
+        seed=42,
+    )
+    assert evidence == "synthetic"
+    assert len(result) == 1
+    assert {result[0][f"crop_{idx}"] for idx in range(5)} == {"0.57000000"}
+    assert {result[0][f"crop_{idx}_source_crop_id"] for idx in range(5)} == {"2"}
+
+
 def test_build_score_matrix_preserves_y_true():
     rows = _make_window_rows("t1", n_windows=1, y_true=0)
     result, _ = _build_score_matrix(rows, crop_policy="single", seed=42)

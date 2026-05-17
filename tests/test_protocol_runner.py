@@ -116,6 +116,20 @@ def test_protocol_execute_candidate_rejects_artifact_only_skips(tmp_path):
         )
 
 
+def test_protocol_execute_candidate_rejects_diagnostic_artifact_adapter(tmp_path):
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+
+    with pytest.raises(ValueError, match="cannot use the diagnostic artifact-only adapter"):
+        execute_protocol_jobs(
+            manifest,
+            protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+            gate="candidate",
+            allow_artifact_only=True,
+            max_jobs=1,
+        )
+
+
 def test_protocol_runner_counts_p1_and_p3_jobs():
     _, p1_jobs = build_protocol_jobs("p1", [ROUTE], seeds=[1, 2], n_folds=3)
     assert len(p1_jobs) == 6
@@ -259,6 +273,38 @@ def test_protocol_execute_max_jobs_limits_allowed_artifact_jobs(tmp_path, monkey
     assert all(item["status"] == "SKIPPED_MAX_JOBS" for item in results[1:])
 
 
+def test_p2_smoke_executes_holdout_eval_in_test_scope(tmp_path, monkeypatch):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append([str(item) for item in cmd])
+        return Completed()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        gate="smoke",
+        allow_artifact_only=True,
+        max_jobs=2,
+    )
+
+    assert results[0]["status"] == "EXECUTED_ARTIFACT"
+    assert results[1]["status"] == "EXECUTED"
+    route_command = next(cmd for cmd in commands if "scripts/run_route_job.py" in cmd)
+    assert route_command[route_command.index("--mode") + 1] == "candidate"
+
+
 def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path, monkeypatch):
     from scripts import run_route_job
     import hust_bci_er.training.real_adapter as real_adapter
@@ -298,6 +344,7 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
                 "split_manifest_path": "splits/job_split.yaml",
                 "seed": 123,
                 "expected_artifacts": ["predictions.csv"],
+                "crop_policy": {"name": "crop3", "selection": "fixed_index", "crop_index": 2},
             }
         ]
     }
@@ -339,6 +386,7 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
     assert captured["seed"] == 123
     assert captured["device"] == "cpu"
     assert captured["smoke_epochs"] == 1
+    assert captured["crop_policy"]["name"] == "crop3"
 
 
 def test_run_route_job_uses_protocol_default_device_and_data_root(tmp_path, monkeypatch):

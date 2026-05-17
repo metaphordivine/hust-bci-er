@@ -460,14 +460,19 @@ def materialize_protocol_run(
     return manifest
 
 
-def _mode_for_gate(gate: str, epochs_override: int | None) -> str:
-    """Derive the route-job run_mode from the execution gate.
+def _mode_for_job(gate: str, job: Mapping[str, Any]) -> str:
+    """Derive the route-job run_mode from the execution gate and stage.
 
     Smoke gate uses ``full_subjects`` mode to avoid candidate-only
     constraints (test-only prediction scope, epoch override rejection).
+    P2 holdout evaluation is the exception: even smoke diagnostics must
+    evaluate the materialized holdout/test split rather than validation
+    subjects, while still auditing with the smoke gate.
     Candidate gate always uses ``candidate`` mode.
     """
     if gate == "smoke":
+        if str(job.get("stage", "")) == "evaluate_holdout_crop_policy":
+            return "candidate"
         return "full_subjects"
     return "candidate"
 
@@ -558,7 +563,14 @@ def execute_protocol_jobs(
     jobs = [job for job in manifest.get("jobs", []) if isinstance(job, Mapping)]
     runnable = [job for job in jobs if "predictions.csv" in job.get("expected_artifacts", [])]
     artifact_only = [job for job in jobs if "predictions.csv" not in job.get("expected_artifacts", [])]
-    if gate == "candidate" and artifact_only and not allow_artifact_only:
+    if gate == "candidate" and artifact_only and allow_artifact_only:
+        attempted = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
+        raise ValueError(
+            "candidate protocol execution cannot use the diagnostic artifact-only adapter; "
+            "P2/P3 candidate evidence needs a formal checkpoint/selection adapter first: "
+            f"{attempted}"
+        )
+    if gate == "candidate" and artifact_only:
         skipped = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
         raise ValueError(
             "candidate protocol execution cannot skip artifact-only training/selection jobs; "
@@ -639,7 +651,7 @@ def execute_protocol_jobs(
             "--job-id",
             str(job["job_id"]),
             "--mode",
-            _mode_for_gate(gate, epochs_override),
+            _mode_for_job(gate, job),
             "--device",
             effective_device,
         ]

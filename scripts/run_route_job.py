@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             data_root=effective_data_root,
             smoke_epochs=args.epochs_override,
             device=effective_device,
+            crop_policy=job.get("crop_policy") if isinstance(job.get("crop_policy"), dict) else None,
         )
     print(json.dumps({"job_id": args.job_id, "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json)}, ensure_ascii=False))
     return 0

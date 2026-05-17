@@ -430,12 +430,20 @@ def _copy_manifest_artifact(source_manifest_path: Path, source_field: str, outpu
     return output_path
 
 
-def _write_derived_dataset_split(
+def _load_source_manifest(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_derived_dataset_manifest(
     route_data: dict[str, Any],
     output_dir: Path,
     score_matrix_path: Path,
     component_score_paths: dict[str, Path],
-) -> tuple[Path, Path]:
+) -> Path:
     rows = _read_csv(score_matrix_path)
     subjects = sorted({str(row["subject_id"]) for row in rows})
     trial_index = [
@@ -473,7 +481,18 @@ def _write_derived_dataset_split(
     }
     dataset_path = output_dir / "dataset_manifest.yaml"
     dataset_path.write_text(yaml.safe_dump(dataset, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return dataset_path
 
+
+def _write_derived_dataset_split(
+    route_data: dict[str, Any],
+    output_dir: Path,
+    score_matrix_path: Path,
+    component_score_paths: dict[str, Path],
+) -> tuple[Path, Path]:
+    rows = _read_csv(score_matrix_path)
+    dataset_path = _write_derived_dataset_manifest(route_data, output_dir, score_matrix_path, component_score_paths)
+    subjects = sorted({str(row["subject_id"]) for row in rows})
     split_rows = [
         {
             "subject_id": str(row["subject_id"]),
@@ -498,6 +517,88 @@ def _write_derived_dataset_split(
     return dataset_path, split_path
 
 
+def _source_split_path(source_manifest_path: Path) -> Path | None:
+    manifest = _load_source_manifest(source_manifest_path)
+    if manifest is None:
+        return None
+    source = _resolve_run_artifact(source_manifest_path, manifest.get("split_manifest_path"))
+    if source is not None and source.exists():
+        return source
+    return None
+
+
+def _unique_source_split_hashes(source_manifest_paths: list[Path]) -> set[str]:
+    hashes: set[str] = set()
+    for manifest_path in source_manifest_paths:
+        manifest = _load_source_manifest(manifest_path)
+        if manifest is not None and isinstance(manifest.get("split_sha256"), str):
+            hashes.add(str(manifest["split_sha256"]))
+            continue
+        split_path = _source_split_path(manifest_path)
+        if split_path is not None:
+            hashes.add(sha256_file(split_path))
+    return hashes
+
+
+def _write_merged_source_split(
+    route_data: dict[str, Any],
+    output_dir: Path,
+    source_manifest_paths: list[Path],
+) -> Path | None:
+    fold_definitions: list[dict[str, Any]] = []
+    trial_rows: list[dict[str, Any]] = []
+    used_fold_ids: set[str] = set()
+    for index, manifest_path in enumerate(source_manifest_paths):
+        manifest = _load_source_manifest(manifest_path)
+        split_path = _source_split_path(manifest_path)
+        if manifest is None or split_path is None:
+            continue
+        try:
+            split_data = yaml.safe_load(split_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(split_data, dict):
+            continue
+        seed = manifest.get("seed")
+        fold = manifest.get("fold")
+        base_fold_id = f"seed{seed}_fold{fold}" if seed is not None and fold is not None else f"source{index}"
+        fold_id = base_fold_id
+        suffix = 1
+        while fold_id in used_fold_ids:
+            suffix += 1
+            fold_id = f"{base_fold_id}_{suffix}"
+        used_fold_ids.add(fold_id)
+        fold_definitions.append(
+            {
+                "fold": fold_id,
+                "source_manifest": _display_path(manifest_path),
+                "source_split_id": str(split_data.get("split_id") or manifest.get("split_id") or ""),
+                "train_subjects": list(split_data.get("train_subjects") or []),
+                "val_subjects": list(split_data.get("val_subjects") or []),
+                "test_subjects": list(split_data.get("test_subjects") or []),
+            }
+        )
+        for row in split_data.get("trial_rows") or []:
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            item["fold"] = fold_id
+            trial_rows.append(item)
+    if not fold_definitions or not trial_rows:
+        return None
+    split = {
+        "split_id": f"{route_data['split_id']}__score_fusion_sources",
+        "subject_group_split": True,
+        "status": "merged_source_protocol_splits",
+        "description": "Merged split evidence for score-fusion output assembled from multiple source job manifests.",
+        "fold_definitions": fold_definitions,
+        "trial_rows": trial_rows,
+    }
+    split_path = output_dir / "split_manifest.yaml"
+    split_path.write_text(yaml.safe_dump(split, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return split_path
+
+
 def _write_score_fusion_manifest(
     route_path: Path,
     output_dir: Path,
@@ -514,13 +615,18 @@ def _write_score_fusion_manifest(
 
     dataset_path: Path | None = None
     split_path: Path | None = None
-    for source_manifest in source_manifest_paths:
-        if dataset_path is None:
-            dataset_path = _copy_manifest_artifact(source_manifest, "dataset_manifest_path", output_dir / "dataset_manifest.yaml")
-        if split_path is None:
-            split_path = _copy_manifest_artifact(source_manifest, "split_manifest_path", output_dir / "split_manifest.yaml")
-        if dataset_path is not None and split_path is not None:
-            break
+    unique_split_hashes = _unique_source_split_hashes(source_manifest_paths)
+    if len(source_manifest_paths) > 1 and len(unique_split_hashes) > 1:
+        dataset_path = _write_derived_dataset_manifest(route_data, output_dir, score_matrix_path, component_score_paths)
+        split_path = _write_merged_source_split(route_data, output_dir, source_manifest_paths)
+    else:
+        for source_manifest in source_manifest_paths:
+            if dataset_path is None:
+                dataset_path = _copy_manifest_artifact(source_manifest, "dataset_manifest_path", output_dir / "dataset_manifest.yaml")
+            if split_path is None:
+                split_path = _copy_manifest_artifact(source_manifest, "split_manifest_path", output_dir / "split_manifest.yaml")
+            if dataset_path is not None and split_path is not None:
+                break
     if dataset_path is None or split_path is None:
         dataset_path, split_path = _write_derived_dataset_split(route_data, output_dir, score_matrix_path, component_score_paths)
 
@@ -589,6 +695,11 @@ def _write_score_fusion_manifest(
             }
             for path in source_manifest_paths
         ]
+    manifest["score_fusion_source_evidence"] = {
+        "source_manifest_count": len(source_manifest_paths),
+        "unique_source_split_count": len(unique_split_hashes),
+        "split_evidence": "merged_source_protocol_splits" if len(unique_split_hashes) > 1 else ("copied_source_split" if source_manifest_paths else "derived_component_scores_only"),
+    }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return output_dir / "manifest.json"
 
@@ -649,12 +760,16 @@ def main(argv: list[str] | None = None) -> int:
 
         for comp_id in components:
             expected = component_scores_dir / f"{comp_id}.csv"
+            base_route = base_route_for_component(comp_id)
             if expected.exists():
                 component_scores[comp_id] = expected
+                if args.export_missing and args.base_runs_dir and base_route is not None:
+                    for source in find_component_source_artifacts(args.base_runs_dir / base_route):
+                        if source.manifest_path is not None and source.manifest_path not in source_manifest_paths:
+                            source_manifest_paths.append(source.manifest_path)
                 continue
 
             # Try to export from base route predictions
-            base_route = base_route_for_component(comp_id)
             if base_route is None:
                 print(f"  {comp_id}: no base route mapping (skip)")
                 missing.append(comp_id)
@@ -705,7 +820,11 @@ def main(argv: list[str] | None = None) -> int:
                 score_matrix_evidence=str(assembly_info.get("score_matrix_evidence") or "synthetic"),
             )
 
-        if rc == 0 and args.audit:
+        if rc == 0 and args.audit and not source_manifest_paths:
+            result["status"] = "AUDIT_BLOCKED_NO_SOURCE_MANIFEST"
+            result["reason"] = "--audit requires source run manifests; pre-exported component CSVs only produce diagnostic artifacts"
+
+        if rc == 0 and args.audit and source_manifest_paths:
             audit_proc = subprocess.run(
                 [
                     sys.executable,
