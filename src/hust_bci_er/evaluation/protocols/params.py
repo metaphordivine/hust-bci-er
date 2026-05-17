@@ -84,7 +84,9 @@ def param_grid_from_search_space(search_space: Mapping[str, Any]) -> list[dict[s
 
     The accepted shape matches ``scripts/hparam_search.py``:
 
-    ``parameters.<dot.path>.coarse`` or ``parameters.<dot.path>.values``.
+    ``parameters.<dot.path>.values`` first, otherwise ``coarse``, otherwise
+    ``fine``. This is a concrete one-stage candidate list, not the full
+    coarse-to-fine search process from ``scripts/hparam_search.py``.
     """
     parameters = search_space.get("parameters")
     if not isinstance(parameters, Mapping) or not parameters:

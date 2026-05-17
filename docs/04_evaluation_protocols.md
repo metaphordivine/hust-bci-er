@@ -212,7 +212,7 @@ python scripts/run_evaluation_protocol.py \
   --run-dir outputs/protocol_runs/p3_sliding_window_eegnet_<run_id>
 ```
 
-`--param-grid` 使用和 `scripts/hparam_search.py` 相同的 `parameters.<dot.path>.coarse` / `values` 形状。每个 inner job 会把对应 `param_overrides` 写入 `selection_metrics.json`；outer final 只复用这些参数选择证据，不复用 inner checkpoint 权重。`run_evaluation_protocol.py` 会拒绝 `--grid-size > 1` 但没有 `--param-grid` 的 P3 materialization，避免生成只有抽象 `param_index`、没有真实参数值的 runnable manifest。
+`--param-grid` 使用和 `scripts/hparam_search.py` 相近的 `parameters.<dot.path>.values` / `coarse` / `fine` 形状，但这里只展开一组具体候选列表，不执行 `hparam_search.py` 的 coarse-to-fine 两阶段搜索过程。单个参数 spec 的取值优先级是 `values`，否则 `coarse`，否则 `fine`；如果同一个 search-space 同时有 `coarse` 和 `fine`，P3 只会展开 `coarse`。需要 fine-stage 候选时，应传入只描述 fine 候选的独立 search-space 文件。每个 inner job 会把对应 `param_overrides` 写入 `selection_metrics.json`；outer final 只复用这些参数选择证据，不复用 inner checkpoint 权重。`run_evaluation_protocol.py` 会拒绝 `--grid-size > 1` 但没有 `--param-grid` 的 P3 materialization，避免生成只有抽象 `param_index`、没有真实参数值的 runnable manifest。
 
 ## 怎么选择协议
 

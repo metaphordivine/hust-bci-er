@@ -264,9 +264,10 @@ def main(argv: list[str] | None = None) -> int:
     route_data = load_route(route_path)
     adapter_name = route_adapter_name(route_data)
     split_path = protocol_root / str(job["split_manifest_path"])
+    reuse_checkpoint_value = job.get("reuse_checkpoint_path")
     reuse_checkpoint_path = (
-        _required_protocol_path(protocol_root, job.get("reuse_checkpoint_path"), field="reuse_checkpoint_path")
-        if "reuse_checkpoint_path" in job
+        _required_protocol_path(protocol_root, reuse_checkpoint_value, field="reuse_checkpoint_path")
+        if reuse_checkpoint_value is not None
         else None
     )
     selection_artifacts = _selection_artifacts(protocol_root, job)

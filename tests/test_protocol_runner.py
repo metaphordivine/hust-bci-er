@@ -495,6 +495,79 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
     assert captured["reuse_checkpoint_path"] == checkpoint
 
 
+def test_run_route_job_treats_null_reuse_checkpoint_as_absent(tmp_path, monkeypatch):
+    from scripts import run_route_job
+    import hust_bci_er.training.real_adapter as real_adapter
+
+    route = tmp_path / "route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: tmp_real",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: base_split",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: shallow_conv_net}",
+                "adaptation: none",
+                "training: {trainer: torch_classifier, job_adapter: torch_classifier, epochs: 1, batch_size: 2, optimizer: {name: adamw, lr: 0.001}, loss: cross_entropy}",
+                "inference: {top4: true, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: exact_single_crop_expected_BA}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "protocol"
+    split = run_dir / "splits" / "job_split.yaml"
+    split.parent.mkdir(parents=True)
+    split.write_text("split_id: job_split\ntrain_subjects: [s1]\nval_subjects: [s2]\ntest_subjects: [s3]\ntrial_rows: []\n", encoding="utf-8")
+    protocol = {
+        "jobs": [
+            {
+                "job_id": "job1",
+                "route_config": route.as_posix(),
+                "split_id": "job_split",
+                "split_manifest_path": "splits/job_split.yaml",
+                "seed": 123,
+                "expected_artifacts": ["predictions.csv"],
+                "reuse_checkpoint_path": None,
+            }
+        ]
+    }
+    protocol_path = run_dir / "protocol_run_manifest.json"
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+    captured = {}
+
+    class Artifacts:
+        run_dir = tmp_path / "out" / "job1"
+        manifest_json = run_dir / "manifest.json"
+
+    def fake_run_real_classifier_route(**kwargs):
+        captured.update(kwargs)
+        Artifacts.run_dir.mkdir(parents=True)
+        Artifacts.manifest_json.write_text("{}", encoding="utf-8")
+        return Artifacts
+
+    monkeypatch.setattr(real_adapter, "run_real_classifier_route", fake_run_real_classifier_route)
+
+    assert run_route_job.main(
+        [
+            "--protocol-run",
+            protocol_path.as_posix(),
+            "--job-id",
+            "job1",
+            "--output-root",
+            (tmp_path / "out").as_posix(),
+        ]
+    ) == 0
+    assert captured["split_manifest_path"] == split
+    assert captured["reuse_checkpoint_path"] is None
+
+
 def test_run_route_job_rejects_missing_declared_reuse_checkpoint(tmp_path, monkeypatch):
     from scripts import run_route_job
     import hust_bci_er.training.real_adapter as real_adapter
