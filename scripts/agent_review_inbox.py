@@ -127,7 +127,21 @@ def strip_useful_suffix(body: str) -> str:
     return re.sub(r"(?is)\n?\s*Useful\? React with.*$", "", body).strip()
 
 
+def severity_from_badge(body: str) -> str | None:
+    lowered = body.lower()
+    if re.search(r"(?:p0|p1)\s+badge|badge/(?:p0|p1)(?:\b|-)|p1-orange", lowered):
+        return "S0"
+    if re.search(r"p2\s+badge|badge/p2(?:\b|-)|p2-yellow", lowered):
+        return "S1"
+    if re.search(r"p3\s+badge|badge/p3(?:\b|-)", lowered):
+        return "S2"
+    return None
+
+
 def infer_review_severity(body: str) -> str:
+    badge_severity = severity_from_badge(body)
+    if badge_severity is not None:
+        return badge_severity
     lowered = body.lower()
     if any(marker in lowered for marker in ("🔴", "[p0]", "p0:", "[p1]", "p1:", "s0", "高风险", "blocking", "no-go", "阻断", "阻塞")):
         return "S0"
@@ -361,6 +375,19 @@ def parse_copilot_digest_comment(body: str, pr: int, comment_ref: str) -> list[d
             )
         )
     return issues
+
+
+def looks_like_copilot_digest(text: str) -> bool:
+    stripped = text.strip()
+    lowered = stripped.lower()
+    if not stripped:
+        return False
+    if stripped.startswith("> @copilot"):
+        return True
+    if "copilot" in lowered and any(marker in stripped for marker in ("###", "| 优先级 |", "**1.", "⚠️", "🔴", "🟠", "🟡")):
+        return True
+    digest_markers = sum(1 for marker in ("### 🔴", "### 🟠", "### 🟡", "| 优先级 |", "**1.", "> **⚠️") if marker in stripped)
+    return digest_markers >= 2
 
 
 def _json_from_text(text: str) -> dict[str, Any]:
@@ -640,7 +667,23 @@ def ingest_review_inbox(
             raise RuntimeError(f"failed to fetch PR review comments and no --review-file fallback was provided: {fetch_error}") from exc
 
     if review_file is not None:
-        issues.extend(parse_text(review_file.read_text(encoding="utf-8"), source=f"review-file:{review_file.as_posix()}"))
+        review_text = review_file.read_text(encoding="utf-8")
+        if looks_like_copilot_digest(review_text):
+            issues.extend(
+                parse_copilot_digest(
+                    review_text,
+                    pr,
+                    f"review-file:{review_file.as_posix()}",
+                    digest_engine=digest_engine,
+                    deepseek_api_key=deepseek_api_key,
+                    deepseek_model=deepseek_model,
+                    deepseek_base_url=deepseek_base_url,
+                    deepseek_timeout=deepseek_timeout,
+                    require_deepseek=require_deepseek,
+                )
+            )
+        else:
+            issues.extend(parse_text(review_text, source=f"review-file:{review_file.as_posix()}"))
     issues = dedupe_issues(issues)
     if fetch_error:
         (out_dir / "fetch_error.txt").write_text(fetch_error + "\n", encoding="utf-8")

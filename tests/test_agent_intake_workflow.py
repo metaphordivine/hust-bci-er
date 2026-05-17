@@ -13,6 +13,7 @@ from scripts.agent_review_inbox import (
     infer_review_severity,
     ingest_review_inbox,
     issues_from_payload,
+    looks_like_copilot_digest,
     parse_copilot_digest,
 )
 from scripts.agent_session import init_session
@@ -375,6 +376,77 @@ def test_inline_review_thread_preserves_metadata_and_strips_useful_suffix(monkey
     assert issue["outdated"] is True
 
 
+def test_real_inline_badge_markdown_maps_to_expected_severity(monkeypatch, tmp_path):
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "nodes": [
+                            {
+                                "id": "THREAD_badge_p1",
+                                "isResolved": False,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub> JSON output issue**",
+                                            "path": "scripts/agent_intake.py",
+                                            "line": 99,
+                                            "author": {"login": "chatgpt-codex-connector"},
+                                            "createdAt": "2026-05-17T00:00:00Z",
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "THREAD_badge_p2",
+                                "isResolved": False,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub> Medium issue**",
+                                            "path": "scripts/agent_review_inbox.py",
+                                            "line": 101,
+                                            "author": {"login": "chatgpt-codex-connector"},
+                                            "createdAt": "2026-05-17T00:01:00Z",
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "THREAD_badge_p3",
+                                "isResolved": False,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "**<sub><sub>![P3 Badge](https://img.shields.io/badge/P3-blue?style=flat)</sub></sub> Low issue**",
+                                            "path": "scripts/agent_review_inbox.py",
+                                            "line": 102,
+                                            "author": {"login": "chatgpt-codex-connector"},
+                                            "createdAt": "2026-05-17T00:02:00Z",
+                                        }
+                                    ]
+                                },
+                            },
+                        ]
+                    },
+                    "comments": {"nodes": []},
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr("scripts.agent_review_inbox.fetch_pr_review_threads", lambda pr: payload)
+    issues = ingest_review_inbox(18, tmp_path)
+    by_thread = {issue["thread_id"]: issue["severity"] for issue in issues}
+    assert by_thread["THREAD_badge_p1"] == "S0"
+    assert by_thread["THREAD_badge_p2"] == "S1"
+    assert by_thread["THREAD_badge_p3"] == "S2"
+
+
 def test_copilot_digest_comment_splits_multiple_issues():
     body = """> @copilot review
 
@@ -520,6 +592,60 @@ def test_copilot_digest_deepseek_engine_can_split(monkeypatch):
     assert captured["payload"]["model"] == "deepseek-v4-flash"
     assert issues[0]["source"].endswith(":deepseek")
     assert issues[0]["files_hint"] == ["scripts/agent_review_inbox.py"]
+
+
+def test_review_file_copilot_digest_uses_digest_parser(monkeypatch, tmp_path):
+    review_file = tmp_path / "copilot.md"
+    review_file.write_text(
+        """> @copilot review
+
+### 🔴 高风险
+
+**1. `scripts/agent_intake.py`：JSON 输出被破坏**
+
+需要保持 `--json` 为纯 JSON。
+
+### 🟠 中风险
+
+**2. `scripts/agent_review_inbox.py`：digest fallback 合并问题**
+
+需要拆成多个 issue。
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "scripts.agent_review_inbox.fetch_pr_review_threads",
+        lambda pr: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    issues = ingest_review_inbox(18, tmp_path / "out", review_file=review_file)
+    assert looks_like_copilot_digest(review_file.read_text(encoding="utf-8")) is True
+    assert len(issues) >= 2
+    assert {issue["kind"] for issue in issues} == {"copilot_digest_comment"}
+    assert any("scripts/agent_intake.py" in issue["files_hint"] for issue in issues)
+    assert any("scripts/agent_review_inbox.py" in issue["files_hint"] for issue in issues)
+
+
+def test_review_file_structured_plan_still_uses_plan_parser(monkeypatch, tmp_path):
+    review_file = tmp_path / "plan.md"
+    review_file.write_text(
+        """
+### S0-1 first issue
+Problem in scripts/agent_intake.py.
+
+### S0-2 second issue
+Problem in scripts/agent_review_inbox.py.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "scripts.agent_review_inbox.fetch_pr_review_threads",
+        lambda pr: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    issues = ingest_review_inbox(18, tmp_path / "out", review_file=review_file)
+    assert looks_like_copilot_digest(review_file.read_text(encoding="utf-8")) is False
+    assert {issue["id"] for issue in issues} == {"S0-1", "S0-2"}
 
 
 def test_review_inbox_filters_pr_level_comments_by_default():
