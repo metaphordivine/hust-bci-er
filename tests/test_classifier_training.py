@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -5,6 +7,7 @@ torch = pytest.importorskip("torch")
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+import hust_bci_er.training.classifier as classifier_module
 import hust_bci_er.training.reproducibility as reproducibility_module
 from hust_bci_er.training.classifier import (
     ClassifierTrainConfig,
@@ -166,6 +169,46 @@ def test_fit_classifier_resumes_from_epoch_checkpoint(tmp_path):
     assert result.checkpoint_epoch == 3
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     assert payload["status"] == "completed"
+
+
+def test_save_training_checkpoint_retries_windows_replace_lock(monkeypatch, tmp_path):
+    checkpoint_path = tmp_path / "training_checkpoint.pt"
+    model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+    config = ClassifierTrainConfig(epochs=1, seed=0, optimizer=OptimizerConfig(name="sgd", lr=0.01, momentum=0.0))
+    optimizer = build_optimizer(model.parameters(), config.optimizer)
+    metrics = EpochMetrics(epoch=1, train_loss=0.5, train_accuracy=0.75, n_train=4)
+    path_type = type(checkpoint_path)
+    original_replace = path_type.replace
+    attempts: list[str] = []
+
+    def flaky_replace(self: Path, target: Path) -> Path:
+        if Path(target) == checkpoint_path and not attempts:
+            attempts.append(self.name)
+            raise PermissionError("simulated Windows file lock")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(classifier_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(path_type, "replace", flaky_replace)
+
+    save_training_checkpoint(
+        checkpoint_path,
+        model=model,
+        optimizer=optimizer,
+        config=config,
+        epoch=1,
+        history=[metrics],
+        best_epoch=1,
+        best_metric=0.5,
+        best_state_dict=clone_state_dict(model),
+        stale_epochs=0,
+        stopped_early=False,
+        status="running",
+    )
+
+    assert attempts
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert payload["epoch"] == 1
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_fit_classifier_rejects_val_monitor_without_val_loader():

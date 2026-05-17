@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import time
+import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -510,9 +513,32 @@ def save_training_checkpoint(
         "cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + ".tmp")
-    torch.save(payload, tmp_path)
-    tmp_path.replace(path)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        torch.save(payload, tmp_path)
+        replace_checkpoint_file(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except PermissionError:
+                pass
+
+
+def replace_checkpoint_file(tmp_path: Path, path: Path, *, attempts: int = 20, delay_sec: float = 0.05) -> None:
+    """Replace a checkpoint path with short retries for Windows file locks."""
+    last_error: PermissionError | None = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            tmp_path.replace(path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                break
+            time.sleep(float(delay_sec) * (attempt + 1))
+    assert last_error is not None
+    raise last_error
 
 
 def load_training_checkpoint(path: Path, *, config: ClassifierTrainConfig) -> Mapping[str, Any]:
