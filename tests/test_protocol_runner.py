@@ -190,6 +190,75 @@ def test_protocol_runner_materializes_formal_p1_splits_from_hust_data_root(tmp_p
     assert {row["split"] for row in split_payload["trial_rows"]} == {"train", "val", "test"}
 
 
+def test_protocol_runner_materializes_formal_p2_splits_from_hust_data_root(tmp_path):
+    data_root = write_hust_data_root(tmp_path / "data", subjects_per_cohort=8)
+
+    manifest = materialize_protocol_run(
+        "p2",
+        [ROUTE],
+        run_dir=tmp_path / "p2_formal",
+        data_root=data_root,
+        n_holdout_subjects=4,
+    )
+    split_payload = yaml.safe_load((tmp_path / "p2_formal" / manifest["jobs"][0]["split_manifest_path"]).read_text(encoding="utf-8"))
+
+    assert manifest["split_contract_evidence"] == "formal_subject_trial_rows"
+    assert split_payload["status"] == "ready"
+    assert len(split_payload["test_subjects"]) == 4
+    assert split_payload["train_subjects"]
+    assert split_payload["val_subjects"]
+    assert set(split_payload["train_subjects"]).isdisjoint(split_payload["test_subjects"])
+    assert {row["split"] for row in split_payload["trial_rows"]} == {"train", "val", "test"}
+
+
+def test_protocol_runner_materializes_formal_p3_inner_and_final_splits_from_hust_data_root(tmp_path):
+    data_root = write_hust_data_root(tmp_path / "data", subjects_per_cohort=8)
+
+    manifest = materialize_protocol_run(
+        "p3",
+        [ROUTE],
+        run_dir=tmp_path / "p3_formal",
+        data_root=data_root,
+        outer_folds=2,
+        inner_folds=2,
+        grid_sizes={"ea_deformer": 1},
+    )
+    inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
+    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_train_eval")
+    inner_split = yaml.safe_load((tmp_path / "p3_formal" / inner_job["split_manifest_path"]).read_text(encoding="utf-8"))
+    final_split = yaml.safe_load((tmp_path / "p3_formal" / final_job["split_manifest_path"]).read_text(encoding="utf-8"))
+
+    assert inner_split["status"] == "ready"
+    assert final_split["status"] == "ready"
+    assert inner_split["train_subjects"] and inner_split["val_subjects"] and inner_split["test_subjects"]
+    assert final_split["train_subjects"] and final_split["val_subjects"] and final_split["test_subjects"]
+    assert set(final_split["train_subjects"]).isdisjoint(final_split["test_subjects"])
+
+
+def test_protocol_execute_max_jobs_limits_allowed_artifact_jobs(tmp_path, monkeypatch):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: Completed())
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        allow_artifact_only=True,
+        max_jobs=1,
+    )
+
+    assert results[0]["status"] == "EXECUTED_ARTIFACT"
+    assert all(item["status"] == "SKIPPED_MAX_JOBS" for item in results[1:])
+
+
 def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path, monkeypatch):
     from scripts import run_route_job
     import hust_bci_er.training.real_adapter as real_adapter

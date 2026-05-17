@@ -84,13 +84,17 @@ def main(argv: list[str] | None = None) -> int:
             epochs_override=args.execute_epochs_override,
             allow_artifact_only=args.allow_artifact_only,
         )
-        payload["executed_jobs"] = sum(1 for item in results if item.get("status") == "EXECUTED")
+        executed = sum(1 for item in results if item.get("status") in {"EXECUTED", "EXECUTED_ARTIFACT"})
+        payload["executed_jobs"] = executed
         payload["skipped_artifact_only_jobs"] = sum(1 for item in results if item.get("status") == "SKIPPED_ARTIFACT_ONLY")
         payload["failed_jobs"] = sum(
             1
             for item in results
-            if item.get("status") == "EXECUTED"
-            and (item["command_returncode"] != 0 or item["audit_returncode"] not in {0, None})
+            if item.get("status") == "FAILED_ARTIFACT"
+            or (
+                item.get("status") in {"EXECUTED", "EXECUTED_ARTIFACT"}
+                and (item.get("command_returncode") != 0 or item.get("audit_returncode") not in {0, None})
+            )
         )
         if payload["failed_jobs"]:
             print(json.dumps(payload, ensure_ascii=False))

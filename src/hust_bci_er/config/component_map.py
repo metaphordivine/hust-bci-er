@@ -40,25 +40,26 @@ _COMPONENT_BINDINGS: tuple[ComponentRouteBinding, ...] = (
         "fixed_crop_ea_fbstcnet",
         "FBSTCNet fixed-crop EA base route",
     ),
-    # Whitening components: same SRFNet architecture with different
-    # preprocessing.  When these are assembled the orchestrator re-runs
-    # the base route with overridden preprocessing, or reads from a
-    # separately materialized run.
+    # Whitening components require SRFNet + whitening preprocessing.
+    # There is no standalone route config for these yet; the
+    # component-score CSV must either come from a manually materialized
+    # run with overridden preprocessing, or a dedicated whitening route
+    # config must be added under configs/routes/models/.
     ComponentRouteBinding(
         "srfnet_whitening_eps1e3_component",
-        "sliding_window_srfnet",
-        "SRFNet with whitening_eps1e3 preprocessing (uses base route, preprocessing override)",
+        None,
+        "SRFNet with whitening_eps1e3 preprocessing; needs a dedicated route config or manually materialized run",
     ),
     ComponentRouteBinding(
         "srfnet_whitening_eps3e4_component",
-        "sliding_window_srfnet",
-        "SRFNet with whitening_eps3e4 preprocessing (uses base route, preprocessing override)",
+        None,
+        "SRFNet with whitening_eps3e4 preprocessing; needs a dedicated route config or manually materialized run",
     ),
     # Handcrafted features are produced by feature extraction, not model training.
     ComponentRouteBinding(
         "handcrafted_feature_component",
         None,
-        "Handcrafted Riemannian/bandpower features; no model training required",
+        "Handcrafted Riemannian/bandpower features; no model training required; needs an external CSV producer",
     ),
 )
 

@@ -1,9 +1,9 @@
 """Execute one materialized artifact-only protocol job (P2 train_holdout, P3 inner_select).
 
-These protocol stages produce artifacts (checkpoints, selection metrics)
-rather than prediction CSVs.  This adapter provides the minimal execution
-path for diagnostic/smoke evaluation; full candidate-grade P2/P3 evidence
-still requires the formal training/selection adapter.
+These stages produce artifacts (checkpoints, selection metrics) rather than
+prediction CSVs.  This adapter provides a diagnostic execution path for
+smoke validation; full candidate-grade P2/P3 evidence needs the formal
+training adapter that saves true PyTorch state_dicts.
 
 Usage (called from protocol runner, not directly)::
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -48,48 +49,11 @@ def _run_train_holdout(
     epochs_override: int | None,
     protocol_manifest: dict,
 ) -> int:
-    """P2 train_holdout_model: train once and export checkpoint."""
-    from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
+    """P2 train_holdout_model: train on non-holdout subjects, export artifacts.
 
-    artifacts = run_real_classifier_route(
-        route_config_path=route_path,
-        run_dir=run_dir,
-        run_mode="full_subjects",
-        split_id=str(job["split_id"]),
-        split_manifest_path=split_path,
-        seed=int(job["seed"]),
-        command=[
-            "python",
-            "scripts/run_artifact_job.py",
-            "--protocol-run",
-            str(protocol_manifest.get("_protocol_run_manifest_path", "")),
-            "--job-id",
-            str(job["job_id"]),
-        ],
-        data_root=data_root,
-        smoke_epochs=epochs_override,
-        device=device,
-    )
-    print(json.dumps({"job_id": job["job_id"], "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json)}, ensure_ascii=False))
-    return 0
-
-
-def _run_inner_select(
-    job: dict,
-    *,
-    route_path: Path,
-    run_dir: Path,
-    split_path: Path,
-    device: str,
-    data_root: Path | None,
-    epochs_override: int | None,
-    protocol_manifest: dict,
-) -> int:
-    """P3 inner_select: train one config point and record selection metrics.
-
-    Full grid-search inner selection requires the formal P3 adapter.
-    This minimal path trains a single config and writes a placeholder
-    selection_metrics.json for smoke validation.
+    Produces: config_snapshot.yaml, checkpoint.local, train_manifest.json.
+    The checkpoint is a diagnostic shim (not a real state_dict); candidate
+    P2 needs formal adapter with torch.save.
     """
     from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
 
@@ -113,20 +77,106 @@ def _run_inner_select(
         device=device,
     )
 
+    # Write config_snapshot.yaml (copy route config)
+    shutil.copyfile(route_path, run_dir / "config_snapshot.yaml")
+
+    # Write checkpoint.local — diagnostic shim pointing to model_state
+    model_state_path = run_dir / "model_state.local.json"
+    model_state = {}
+    if model_state_path.exists():
+        model_state = json.loads(model_state_path.read_text(encoding="utf-8"))
+    checkpoint = {
+        "adapter_note": "diagnostic checkpoint shim for P2 train_holdout; candidate P2 needs torch.save state_dict",
+        "job_id": str(job["job_id"]),
+        "route_id": str(job["route_id"]),
+        "run_dir": str(artifacts.run_dir),
+        "model_state": model_state,
+    }
+    (run_dir / "checkpoint.local").write_text(json.dumps(checkpoint, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    # Write train_manifest.json
+    train_manifest = {
+        "job_id": str(job["job_id"]),
+        "route_id": str(job["route_id"]),
+        "stage": "train_holdout_model",
+        "protocol": str(job.get("protocol", "")),
+        "seed": int(job["seed"]),
+        "split_id": str(job["split_id"]),
+        "run_dir": str(artifacts.run_dir),
+        "manifest_json": str(artifacts.manifest_json),
+        "primary_metric": str(artifacts.metric_report.get("primary_metric", "")),
+        "note": "diagnostic train_holdout run; predictions.csv written incidentally but not required for this stage",
+    }
+    (run_dir / "train_manifest.json").write_text(json.dumps(train_manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    print(json.dumps(
+        {"job_id": job["job_id"], "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json)},
+        ensure_ascii=False,
+    ))
+    return 0
+
+
+def _run_inner_select(
+    job: dict,
+    *,
+    route_path: Path,
+    run_dir: Path,
+    split_path: Path,
+    device: str,
+    data_root: Path | None,
+    epochs_override: int | None,
+    protocol_manifest: dict,
+) -> int:
+    """P3 inner_select: train single config point, record selection metrics.
+
+    Produces: config_snapshot.yaml, selection_metrics.json, manifest.json.
+    Full grid-search inner selection requires the formal P3 adapter.
+    """
+    from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
+
+    artifacts = run_real_classifier_route(
+        route_config_path=route_path,
+        run_dir=run_dir,
+        run_mode="full_subjects",
+        split_id=str(job["split_id"]),
+        split_manifest_path=split_path,
+        seed=int(job["seed"]),
+        command=[
+            "python",
+            "scripts/run_artifact_job.py",
+            "--protocol-run",
+            str(protocol_manifest.get("_protocol_run_manifest_path", "")),
+            "--job-id",
+            str(job["job_id"]),
+        ],
+        data_root=data_root,
+        smoke_epochs=epochs_override,
+        device=device,
+    )
+
+    # Write config_snapshot.yaml (copy route config)
+    shutil.copyfile(route_path, run_dir / "config_snapshot.yaml")
+
+    # Write selection_metrics.json from actual training metrics
+    primary_metric = str(artifacts.metric_report.get("primary_metric", ""))
+    metrics = artifacts.metric_report.get("metrics", {})
     selection_metrics = {
         "job_id": str(job["job_id"]),
         "route_id": str(job["route_id"]),
         "param_index": job.get("param_index"),
         "outer_fold": job.get("outer_fold"),
         "inner_fold": job.get("inner_fold"),
-        "primary_metric": str(artifacts.metric_report.get("primary_metric", "")),
-        "metric_value": artifacts.metric_report.get("metrics", {}).get(
-            str(artifacts.metric_report.get("primary_metric", "")),
-        ),
+        "primary_metric": primary_metric,
+        "metric_value": metrics.get(primary_metric) if isinstance(metrics, dict) else None,
+        "metrics": metrics,
         "note": "minimal single-config inner_select; full P3 grid search requires formal adapter",
     }
     (run_dir / "selection_metrics.json").write_text(json.dumps(selection_metrics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(json.dumps({"job_id": job["job_id"], "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json)}, ensure_ascii=False))
+
+    print(json.dumps(
+        {"job_id": job["job_id"], "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json)},
+        ensure_ascii=False,
+    ))
     return 0
 
 
@@ -134,6 +184,17 @@ ARTIFACT_HANDLERS = {
     "train_holdout_model": _run_train_holdout,
     "inner_select": _run_inner_select,
 }
+
+
+def _verify_expected_artifacts(job: dict, run_dir: Path) -> list[str]:
+    expected = job.get("expected_artifacts") or []
+    missing: list[str] = []
+    for name in expected:
+        if not isinstance(name, str) or not name:
+            continue
+        if not (run_dir / name).exists():
+            missing.append(name)
+    return missing
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -163,7 +224,11 @@ def main(argv: list[str] | None = None) -> int:
     if stage not in ARTIFACT_HANDLERS:
         supported = ", ".join(sorted(ARTIFACT_HANDLERS))
         print(json.dumps(
-            {"job_id": args.job_id, "status": "UNSUPPORTED_STAGE", "reason": f"artifact stage {stage} not supported; supported: {supported}"},
+            {
+                "job_id": args.job_id,
+                "status": "UNSUPPORTED_STAGE",
+                "reason": f"artifact stage {stage} not supported; supported: {supported}",
+            },
             ensure_ascii=False,
         ))
         return 1
@@ -171,10 +236,10 @@ def main(argv: list[str] | None = None) -> int:
     protocol_root = args.protocol_run.resolve().parent
     run_dir = protocol_root / "job_runs" / args.job_id
     route_path = ROOT / job["route_config"]
-    split_path = protocol_root / str(job["split_manifest_path"])
+    split_path = protocol_root / str(job.get("split_manifest_path", ""))
 
     handler = ARTIFACT_HANDLERS[stage]
-    return handler(
+    rc = handler(
         job,
         route_path=route_path,
         run_dir=run_dir,
@@ -184,6 +249,20 @@ def main(argv: list[str] | None = None) -> int:
         epochs_override=args.epochs_override,
         protocol_manifest=protocol_manifest,
     )
+    if rc != 0:
+        return rc
+    missing = _verify_expected_artifacts(job, run_dir)
+    if missing:
+        print(json.dumps(
+            {
+                "job_id": args.job_id,
+                "status": "MISSING_EXPECTED_ARTIFACTS",
+                "missing_artifacts": missing,
+            },
+            ensure_ascii=False,
+        ), file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
