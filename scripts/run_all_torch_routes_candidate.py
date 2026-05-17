@@ -183,6 +183,20 @@ def main(argv: list[str] | None = None) -> int:
     failed = 0
     skipped_existing = 0
 
+    def write_summary() -> None:
+        summary: dict[str, Any] = {
+            "total": len(route_paths),
+            "passed": passed,
+            "failed": failed,
+            "skipped_existing": skipped_existing,
+            "seeds": list(args.seeds),
+            "n_folds": args.n_folds,
+            "device": args.device,
+            "data_root": str(args.data_root),
+            "results": results,
+        }
+        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
     for idx, (route_id, route_path) in enumerate(route_paths, 1):
         print(f"[{idx}/{len(route_paths)}] {route_id} ... ", end="", flush=True)
         existing = existing_results.get(route_id)
@@ -193,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             passed += 1
             skipped_existing += 1
             print("SKIP existing PASS")
+            write_summary()
             continue
         result = run_route_candidate(
             route_path,
@@ -209,19 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             failed += 1
             print(f"FAIL (rc={result['returncode']})")
-
-    summary: dict[str, Any] = {
-        "total": len(route_paths),
-        "passed": passed,
-        "failed": failed,
-        "skipped_existing": skipped_existing,
-        "seeds": list(args.seeds),
-        "n_folds": args.n_folds,
-        "device": args.device,
-        "data_root": str(args.data_root),
-        "results": results,
-    }
-    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        write_summary()
     print(f"\nCandidate summary: {passed} passed, {failed} failed  →  {summary_path.relative_to(ROOT)}")
     return 0 if failed == 0 else 1
 

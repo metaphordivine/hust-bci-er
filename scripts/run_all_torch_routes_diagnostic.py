@@ -214,6 +214,20 @@ def main(argv: list[str] | None = None) -> int:
     failed = 0
     skipped_existing = 0
 
+    def write_summary() -> None:
+        summary: dict[str, Any] = {
+            "total": len(routes),
+            "passed": passed,
+            "failed": failed,
+            "skipped_existing": skipped_existing,
+            "seed": args.seed,
+            "n_folds": args.n_folds,
+            "device": args.device,
+            "data_root": str(data_root),
+            "results": results,
+        }
+        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
     for idx, route_path in enumerate(routes, 1):
         route_id = route_id_from_path(route_path)
         print(f"[{idx}/{len(routes)}] {route_id} ... ", end="", flush=True)
@@ -225,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
             passed += 1
             skipped_existing += 1
             print("SKIP existing PASS")
+            write_summary()
             continue
         result = run_route_diagnostic(
             route_path,
@@ -241,19 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             failed += 1
             print(f"FAIL (rc={result['returncode']})")
-
-    summary: dict[str, Any] = {
-        "total": len(routes),
-        "passed": passed,
-        "failed": failed,
-        "skipped_existing": skipped_existing,
-        "seed": args.seed,
-        "n_folds": args.n_folds,
-        "device": args.device,
-        "data_root": str(data_root),
-        "results": results,
-    }
-    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        write_summary()
     print(f"\nSummary: {passed} passed, {failed} failed  ->  {summary_path.relative_to(ROOT)}")
     return 0 if failed == 0 else 1
 
