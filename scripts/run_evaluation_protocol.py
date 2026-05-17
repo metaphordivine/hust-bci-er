@@ -59,6 +59,17 @@ def main(argv: list[str] | None = None) -> int:
     else:
         param_grids = {route_id: load_param_grid(path) for route_id, path in args.param_grid}
         grid_sizes = dict(args.grid_size)
+        abstract_multi_grid_routes = [
+            route_id
+            for route_id, size in grid_sizes.items()
+            if int(size) > 1 and route_id not in param_grids
+        ]
+        if abstract_multi_grid_routes:
+            parser.error(
+                "--grid-size > 1 is dry-run planning only for P3 materialization; "
+                "use --param-grid route_id=search_space.yaml for: "
+                + ", ".join(sorted(abstract_multi_grid_routes))
+            )
         grid_sizes.update({route_id: len(candidates) for route_id, candidates in param_grids.items()})
         kwargs = {
             "outer_folds": args.outer_folds,

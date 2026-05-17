@@ -202,7 +202,7 @@ python scripts/plan_evaluation_protocol.py \
   --grid-size ea_deformer=6
 ```
 
-如果已有实际参数网格，优先传入 search-space YAML，而不是只给抽象 `--grid-size`：
+`--grid-size` 只用于 `plan_evaluation_protocol.py` 的工作量估算。要 materialize 或 execute 多参数 P3，必须传入实际 search-space YAML：
 
 ```bash
 python scripts/run_evaluation_protocol.py \
@@ -212,7 +212,7 @@ python scripts/run_evaluation_protocol.py \
   --run-dir outputs/protocol_runs/p3_sliding_window_eegnet_<run_id>
 ```
 
-`--param-grid` 使用和 `scripts/hparam_search.py` 相同的 `parameters.<dot.path>.coarse` / `values` 形状。每个 inner job 会把对应 `param_overrides` 写入 `selection_metrics.json`；outer final 只复用这些参数选择证据，不复用 inner checkpoint 权重。
+`--param-grid` 使用和 `scripts/hparam_search.py` 相同的 `parameters.<dot.path>.coarse` / `values` 形状。每个 inner job 会把对应 `param_overrides` 写入 `selection_metrics.json`；outer final 只复用这些参数选择证据，不复用 inner checkpoint 权重。`run_evaluation_protocol.py` 会拒绝 `--grid-size > 1` 但没有 `--param-grid` 的 P3 materialization，避免生成只有抽象 `param_index`、没有真实参数值的 runnable manifest。
 
 ## 怎么选择协议
 

@@ -462,6 +462,17 @@ def materialize_protocol_run(
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     plan, jobs = build_protocol_jobs(protocol, route_config_paths, **kwargs)
+    if str(plan.get("protocol", "")) == "p3_nested_selection":
+        for route_id, size in (plan.get("details", {}).get("grid_sizes") or {}).items():
+            if int(size) <= 1:
+                continue
+            route_jobs = [job for job in jobs if job.route_id == str(route_id) and job.stage == "inner_select"]
+            has_concrete_param_grid = any(bool(job.param_overrides) for job in route_jobs)
+            if not has_concrete_param_grid:
+                raise ValueError(
+                    "P3 materialization with grid_size > 1 requires concrete parameter overrides "
+                    f"from --param-grid for route_id={route_id}; abstract --grid-size is only valid for dry-run planning"
+                )
     trial_rows = hust_mat_trial_index(data_root) if data_root is not None else None
     jobs = materialize_job_splits(jobs, run_dir=run_dir, trial_rows=trial_rows)
     experiment_gate_job_ids = [job.job_id for job in jobs if "predictions.csv" in job.expected_artifacts]

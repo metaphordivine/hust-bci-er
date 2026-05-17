@@ -161,13 +161,20 @@ def test_protocol_runner_counts_p1_and_p3_jobs():
 
 
 def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_path):
+    param_grid = {
+        "ea_deformer": [
+            {"training.optimizer.lr": 0.0001},
+            {"training.optimizer.lr": 0.001},
+            {"training.optimizer.lr": 0.01},
+        ]
+    }
     manifest = materialize_protocol_run(
         "p3",
         [ROUTE],
         run_dir=tmp_path / "p3_run",
         outer_folds=2,
         inner_folds=2,
-        grid_sizes={"ea_deformer": 3},
+        param_grids=param_grid,
     )
     inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
 
@@ -178,10 +185,23 @@ def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_p
     assert "seed" not in split_payload
     assert split_payload["seeds"] == [123, 124, 125]
     assert "checkpoint.pt" in inner_job["expected_artifacts"]
+    assert inner_job["param_overrides"] == {"training.optimizer.lr": 0.0001}
     final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_final_retrain")
     assert len(final_job["selection_artifact_job_ids"]) == 6
     assert all(path.endswith("selection_metrics.json") for path in final_job["selection_artifact_paths"])
     assert "reuse_checkpoint_path" not in final_job or final_job["reuse_checkpoint_path"] is None
+
+
+def test_p3_materialization_rejects_abstract_multi_param_grid(tmp_path):
+    with pytest.raises(ValueError, match="requires concrete parameter overrides"):
+        materialize_protocol_run(
+            "p3",
+            [ROUTE],
+            run_dir=tmp_path / "p3_abstract",
+            outer_folds=2,
+            inner_folds=2,
+            grid_sizes={"ea_deformer": 3},
+        )
 
 
 def test_protocol_runner_records_multiple_routes_in_shared_split_contract(tmp_path):

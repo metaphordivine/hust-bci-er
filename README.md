@@ -72,6 +72,8 @@ python scripts/plan_evaluation_protocol.py --protocol p3 --route-config configs/
 python scripts/run_evaluation_protocol.py --protocol p2 --route-config configs/routes/models/ea_deformer.yaml --run-dir outputs/protocol_runs/<run_id>
 ```
 
+P3 的 `--grid-size` 只用于 dry-run 工作量估算。多参数 P3 的 materialize / execute 必须传 `--param-grid route_id=search_space.yaml`，否则 runner 会拒绝生成只有抽象 `param_index`、没有实际参数覆盖的 runnable manifest。
+
 协议 runner 可用 `--execute` 驱动当前支持的 job adapter。toy route 用于 CI 级平台 smoke：
 
 ```bash
