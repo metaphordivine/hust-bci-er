@@ -7,22 +7,10 @@ variants:
     overrides:
       preprocessing: []
 
-  - name: window_4s
-    description: Smaller window (4s instead of 6s)
-    overrides:
-      input_window_sec: 4
-      augmentation.window_sec: 4
-
-  - name: window_8s
-    description: Larger window (8s instead of 6s)
-    overrides:
-      input_window_sec: 8
-      augmentation.window_sec: 8
-
-  - name: stride_2s
-    description: Sparser stride (2s instead of 1s)
-    overrides:
-      augmentation.stride_sec: 2
+  # Window/stride shape ablations are intentionally not listed here.
+  # The current exact_single_crop_expected_BA contract requires exactly five
+  # sliding crops, so source_trial_sec/window_sec/stride_sec changes need a
+  # separate metric-compatible route family rather than this standard ablation.
 
   - name: no_weight_decay
     description: Zero weight decay
