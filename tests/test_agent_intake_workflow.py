@@ -8,7 +8,13 @@ from pathlib import Path
 from scripts.agent_context import CONTEXT_PACKS, context_for_task
 from scripts.agent_intake import classify, classify_with_deepseek, main as intake_main, maybe_refine_with_deepseek
 from scripts.agent_plan_ingest import ingest, parse_text
-from scripts.agent_review_inbox import infer_review_severity, ingest_review_inbox, issues_from_payload
+from scripts.agent_review_inbox import (
+    classify_pr_comment,
+    infer_review_severity,
+    ingest_review_inbox,
+    issues_from_payload,
+    parse_copilot_digest,
+)
 from scripts.agent_session import init_session
 
 
@@ -307,6 +313,213 @@ def test_review_inbox_creates_one_issue_per_unresolved_thread(monkeypatch, tmp_p
     assert {issue["thread_id"] for issue in board["issues"]} == {"THREAD_alpha", "THREAD_beta"}
     assert {issue["line_hint"] for issue in board["issues"]} == {120, 450}
     assert all(issue["files_hint"] == ["scripts/agent_intake.py"] for issue in board["issues"])
+
+
+def test_inline_review_thread_preserves_metadata_and_strips_useful_suffix(monkeypatch, tmp_path):
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "nodes": [
+                            {
+                                "id": "THREAD_p1",
+                                "isResolved": False,
+                                "isOutdated": True,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "[P1] JSON output should stay parseable.\n\nUseful? React with 👍 / 👎",
+                                            "path": "scripts/agent_intake.py",
+                                            "line": 123,
+                                            "author": {"login": "chatgpt-codex-connector"},
+                                            "createdAt": "2026-05-17T00:00:00Z",
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "THREAD_resolved",
+                                "isResolved": True,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "[P2] Already resolved.",
+                                            "path": "scripts/agent_intake.py",
+                                            "line": 456,
+                                            "author": {"login": "chatgpt-codex-connector"},
+                                            "createdAt": "2026-05-17T00:01:00Z",
+                                        }
+                                    ]
+                                },
+                            },
+                        ]
+                    },
+                    "comments": {"nodes": []},
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr("scripts.agent_review_inbox.fetch_pr_review_threads", lambda pr: payload)
+    issues = ingest_review_inbox(18, tmp_path)
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue["kind"] == "inline_thread"
+    assert issue["thread_id"] == "THREAD_p1"
+    assert issue["line_hint"] == 123
+    assert issue["files_hint"] == ["scripts/agent_intake.py"]
+    assert "Useful? React" not in issue["problem"]
+    assert issue["stale"] is True
+    assert issue["outdated"] is True
+
+
+def test_copilot_digest_comment_splits_multiple_issues():
+    body = """> @copilot review
+
+### 🔴 高风险
+
+**1. `scripts/agent_intake.py`：JSON 输出被破坏**
+
+需要保持 `--json` 为纯 JSON。
+python -m pytest tests/test_agent_intake_workflow.py -q
+
+### 🟠 中风险
+
+> **⚠️ 中级风险：session ledger 没记录命令**
+
+涉及 `scripts/agent_session.py`。
+"""
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {"nodes": []},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "COPILOT_digest",
+                                "url": "https://example.test/comment/1",
+                                "body": body,
+                                "author": {"login": "Copilot"},
+                                "createdAt": "2026-05-17T00:00:00Z",
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+    }
+
+    issues = issues_from_payload(payload, 18)
+    assert len(issues) >= 2
+    assert {issue["kind"] for issue in issues} == {"copilot_digest_comment"}
+    assert issues[0]["severity"] == "S0"
+    assert any("scripts/agent_intake.py" in issue["files_hint"] for issue in issues)
+    assert any("scripts/agent_session.py" in issue["files_hint"] for issue in issues)
+    assert any(issue["validation_hint"] for issue in issues)
+
+
+def test_copilot_digest_without_new_blockers_creates_no_issue():
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {"nodes": []},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "COPILOT_clean",
+                                "body": "> @copilot review\n\n当前未发现新的阻塞问题，可合入。",
+                                "author": {"login": "Copilot"},
+                                "createdAt": "2026-05-17T00:00:00Z",
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+    }
+
+    assert issues_from_payload(payload, 18) == []
+
+
+def test_trigger_and_human_fix_report_comments_create_no_issue():
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {"nodes": []},
+                    "comments": {
+                        "nodes": [
+                            {"id": "trigger", "body": "@copilot review", "author": {"login": "metaphordivine"}},
+                            {"id": "fixed", "body": "已处理这轮 review，验证通过。", "author": {"login": "metaphordivine"}},
+                        ]
+                    },
+                }
+            }
+        }
+    }
+
+    assert classify_pr_comment(payload["data"]["repository"]["pullRequest"]["comments"]["nodes"][0]) == "trigger_comment"
+    assert classify_pr_comment(payload["data"]["repository"]["pullRequest"]["comments"]["nodes"][1]) == "human_fix_report"
+    assert issues_from_payload(payload, 18, include_pr_comments=True) == []
+
+
+def test_copilot_digest_deepseek_engine_can_split(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            body = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "issues": [
+                                        {
+                                            "severity": "S1",
+                                            "title": "DeepSeek split issue",
+                                            "problem": "`scripts/agent_review_inbox.py` should split digest comments.",
+                                            "files_hint": ["scripts/agent_review_inbox.py"],
+                                            "validation_hint": ["python -m pytest tests/test_agent_intake_workflow.py -q"],
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+            return json.dumps(body).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("scripts.agent_review_inbox.urllib.request.urlopen", fake_urlopen)
+    issues = parse_copilot_digest(
+        "### 🟠 中风险\n`x.py` digest issue",
+        18,
+        "COMMENT_deepseek",
+        digest_engine="deepseek",
+        deepseek_api_key="test-key",
+        require_deepseek=True,
+    )
+
+    assert captured["url"] == "https://api.deepseek.com/chat/completions"
+    assert captured["payload"]["model"] == "deepseek-v4-flash"
+    assert issues[0]["source"].endswith(":deepseek")
+    assert issues[0]["files_hint"] == ["scripts/agent_review_inbox.py"]
 
 
 def test_review_inbox_filters_pr_level_comments_by_default():
