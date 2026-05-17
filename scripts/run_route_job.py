@@ -37,6 +37,37 @@ def route_adapter_name(route_data: dict) -> str:
     return str(adapter)
 
 
+def _existing_protocol_path(protocol_root: Path, value: object) -> Path | None:
+    if not isinstance(value, str) or not value:
+        return None
+    path = (protocol_root / value).resolve()
+    return path if path.exists() else None
+
+
+def _selection_artifacts(protocol_root: Path, job: dict) -> list[dict[str, str]]:
+    from hust_bci_er.audit.manifest import sha256_file
+
+    out: list[dict[str, str]] = []
+    for value in job.get("selection_artifact_paths") or []:
+        path = _existing_protocol_path(protocol_root, value)
+        if path is not None:
+            out.append({"path": str(path), "sha256": sha256_file(path)})
+    return out
+
+
+def _patch_selection_artifact_provenance(run_dir: Path, artifacts: list[dict[str, str]]) -> None:
+    if not artifacts:
+        return
+    for name in ("manifest.json", "model_state.local.json"):
+        path = run_dir / name
+        if not path.exists():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            payload["protocol_selection_artifacts"] = artifacts
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Execute one materialized protocol job with the supported route adapter.")
     parser.add_argument("--protocol-run", type=Path, required=True)
@@ -68,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     route_data = load_route(route_path)
     adapter_name = route_adapter_name(route_data)
     split_path = protocol_root / str(job["split_manifest_path"])
+    reuse_checkpoint_path = _existing_protocol_path(protocol_root, job.get("reuse_checkpoint_path"))
+    selection_artifacts = _selection_artifacts(protocol_root, job)
     command = [
         "python",
         "scripts/run_route_job.py",
@@ -108,7 +141,9 @@ def main(argv: list[str] | None = None) -> int:
             smoke_epochs=args.epochs_override,
             device=effective_device,
             crop_policy=job.get("crop_policy") if isinstance(job.get("crop_policy"), dict) else None,
+            reuse_checkpoint_path=reuse_checkpoint_path,
         )
+    _patch_selection_artifact_provenance(run_dir, selection_artifacts)
     print(json.dumps({"job_id": args.job_id, "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json)}, ensure_ascii=False))
     return 0
 

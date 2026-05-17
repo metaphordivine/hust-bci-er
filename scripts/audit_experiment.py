@@ -1712,6 +1712,9 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
     bad_score_numeric: list[str] = []
     bad_crop_provenance: list[str] = []
     require_crop_provenance = manifest.get("score_matrix_evidence") == "genuine"
+    crop_policy_data = manifest.get("crop_policy")
+    crop_policy_name = str(crop_policy_data.get("name") if isinstance(crop_policy_data, dict) else "")
+    selected_single_crop_policy = crop_policy_name in {"crop1", "crop2", "crop3", "crop4", "crop5", "random", "worst"}
     dataset_provenance_keys: set[tuple[str, str, str, str]] = set()
     if require_crop_provenance and run_dir is not None:
         provenance_errors: list[str] = []
@@ -1754,7 +1757,7 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
                     window_starts.append(start_sec)
                     if dataset_provenance_keys and (str(row[subject_col]), str(row[trial_col]), crop_id, f"{start_sec:.8f}") not in dataset_provenance_keys:
                         bad_crop_provenance.append(group_id)
-                if crop_ids and (len(set(crop_ids)) != 5 or len(set(window_starts)) != 5):
+                if crop_ids and not selected_single_crop_policy and (len(set(crop_ids)) != 5 or len(set(window_starts)) != 5):
                     bad_crop_provenance.append(group_id)
             parsed_row: list[float] = []
             for col in score_cols:
@@ -1801,8 +1804,8 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
             checks,
             rule_id="SCORE_MATRIX_CROP_PROVENANCE",
             bad=bad_crop_provenance,
-            message="genuine score matrix rows must record five distinct crop provenance keys",
-            fix="Write crop source crop_id and window_start_sec columns for every score matrix crop.",
+            message="genuine score matrix rows must record valid crop provenance keys",
+            fix="Write crop source crop_id and window_start_sec columns for every score matrix crop; selected single-crop policies may repeat one valid crop key.",
         )
     if bad_group_size or bad_trial_unique or bad_label_binary or bad_truth_balance or bad_score_numeric or bad_crop_provenance:
         raise ValueError("score matrix semantic checks failed")

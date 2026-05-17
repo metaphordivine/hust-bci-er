@@ -170,7 +170,7 @@ def test_build_score_matrix_applies_p2_fixed_crop_policy():
         crop_policy={"name": "crop3", "selection": "fixed_index", "crop_index": 2},
         seed=42,
     )
-    assert evidence == "synthetic"
+    assert evidence == "genuine"
     assert len(result) == 1
     assert {result[0][f"crop_{idx}"] for idx in range(5)} == {"0.57000000"}
     assert {result[0][f"crop_{idx}_source_crop_id"] for idx in range(5)} == {"2"}

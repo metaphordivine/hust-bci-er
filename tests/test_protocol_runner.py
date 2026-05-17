@@ -77,7 +77,11 @@ def test_protocol_runner_materializes_p2_crop_jobs(tmp_path):
     assert manifest["route_locks"][0]["source_split_manifest_path"] == "configs/splits/p1_seed42_fold0.yaml"
     assert len(manifest["experiment_gate_job_ids"]) == 7
     assert manifest["artifact_only_job_ids"] == ["p2__ea_deformer__train_seed42"]
-    assert "artifact-only" in manifest["completion_rule"]
+    assert "reusable checkpoint" in manifest["completion_rule"]
+    train_job = next(job for job in manifest["jobs"] if job["stage"] == "train_holdout_model")
+    assert train_job["expected_artifacts"] == ["config_snapshot.yaml", "checkpoint.pt", "train_manifest.json"]
+    assert random_job["reuse_checkpoint_job_id"] == "p2__ea_deformer__train_seed42"
+    assert random_job["reuse_checkpoint_path"] == "job_runs/p2__ea_deformer__train_seed42/checkpoint.pt"
     assert (tmp_path / "p2_run" / "protocol_run_manifest.json").exists()
     split_path = tmp_path / "p2_run" / random_job["split_manifest_path"]
     assert split_path.exists()
@@ -107,7 +111,7 @@ def test_protocol_execute_candidate_rejects_artifact_only_skips(tmp_path):
     run_dir = tmp_path / "p2_run"
     manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
 
-    with pytest.raises(ValueError, match="cannot skip artifact-only training/selection jobs"):
+    with pytest.raises(ValueError, match="cannot be bounded"):
         execute_protocol_jobs(
             manifest,
             protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
@@ -116,18 +120,28 @@ def test_protocol_execute_candidate_rejects_artifact_only_skips(tmp_path):
         )
 
 
-def test_protocol_execute_candidate_rejects_diagnostic_artifact_adapter(tmp_path):
+def test_protocol_execute_candidate_runs_artifact_adapter_before_dependent_eval(tmp_path, monkeypatch):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
     run_dir = tmp_path / "p2_run"
     manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
 
-    with pytest.raises(ValueError, match="cannot use the diagnostic artifact-only adapter"):
-        execute_protocol_jobs(
-            manifest,
-            protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
-            gate="candidate",
-            allow_artifact_only=True,
-            max_jobs=1,
-        )
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: Completed())
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        gate="candidate",
+        allow_artifact_only=True,
+    )
+
+    assert results[0]["status"] == "EXECUTED_ARTIFACT"
+    assert all(item["status"] == "SKIPPED_DEPENDENCY_FAILED" for item in results[1:])
 
 
 def test_protocol_runner_counts_p1_and_p3_jobs():
@@ -163,6 +177,10 @@ def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_p
     assert split_payload["param_indices"] == [0, 1, 2]
     assert "seed" not in split_payload
     assert split_payload["seeds"] == [123, 124, 125]
+    assert "checkpoint.pt" in inner_job["expected_artifacts"]
+    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_train_eval")
+    assert len(final_job["selection_artifact_job_ids"]) == 6
+    assert all(path.endswith("selection_metrics.json") for path in final_job["selection_artifact_paths"])
 
 
 def test_protocol_runner_records_multiple_routes_in_shared_split_contract(tmp_path):
@@ -273,9 +291,8 @@ def test_protocol_execute_skips_p2_train_artifact_when_eval_jobs_run(tmp_path, m
         max_jobs=1,
     )
 
-    assert results[0]["status"] == "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT"
-    assert results[1]["status"] == "EXECUTED"
-    assert all(item["status"] == "SKIPPED_MAX_JOBS" for item in results[2:])
+    assert results[0]["status"] == "EXECUTED_ARTIFACT"
+    assert all(item["status"] == "SKIPPED_MAX_JOBS" for item in results[1:])
 
 
 def test_p2_smoke_executes_holdout_eval_in_test_scope(tmp_path, monkeypatch):
@@ -304,7 +321,7 @@ def test_p2_smoke_executes_holdout_eval_in_test_scope(tmp_path, monkeypatch):
         max_jobs=2,
     )
 
-    assert results[0]["status"] == "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT"
+    assert results[0]["status"] == "EXECUTED_ARTIFACT"
     assert results[1]["status"] == "EXECUTED"
     route_command = next(cmd for cmd in commands if "scripts/run_route_job.py" in cmd)
     assert route_command[route_command.index("--mode") + 1] == "candidate"
@@ -377,6 +394,9 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
     split = run_dir / "splits" / "job_split.yaml"
     split.parent.mkdir(parents=True)
     split.write_text("split_id: job_split\ntrain_subjects: [s1]\nval_subjects: [s2]\ntest_subjects: [s3]\ntrial_rows: []\n", encoding="utf-8")
+    checkpoint = run_dir / "job_runs" / "train_job" / "checkpoint.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
     protocol = {
         "jobs": [
             {
@@ -387,6 +407,7 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
                 "seed": 123,
                 "expected_artifacts": ["predictions.csv"],
                 "crop_policy": {"name": "crop3", "selection": "fixed_index", "crop_index": 2},
+                "reuse_checkpoint_path": "job_runs/train_job/checkpoint.pt",
             }
         ]
     }
@@ -429,6 +450,7 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
     assert captured["device"] == "cpu"
     assert captured["smoke_epochs"] == 1
     assert captured["crop_policy"]["name"] == "crop3"
+    assert captured["reuse_checkpoint_path"] == checkpoint
 
 
 def test_run_route_job_uses_protocol_default_device_and_data_root(tmp_path, monkeypatch):
@@ -561,7 +583,7 @@ def test_protocol_summary_marks_missing_artifact_only_jobs_incomplete(tmp_path):
                         "seed": 42,
                         "stage": "train_holdout_model",
                         "split_id": "split_a",
-                        "expected_artifacts": ["checkpoint.local", "train_manifest.json"],
+                        "expected_artifacts": ["checkpoint.pt", "train_manifest.json"],
                     },
                     {
                         "job_id": "p2__route__eval_crop1",
@@ -587,7 +609,7 @@ def test_protocol_summary_marks_missing_artifact_only_jobs_incomplete(tmp_path):
 
     assert audit["status"] == "INCOMPLETE"
     assert audit["n_artifact_only_jobs"] == 1
-    assert "p2__route__train_seed42: checkpoint.local" in audit["missing_artifacts"]
+    assert "p2__route__train_seed42: checkpoint.pt" in audit["missing_artifacts"]
     assert (run_dir / "protocol2_audit.json").exists()
 
 

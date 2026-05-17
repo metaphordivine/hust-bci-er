@@ -1,9 +1,8 @@
 """Execute one materialized artifact-only protocol job (P2 train_holdout, P3 inner_select).
 
 These stages produce artifacts (checkpoints, selection metrics) rather than
-prediction CSVs.  This adapter provides a diagnostic execution path for
-smoke validation; full candidate-grade P2/P3 evidence needs the formal
-training adapter that saves true PyTorch state_dicts.
+prediction CSVs.  The adapter writes reusable torch checkpoints for protocol
+stages that need a trained model artifact before downstream evaluation.
 
 Usage (called from protocol runner, not directly)::
 
@@ -25,6 +24,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
+
+from hust_bci_er.audit.manifest import sha256_file  # noqa: E402
 
 
 def load_protocol_manifest(path: Path) -> dict:
@@ -49,14 +50,10 @@ def _run_train_holdout(
     epochs_override: int | None,
     protocol_manifest: dict,
 ) -> int:
-    """P2 train_holdout_model: train on non-holdout subjects, export artifacts.
-
-    Produces: config_snapshot.yaml, checkpoint.local, train_manifest.json.
-    The checkpoint is a diagnostic shim (not a real state_dict); candidate
-    P2 needs formal adapter with torch.save.
-    """
+    """P2 train_holdout_model: train on non-holdout subjects, export artifacts."""
     from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
 
+    checkpoint_path = run_dir / "checkpoint.pt"
     artifacts = run_real_classifier_route(
         route_config_path=route_path,
         run_dir=run_dir,
@@ -75,27 +72,14 @@ def _run_train_holdout(
         data_root=data_root,
         smoke_epochs=epochs_override,
         device=device,
+        save_checkpoint_path=checkpoint_path,
     )
 
-    # Write config_snapshot.yaml (copy route config)
     shutil.copyfile(route_path, run_dir / "config_snapshot.yaml")
-
-    # Write checkpoint.local — diagnostic shim pointing to model_state
-    model_state_path = run_dir / "model_state.local.json"
-    model_state = {}
-    if model_state_path.exists():
-        model_state = json.loads(model_state_path.read_text(encoding="utf-8"))
-    checkpoint = {
-        "adapter_note": "diagnostic checkpoint shim for P2 train_holdout; candidate P2 needs torch.save state_dict",
-        "job_id": str(job["job_id"]),
-        "route_id": str(job["route_id"]),
-        "run_dir": str(artifacts.run_dir),
-        "model_state": model_state,
-    }
-    (run_dir / "checkpoint.local").write_text(json.dumps(checkpoint, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    # Write train_manifest.json
+    _patch_checkpoint_metadata(checkpoint_path, job=job, run_dir=artifacts.run_dir)
+    checkpoint_sha256 = sha256_file(checkpoint_path)
     train_manifest = {
+        "artifact_schema_version": 1,
         "job_id": str(job["job_id"]),
         "route_id": str(job["route_id"]),
         "stage": "train_holdout_model",
@@ -104,8 +88,10 @@ def _run_train_holdout(
         "split_id": str(job["split_id"]),
         "run_dir": str(artifacts.run_dir),
         "manifest_json": str(artifacts.manifest_json),
+        "checkpoint_path": "checkpoint.pt",
+        "checkpoint_sha256": checkpoint_sha256,
         "primary_metric": str(artifacts.metric_report.get("primary_metric", "")),
-        "note": "diagnostic train_holdout run; predictions.csv written incidentally but not required for this stage",
+        "note": "checkpoint is a torch.save payload with a reusable state_dict; predictions.csv is incidental for this artifact stage",
     }
     (run_dir / "train_manifest.json").write_text(json.dumps(train_manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -127,13 +113,10 @@ def _run_inner_select(
     epochs_override: int | None,
     protocol_manifest: dict,
 ) -> int:
-    """P3 inner_select: train single config point, record selection metrics.
-
-    Produces: config_snapshot.yaml, selection_metrics.json, manifest.json.
-    Full grid-search inner selection requires the formal P3 adapter.
-    """
+    """P3 inner_select: train one config point, record selection artifacts."""
     from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
 
+    checkpoint_path = run_dir / "checkpoint.pt"
     artifacts = run_real_classifier_route(
         route_config_path=route_path,
         run_dir=run_dir,
@@ -152,24 +135,31 @@ def _run_inner_select(
         data_root=data_root,
         smoke_epochs=epochs_override,
         device=device,
+        save_checkpoint_path=checkpoint_path,
     )
 
-    # Write config_snapshot.yaml (copy route config)
     shutil.copyfile(route_path, run_dir / "config_snapshot.yaml")
+    _patch_checkpoint_metadata(checkpoint_path, job=job, run_dir=artifacts.run_dir)
+    checkpoint_sha256 = sha256_file(checkpoint_path)
 
-    # Write selection_metrics.json from actual training metrics
     primary_metric = str(artifacts.metric_report.get("primary_metric", ""))
     metrics = artifacts.metric_report.get("metrics", {})
     selection_metrics = {
+        "artifact_schema_version": 1,
         "job_id": str(job["job_id"]),
         "route_id": str(job["route_id"]),
+        "stage": "inner_select",
+        "protocol": str(job.get("protocol", "")),
         "param_index": job.get("param_index"),
         "outer_fold": job.get("outer_fold"),
         "inner_fold": job.get("inner_fold"),
         "primary_metric": primary_metric,
         "metric_value": metrics.get(primary_metric) if isinstance(metrics, dict) else None,
         "metrics": metrics,
-        "note": "minimal single-config inner_select; full P3 grid search requires formal adapter",
+        "checkpoint_path": "checkpoint.pt",
+        "checkpoint_sha256": checkpoint_sha256,
+        "manifest_json": str(artifacts.manifest_json),
+        "note": "inner selection metric produced by the same torch checkpoint adapter used for candidate-grade protocol artifacts",
     }
     (run_dir / "selection_metrics.json").write_text(json.dumps(selection_metrics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -184,6 +174,22 @@ ARTIFACT_HANDLERS = {
     "train_holdout_model": _run_train_holdout,
     "inner_select": _run_inner_select,
 }
+
+
+def _patch_checkpoint_metadata(checkpoint_path: Path, *, job: dict, run_dir: Path) -> None:
+    import torch
+
+    try:
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        payload = torch.load(checkpoint_path, map_location="cpu")
+    if not isinstance(payload, dict):
+        raise ValueError(f"checkpoint payload must be a mapping: {checkpoint_path}")
+    payload["job_id"] = str(job["job_id"])
+    payload["stage"] = str(job.get("stage", ""))
+    payload["protocol"] = str(job.get("protocol", ""))
+    payload["run_dir"] = str(run_dir)
+    torch.save(payload, checkpoint_path)
 
 
 def _verify_expected_artifacts(job: dict, run_dir: Path) -> list[str]:

@@ -70,10 +70,16 @@ class ProtocolJob:
     checkpoint_selection: Mapping[str, Any] | None = None
     n_folds: int | None = None
     val_fraction: float | None = None
+    reuse_checkpoint_job_id: str | None = None
+    reuse_checkpoint_path: str | None = None
+    selection_artifact_job_ids: tuple[str, ...] = ()
+    selection_artifact_paths: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["expected_artifacts"] = list(self.expected_artifacts)
+        data["selection_artifact_job_ids"] = list(self.selection_artifact_job_ids)
+        data["selection_artifact_paths"] = list(self.selection_artifact_paths)
         return data
 
 
@@ -155,12 +161,13 @@ def build_protocol_jobs(
         for path, data in zip(paths, route_data):
             route_id = str(data["route_id"])
             split_id = protocol_split_id(str(data["split_id"]), f"p2_holdout{int(holdout_seed)}_train{int(train_seed)}")
+            train_job_id = f"p2__{route_id}__train_seed{int(train_seed)}"
             jobs.append(
                 ProtocolJob(
                     protocol=protocol_name,
-                    job_id=f"p2__{route_id}__train_seed{int(train_seed)}",
+                    job_id=train_job_id,
                     stage="train_holdout_model",
-                    expected_artifacts=("config_snapshot.yaml", "checkpoint.local", "train_manifest.json"),
+                    expected_artifacts=("config_snapshot.yaml", "checkpoint.pt", "train_manifest.json"),
                     holdout_seed=int(holdout_seed),
                     n_holdout_subjects=int(n_holdout_subjects),
                     **route_job_base(path, data, seed=int(train_seed), split_id=split_id),
@@ -174,6 +181,8 @@ def build_protocol_jobs(
                         stage="evaluate_holdout_crop_policy",
                         expected_artifacts=("predictions.csv", "score_matrix.csv", "manifest.json", "audit_report.json"),
                         crop_policy=crop_policy_manifest(str(policy), seed=int(train_seed)),
+                        reuse_checkpoint_job_id=train_job_id,
+                        reuse_checkpoint_path=f"job_runs/{train_job_id}/checkpoint.pt",
                         holdout_seed=int(holdout_seed),
                         n_holdout_subjects=int(n_holdout_subjects),
                         **route_job_base(path, data, seed=int(train_seed), split_id=split_id),
@@ -187,19 +196,22 @@ def build_protocol_jobs(
         for path, data in zip(paths, route_data):
             route_id = str(data["route_id"])
             for outer in range(int(outer_folds)):
+                selection_job_ids: list[str] = []
                 for inner in range(int(inner_folds)):
                     for param_index in range(sizes[route_id]):
                         seed = int(inner_seed) + outer * 1000 + inner * 100 + param_index
                         split_id = protocol_split_id(str(data["split_id"]), f"p3_outer{outer}_inner{inner}")
+                        inner_job_id = f"p3__{route_id}__outer{outer}__inner{inner}__param{param_index}"
+                        selection_job_ids.append(inner_job_id)
                         jobs.append(
                             ProtocolJob(
                                 protocol=protocol_name,
-                                job_id=f"p3__{route_id}__outer{outer}__inner{inner}__param{param_index}",
+                                job_id=inner_job_id,
                                 stage="inner_select",
                                 outer_fold=outer,
                                 inner_fold=inner,
                                 param_index=param_index,
-                                expected_artifacts=("config_snapshot.yaml", "selection_metrics.json", "manifest.json"),
+                                expected_artifacts=("config_snapshot.yaml", "checkpoint.pt", "selection_metrics.json", "manifest.json"),
                                 outer_seed=int(outer_seed),
                                 inner_seed=int(inner_seed),
                                 outer_folds=int(outer_folds),
@@ -217,6 +229,8 @@ def build_protocol_jobs(
                         outer_fold=outer,
                         expected_artifacts=("config_snapshot.yaml", "predictions.csv", "score_matrix.csv", "manifest.json", "audit_report.json"),
                         crop_policy=route_crop_policy_manifest(data, seed=seed),
+                        selection_artifact_job_ids=tuple(selection_job_ids),
+                        selection_artifact_paths=tuple(f"job_runs/{job_id}/selection_metrics.json" for job_id in selection_job_ids),
                         outer_seed=int(outer_seed),
                         inner_seed=int(inner_seed),
                         outer_folds=int(outer_folds),
@@ -454,7 +468,7 @@ def materialize_protocol_run(
         "jobs": [job.as_dict() for job in jobs],
         "experiment_gate_job_ids": experiment_gate_job_ids,
         "artifact_only_job_ids": artifact_only_job_ids,
-        "completion_rule": "jobs with predictions.csv must write manifest.json and pass the requested experiment gate; artifact-only train/selection jobs must write their expected artifacts without requiring prediction CSV",
+        "completion_rule": "jobs with predictions.csv must write manifest.json and pass the requested experiment gate; artifact-only train/selection jobs must write reusable checkpoint/selection artifacts before dependent candidate evaluation jobs run",
     }
     (run_dir / "protocol_run_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return manifest
@@ -525,6 +539,18 @@ def _execute_artifact_job(
     }
 
 
+def _missing_dependency_artifacts(job: Mapping[str, Any], *, run_manifest: Path) -> list[str]:
+    protocol_root = run_manifest.parent
+    missing: list[str] = []
+    reuse_path = job.get("reuse_checkpoint_path")
+    if isinstance(reuse_path, str) and reuse_path and not (protocol_root / reuse_path).exists():
+        missing.append(reuse_path)
+    for path in job.get("selection_artifact_paths") or []:
+        if isinstance(path, str) and path and not (protocol_root / path).exists():
+            missing.append(path)
+    return missing
+
+
 def execute_protocol_jobs(
     manifest: Mapping[str, Any],
     *,
@@ -538,10 +564,11 @@ def execute_protocol_jobs(
 ) -> list[dict[str, Any]]:
     """Execute prediction-producing jobs through the stable route-job adapter.
 
-    When *allow_artifact_only* is True, P2/P3 artifact-only jobs
-    (train_holdout_model, inner_select) are executed through the
-    artifact-job adapter.  Candidate-grade P2/P3 evidence still needs
-    formal adapter review before promotion.
+    P2/P3 artifact-only jobs (train_holdout_model, inner_select) are
+    executed through the artifact-job adapter for candidate gates, because
+    downstream evaluation jobs depend on their reusable checkpoint/selection
+    artifacts.  For smoke gates, pass *allow_artifact_only* to exercise those
+    artifact stages instead of listing them as skipped diagnostics.
     """
     if gate == "candidate" and epochs_override is not None:
         raise ValueError("epochs_override cannot be used with candidate gate")
@@ -563,30 +590,9 @@ def execute_protocol_jobs(
     jobs = [job for job in manifest.get("jobs", []) if isinstance(job, Mapping)]
     runnable = [job for job in jobs if "predictions.csv" in job.get("expected_artifacts", [])]
     artifact_only = [job for job in jobs if "predictions.csv" not in job.get("expected_artifacts", [])]
-    diagnostic_independent_p2_train_jobs = {
-        str(job.get("job_id", ""))
-        for job in artifact_only
-        if gate == "smoke"
-        and allow_artifact_only
-        and str(job.get("protocol", "")) == "p2_pseudo_public_holdout"
-        and str(job.get("stage", "")) == "train_holdout_model"
-        and any(str(item.get("stage", "")) == "evaluate_holdout_crop_policy" for item in runnable)
-    }
-    if gate == "candidate" and artifact_only and allow_artifact_only:
-        attempted = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
-        raise ValueError(
-            "candidate protocol execution cannot use the diagnostic artifact-only adapter; "
-            "P2/P3 candidate evidence needs a formal checkpoint/selection adapter first: "
-            f"{attempted}"
-        )
-    if gate == "candidate" and artifact_only:
-        skipped = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
-        raise ValueError(
-            "candidate protocol execution cannot skip artifact-only training/selection jobs; "
-            "P2/P3 candidate execution needs a formal adapter for these protocol stages first "
-            "(or use --allow-artifact-only for diagnostic execution): "
-            f"{skipped}"
-        )
+    if gate == "candidate" and max_jobs is not None and int(max_jobs) < len(jobs):
+        raise ValueError("candidate protocol execution cannot be bounded by --max-execute-jobs")
+    execute_artifact_jobs = gate == "candidate" or allow_artifact_only
     results: list[dict[str, Any]] = []
     execution_budget = None if max_jobs is None else max(0, int(max_jobs))
     executed_count = 0
@@ -595,25 +601,7 @@ def execute_protocol_jobs(
         return execution_budget is not None and executed_count >= execution_budget
 
     for job in artifact_only:
-        if str(job.get("job_id", "")) in diagnostic_independent_p2_train_jobs:
-            result = {
-                "job_id": str(job.get("job_id", "")),
-                "route_config": str(job.get("route_config", "")),
-                "run_dir": None,
-                "status": "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT",
-                "reason": (
-                    "P2 smoke eval jobs train independently through run_route_job; "
-                    "the diagnostic train_holdout checkpoint shim is not generated "
-                    "because it is not reused by those eval jobs."
-                ),
-                "command_returncode": None,
-                "audit_gate": gate,
-                "audit_returncode": None,
-                "stdout_tail": "",
-                "stderr_tail": "",
-                "requested_device": effective_device,
-            }
-        elif allow_artifact_only:
+        if execute_artifact_jobs:
             if budget_exhausted():
                 result = {
                     "job_id": str(job.get("job_id", "")),
@@ -646,7 +634,26 @@ def execute_protocol_jobs(
                 "requested_device": effective_device,
             }
         results.append(result)
+    dependency_failed = any(item.get("status") in {"FAILED_ARTIFACT", "SKIPPED_MAX_JOBS"} for item in results)
     for job in runnable:
+        missing_dependencies = _missing_dependency_artifacts(job, run_manifest=run_manifest)
+        if gate == "candidate" and (dependency_failed or missing_dependencies):
+            results.append(
+                {
+                    "job_id": str(job.get("job_id", "")),
+                    "route_config": str(job.get("route_config", "")),
+                    "run_dir": None,
+                    "status": "SKIPPED_DEPENDENCY_FAILED",
+                    "reason": "candidate job dependencies are missing or failed: " + ", ".join(missing_dependencies),
+                    "command_returncode": None,
+                    "audit_gate": gate,
+                    "audit_returncode": None,
+                    "stdout_tail": "",
+                    "stderr_tail": "",
+                    "requested_device": effective_device,
+                }
+            )
+            continue
         if budget_exhausted():
             results.append(
                 {
