@@ -10,15 +10,18 @@
 
 ## 快速开始
 
-先读：
+agent 协作默认使用最小上下文。先读：
 
-1. `docs/目录怎么用.md`
-2. `docs/04_evaluation_protocols.md`
-3. `AGENTS.md`
-4. `agent_protocols/experiment_audit.md`
-5. `agent_protocols/foundation_usage.md`
-6. `agent_protocols/skill_router.md`
-7. `docs/collaboration_workflow.md`
+1. `agent_protocols/AGENT_BRIEF.md`
+2. `agent_protocols/skill_router.md`
+3. 用 `scripts/agent_intake.py` 分类任务
+4. 用 `scripts/agent_context.py --task <task_family>` 选择最小 context pack
+
+`scripts/agent_intake.py` 默认使用本地 deterministic heuristics。只有显式加
+`--deepseek`，或设置 `AGENT_INTAKE_ENGINE=deepseek` 时，才会调用 DeepSeek；
+API 不可用时会回退本地规则，除非同时加 `--require-deepseek`。
+
+只有 selected context pack、验证失败或任务本身要求时，才继续读完整协议文档，例如 `docs/04_evaluation_protocols.md` 或 `agent_protocols/foundation_usage.md`。
 
 然后运行仓库 fast gate：
 

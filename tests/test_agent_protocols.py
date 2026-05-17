@@ -9,7 +9,7 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_foundation_usage_protocol_is_routed_from_required_docs():
+def test_foundation_usage_protocol_is_routed_from_agent_docs():
     required = "agent_protocols/foundation_usage.md"
 
     for path in [
@@ -21,21 +21,17 @@ def test_foundation_usage_protocol_is_routed_from_required_docs():
         assert required in read(path)
 
 
-def test_required_first_reads_keep_foundation_protocol_in_order():
+def test_required_intake_docs_are_minimal_and_ordered():
     expected = [
-        "README.md",
-        "docs/目录怎么用.md",
-        "docs/04_evaluation_protocols.md",
-        "agent_protocols/experiment_audit.md",
-        "agent_protocols/foundation_usage.md",
+        "agent_protocols/AGENT_BRIEF.md",
         "agent_protocols/skill_router.md",
-        "docs/collaboration_workflow.md",
-        "AGENTS.md",
     ]
-    section = read("agent_protocols/skill_router.md").split("## Required Documents", 1)[1].split("## Skill Rules", 1)[0]
+    section = read("agent_protocols/skill_router.md").split("## Required Intake Documents", 1)[1].split("## Skill Rules", 1)[0]
     observed = [match.group(1) for match in re.finditer(r"^\d+\. `([^`]+)`$", section, flags=re.MULTILINE)]
 
     assert observed == expected
+    assert "docs/04_evaluation_protocols.md" not in section
+    assert "agent_protocols/experiment_audit.md" not in section
 
 
 def test_foundation_usage_protocol_names_stable_foundations_and_commands():
