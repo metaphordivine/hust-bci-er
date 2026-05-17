@@ -163,7 +163,7 @@ def build_protocol3_plan(
     outer_jobs = len(route_ids) * int(outer_folds)
     return ProtocolPlan(
         protocol="p3_nested_selection",
-        use_case="带参数选择的最严格评估；适合最终确认调参路线，不适合日常快速探索。",
+        use_case="带参数选择和 outer-train final retrain 的最严格评估；适合最终确认调参路线，不适合日常快速探索。",
         primary_metric="exact_single_crop_expected_BA",
         planned_train_jobs=inner_jobs + outer_jobs,
         planned_evaluation_jobs=inner_jobs + outer_jobs,
@@ -178,6 +178,8 @@ def build_protocol3_plan(
             "grid_sizes": sizes,
             "subject_group_split": True,
             "outer_test_used_for_selection": False,
+            "final_retrain_on_outer_train": True,
+            "inner_checkpoint_reused_for_outer_test": False,
             "secondary_metrics": ["exact_assignment_all_correct_rate", "param_selection_stability", "fold_std"],
         },
     )

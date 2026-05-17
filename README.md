@@ -50,7 +50,7 @@ python scripts/repo_doctor.py fast
 - 基础预处理、手工特征、Top-4、score route 组装函数。
 - PyTorch classifier component trainer。
 - deterministic runtime helpers、environment/requirements lock、run manifest writer。
-- P1/P2/P3 protocol runner manifest materialization、P2 checkpoint reuse，以及 P3 selected-param/checkpoint artifact 执行与复用。
+- P1/P2/P3 protocol runner manifest materialization、P2 checkpoint reuse，以及 P3 nested selection + outer-train final retrain 执行。
 - score route 从 component score CSV 到 `score/pred_top4` prediction table 的最小执行入口。
 - Foundation Usage Skill，用于把 dataset/split evidence、prediction/report、run manifest、promotion、registry/cache/monitor 等公共基座路由成稳定 agent 工作流。
 - toy end-to-end audit smoke：`toy_eegnet` 可生成 synthetic dataset/split、prediction、score matrix、metric report、run manifest，并通过 candidate audit，用于 CI 和新人环境验证。
@@ -63,7 +63,7 @@ python scripts/repo_doctor.py fast
 - 复杂训练 callback。
 - 按 route 默认训练轮数完成并提交绑定 summary 的 candidate 级真实实验结果。
 
-P1/P2/P3 当前已迁入为 protocol 配置、dry-run plan 和统一 runner manifest。plan 只看工作量；runner 会锁定 route/config/dataset/source split、job-specific split contract、seed、environment 和 job artifact contract。P2 的 artifact-only job 会写出可复用 checkpoint；P3 `inner_select` 会写出 checkpoint 和 `selection_metrics.json`，outer final job 会按 inner primary metric 选择 best param/checkpoint、复用该 checkpoint，并把 selected artifact 写进 final manifest。candidate 执行不会跳过这些依赖，也不会伪造训练结果：
+P1/P2/P3 当前已迁入为 protocol 配置、dry-run plan 和统一 runner manifest。plan 只看工作量；runner 会锁定 route/config/dataset/source split、job-specific split contract、seed、environment 和 job artifact contract。P2 的 artifact-only job 会写出可复用 checkpoint；P3 `inner_select` 会写出 checkpoint 和 `selection_metrics.json`，outer final job 会按 inner primary metric 选择 best param，然后在 outer train 范围内重新训练 final artifact，并只在 outer test 上评估。P3 final manifest 会写入 `protocol_selected_artifact`，但不会复用 inner checkpoint 直接测 outer test。candidate 执行不会跳过这些依赖，也不会伪造训练结果：
 
 ```bash
 python scripts/plan_evaluation_protocol.py --protocol p1 --route-config configs/routes/models/ea_deformer.yaml

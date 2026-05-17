@@ -30,3 +30,5 @@ def test_protocol3_plan_counts_inner_and_outer_jobs():
     assert data["protocol"] == "p3_nested_selection"
     assert data["planned_train_jobs"] == 26
     assert data["details"]["outer_test_used_for_selection"] is False
+    assert data["details"]["final_retrain_on_outer_train"] is True
+    assert data["details"]["inner_checkpoint_reused_for_outer_test"] is False

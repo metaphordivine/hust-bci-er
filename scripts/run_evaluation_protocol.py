@@ -10,7 +10,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from hust_bci_er.evaluation.protocols.runner import execute_protocol_jobs, materialize_protocol_run  # noqa: E402
-from scripts.plan_evaluation_protocol import parse_grid_size  # noqa: E402
+from hust_bci_er.evaluation.protocols.params import load_param_grid  # noqa: E402
+from scripts.plan_evaluation_protocol import parse_grid_size, parse_route_path  # noqa: E402
 
 
 def default_run_dir(protocol: str) -> Path:
@@ -33,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--outer-seed", type=int, default=42)
     parser.add_argument("--inner-seed", type=int, default=123)
     parser.add_argument("--grid-size", action="append", type=parse_grid_size, default=[], help="P3 route grid size, route_id=size.")
+    parser.add_argument("--param-grid", action="append", type=parse_route_path, default=[], help="P3 route parameter grid YAML, route_id=path. Overrides --grid-size count and materializes param_overrides.")
     parser.add_argument("--data-root", type=Path, help="HUST EEG .mat data root. When provided for P1, job split contracts include formal subject/trial rows.")
     parser.add_argument("--device", default="auto", help="Torch device passed to executed route jobs.")
     parser.add_argument("--execute", action="store_true", help="Execute prediction-producing jobs with the supported route adapter.")
@@ -55,12 +57,16 @@ def main(argv: list[str] | None = None) -> int:
             "crop_policies": args.crop_policy or ("crop1", "crop2", "crop3", "crop4", "crop5", "random", "worst"),
         }
     else:
+        param_grids = {route_id: load_param_grid(path) for route_id, path in args.param_grid}
+        grid_sizes = dict(args.grid_size)
+        grid_sizes.update({route_id: len(candidates) for route_id, candidates in param_grids.items()})
         kwargs = {
             "outer_folds": args.outer_folds,
             "inner_folds": args.inner_folds,
             "outer_seed": args.outer_seed,
             "inner_seed": args.inner_seed,
-            "grid_sizes": dict(args.grid_size),
+            "grid_sizes": grid_sizes,
+            "param_grids": param_grids,
         }
 
     run_dir = args.run_dir or default_run_dir(args.protocol)

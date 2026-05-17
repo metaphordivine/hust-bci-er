@@ -26,6 +26,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from hust_bci_er.audit.manifest import sha256_file  # noqa: E402
+from hust_bci_er.evaluation.protocols.params import write_effective_route_config  # noqa: E402
 
 
 def load_protocol_manifest(path: Path) -> dict:
@@ -37,6 +38,19 @@ def load_route(path: Path) -> dict:
     if not isinstance(data, dict):
         raise ValueError(f"route config must be a mapping: {path}")
     return data
+
+
+def _route_for_job(route_path: Path, job: dict, run_dir: Path) -> tuple[Path, dict]:
+    overrides = job.get("param_overrides")
+    if not isinstance(overrides, dict) or not overrides:
+        return route_path, {}
+    base_route = load_route(route_path)
+    effective_route = write_effective_route_config(
+        base_route_data=base_route,
+        overrides=overrides,
+        output_dir=run_dir / "effective_route_config",
+    )
+    return effective_route, dict(overrides)
 
 
 def _run_train_holdout(
@@ -116,9 +130,10 @@ def _run_inner_select(
     """P3 inner_select: train one config point, record selection artifacts."""
     from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
 
+    effective_route_path, param_overrides = _route_for_job(route_path, job, run_dir)
     checkpoint_path = run_dir / "checkpoint.pt"
     artifacts = run_real_classifier_route(
-        route_config_path=route_path,
+        route_config_path=effective_route_path,
         run_dir=run_dir,
         run_mode="full_subjects",
         split_id=str(job["split_id"]),
@@ -138,7 +153,7 @@ def _run_inner_select(
         save_checkpoint_path=checkpoint_path,
     )
 
-    shutil.copyfile(route_path, run_dir / "config_snapshot.yaml")
+    shutil.copyfile(effective_route_path, run_dir / "config_snapshot.yaml")
     _patch_checkpoint_metadata(checkpoint_path, job=job, run_dir=artifacts.run_dir)
     checkpoint_sha256 = sha256_file(checkpoint_path)
 
@@ -153,11 +168,16 @@ def _run_inner_select(
         "param_index": job.get("param_index"),
         "outer_fold": job.get("outer_fold"),
         "inner_fold": job.get("inner_fold"),
+        "param_overrides": param_overrides,
         "primary_metric": primary_metric,
         "metric_value": metrics.get(primary_metric) if isinstance(metrics, dict) else None,
         "metrics": metrics,
         "checkpoint_path": "checkpoint.pt",
         "checkpoint_sha256": checkpoint_sha256,
+        "base_route_config_path": route_path.as_posix(),
+        "base_route_config_sha256": sha256_file(route_path),
+        "effective_route_config_path": effective_route_path.relative_to(run_dir).as_posix() if effective_route_path.is_relative_to(run_dir) else effective_route_path.as_posix(),
+        "effective_route_config_sha256": sha256_file(effective_route_path),
         "manifest_json": str(artifacts.manifest_json),
         "note": "inner selection metric produced by the same torch checkpoint adapter used for candidate-grade protocol artifacts",
     }

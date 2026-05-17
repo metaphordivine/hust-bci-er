@@ -178,9 +178,10 @@ def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_p
     assert "seed" not in split_payload
     assert split_payload["seeds"] == [123, 124, 125]
     assert "checkpoint.pt" in inner_job["expected_artifacts"]
-    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_train_eval")
+    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_final_retrain")
     assert len(final_job["selection_artifact_job_ids"]) == 6
     assert all(path.endswith("selection_metrics.json") for path in final_job["selection_artifact_paths"])
+    assert "reuse_checkpoint_path" not in final_job or final_job["reuse_checkpoint_path"] is None
 
 
 def test_protocol_runner_records_multiple_routes_in_shared_split_contract(tmp_path):
@@ -260,7 +261,7 @@ def test_protocol_runner_materializes_formal_p3_inner_and_final_splits_from_hust
         grid_sizes={"ea_deformer": 1},
     )
     inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
-    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_train_eval")
+    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_final_retrain")
     inner_split = yaml.safe_load((tmp_path / "p3_formal" / inner_job["split_manifest_path"]).read_text(encoding="utf-8"))
     final_split = yaml.safe_load((tmp_path / "p3_formal" / final_job["split_manifest_path"]).read_text(encoding="utf-8"))
 
@@ -331,7 +332,7 @@ def test_p2_smoke_executes_holdout_eval_in_test_scope(tmp_path, monkeypatch):
     assert route_command[route_command.index("--mode") + 1] == "candidate"
 
 
-def test_p3_smoke_executes_outer_final_eval_in_test_scope(tmp_path, monkeypatch):
+def test_p3_smoke_executes_outer_final_retrain_in_test_scope(tmp_path, monkeypatch):
     import hust_bci_er.evaluation.protocols.runner as runner
 
     run_dir = tmp_path / "p3_run"
@@ -343,7 +344,7 @@ def test_p3_smoke_executes_outer_final_eval_in_test_scope(tmp_path, monkeypatch)
         inner_folds=2,
         grid_sizes={"ea_deformer": 1},
     )
-    for path in next(job for job in manifest["jobs"] if job["stage"] == "outer_train_eval")["selection_artifact_paths"]:
+    for path in next(job for job in manifest["jobs"] if job["stage"] == "outer_final_retrain")["selection_artifact_paths"]:
         selection = run_dir / path
         checkpoint = selection.parent / "checkpoint.pt"
         selection.parent.mkdir(parents=True, exist_ok=True)
@@ -538,7 +539,7 @@ def test_run_route_job_rejects_missing_declared_reuse_checkpoint(tmp_path, monke
         )
 
 
-def test_run_route_job_selects_best_p3_checkpoint_and_records_manifest(tmp_path, monkeypatch):
+def test_run_route_job_selects_best_p3_params_retrains_and_records_manifest(tmp_path, monkeypatch):
     from scripts import run_route_job
     import hust_bci_er.training.real_adapter as real_adapter
 
@@ -589,6 +590,7 @@ def test_run_route_job_selects_best_p3_checkpoint_and_records_manifest(tmp_path,
                     "param_index": param_index,
                     "outer_fold": 0,
                     "inner_fold": inner_fold,
+                    "param_overrides": {"training.optimizer.lr": 0.001 * (param_index + 1)},
                     "primary_metric": "exact_single_crop_expected_BA",
                     "metric_value": metric,
                     "checkpoint_path": "checkpoint.pt",
@@ -606,7 +608,7 @@ def test_run_route_job_selects_best_p3_checkpoint_and_records_manifest(tmp_path,
                 "split_id": "job_split",
                 "split_manifest_path": "splits/job_split.yaml",
                 "seed": 42,
-                "stage": "outer_train_eval",
+                "stage": "outer_final_retrain",
                 "expected_artifacts": ["predictions.csv"],
                 "selection_artifact_paths": selection_paths,
             }
@@ -622,7 +624,7 @@ def test_run_route_job_selects_best_p3_checkpoint_and_records_manifest(tmp_path,
 
     def fake_run_real_classifier_route(**kwargs):
         captured.update(kwargs)
-        Artifacts.run_dir.mkdir(parents=True)
+        Artifacts.run_dir.mkdir(parents=True, exist_ok=True)
         Artifacts.manifest_json.write_text("{}", encoding="utf-8")
         return Artifacts
 
@@ -641,12 +643,16 @@ def test_run_route_job_selects_best_p3_checkpoint_and_records_manifest(tmp_path,
         ]
     ) == 0
 
-    selected_checkpoint = run_dir / "job_runs" / "inner_p1_f0" / "checkpoint.pt"
-    assert captured["reuse_checkpoint_path"] == selected_checkpoint
-    assert captured["reuse_checkpoint_context"]["selected_param_index"] == 1
-    assert captured["reuse_checkpoint_context"]["source_job_id"] == "inner_p1_f0"
+    assert captured["reuse_checkpoint_path"] is None
+    assert captured["reuse_checkpoint_context"] is None
+    selected_route = Path(captured["route_config_path"])
+    selected_route_payload = yaml.safe_load(selected_route.read_text(encoding="utf-8"))
+    assert selected_route_payload["training"]["optimizer"]["lr"] == pytest.approx(0.002)
     patched = json.loads(Artifacts.manifest_json.read_text(encoding="utf-8"))
-    assert patched["protocol_selected_artifact"]["checkpoint_path"] == str(selected_checkpoint)
+    assert patched["protocol_selected_artifact"]["selected_param_index"] == 1
+    assert patched["protocol_selected_artifact"]["source_job_id"] == "inner_p1_f0"
+    assert patched["protocol_selected_artifact"]["selected_param_overrides"] == {"training.optimizer.lr": 0.002}
+    assert patched["protocol_selected_artifact"]["inner_checkpoint_reused_for_outer_test"] is False
 
 
 def test_run_route_job_uses_protocol_default_device_and_data_root(tmp_path, monkeypatch):

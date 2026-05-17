@@ -24,6 +24,7 @@ from hust_bci_er.evaluation.protocols.plans import (
     build_protocol2_plan,
     build_protocol3_plan,
 )
+from hust_bci_er.evaluation.protocols.params import normalize_param_grids
 from hust_bci_er.evaluation.protocols.subject_splits import (
     assign_trial_rows_to_split,
     p1_subject_split,
@@ -74,6 +75,7 @@ class ProtocolJob:
     reuse_checkpoint_path: str | None = None
     selection_artifact_job_ids: tuple[str, ...] = ()
     selection_artifact_paths: tuple[str, ...] = ()
+    param_overrides: Mapping[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -127,6 +129,7 @@ def build_protocol_jobs(
     outer_seed: int = 42,
     inner_seed: int = 123,
     grid_sizes: Mapping[str, int] | None = None,
+    param_grids: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
 ) -> tuple[dict[str, Any], list[ProtocolJob]]:
     protocol_name = PROTOCOL_ALIASES.get(protocol, protocol)
     paths = [Path(path) for path in route_config_paths]
@@ -191,14 +194,23 @@ def build_protocol_jobs(
         return plan.as_dict(), jobs
 
     if protocol_name == "p3_nested_selection":
-        plan = build_protocol3_plan(routes, outer_folds=outer_folds, inner_folds=inner_folds, outer_seed=outer_seed, inner_seed=inner_seed, grid_sizes=grid_sizes)
-        sizes = {route_id: int((grid_sizes or {}).get(route_id, 1)) for route_id in routes}
+        normalized_param_grids = normalize_param_grids(param_grids)
+        sizes = {
+            route_id: len(normalized_param_grids[route_id])
+            if route_id in normalized_param_grids
+            else int((grid_sizes or {}).get(route_id, 1))
+            for route_id in routes
+        }
+        plan = build_protocol3_plan(routes, outer_folds=outer_folds, inner_folds=inner_folds, outer_seed=outer_seed, inner_seed=inner_seed, grid_sizes=sizes)
         for path, data in zip(paths, route_data):
             route_id = str(data["route_id"])
+            param_candidates = normalized_param_grids.get(route_id)
+            if param_candidates is None:
+                param_candidates = tuple({} for _ in range(sizes[route_id]))
             for outer in range(int(outer_folds)):
                 selection_job_ids: list[str] = []
                 for inner in range(int(inner_folds)):
-                    for param_index in range(sizes[route_id]):
+                    for param_index, param_overrides in enumerate(param_candidates):
                         seed = int(inner_seed) + outer * 1000 + inner * 100 + param_index
                         split_id = protocol_split_id(str(data["split_id"]), f"p3_outer{outer}_inner{inner}")
                         inner_job_id = f"p3__{route_id}__outer{outer}__inner{inner}__param{param_index}"
@@ -216,6 +228,7 @@ def build_protocol_jobs(
                                 inner_seed=int(inner_seed),
                                 outer_folds=int(outer_folds),
                                 inner_folds=int(inner_folds),
+                                param_overrides=dict(param_overrides),
                                 **route_job_base(path, data, seed=seed, split_id=split_id),
                             )
                         )
@@ -225,7 +238,7 @@ def build_protocol_jobs(
                     ProtocolJob(
                         protocol=protocol_name,
                         job_id=f"p3__{route_id}__outer{outer}__final",
-                        stage="outer_train_eval",
+                        stage="outer_final_retrain",
                         outer_fold=outer,
                         expected_artifacts=("config_snapshot.yaml", "predictions.csv", "score_matrix.csv", "manifest.json", "audit_report.json"),
                         crop_policy=route_crop_policy_manifest(data, seed=seed),
@@ -468,7 +481,7 @@ def materialize_protocol_run(
         "jobs": [job.as_dict() for job in jobs],
         "experiment_gate_job_ids": experiment_gate_job_ids,
         "artifact_only_job_ids": artifact_only_job_ids,
-        "completion_rule": "jobs with predictions.csv must write manifest.json and pass the requested experiment gate; P2 artifact jobs must write reusable checkpoints; P3 inner_select jobs must write checkpoint plus selection_metrics.json before dependent final jobs select and reuse the best checkpoint",
+        "completion_rule": "jobs with predictions.csv must write manifest.json and pass the requested experiment gate; P2 artifact jobs must write reusable checkpoints; P3 inner_select jobs must write checkpoint plus selection_metrics.json before dependent final jobs select the best params, retrain on outer train, and evaluate the new final artifact on outer test",
     }
     (run_dir / "protocol_run_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return manifest
@@ -485,7 +498,7 @@ def _mode_for_job(gate: str, job: Mapping[str, Any]) -> str:
     Candidate gate always uses ``candidate`` mode.
     """
     if gate == "smoke":
-        if str(job.get("stage", "")) in {"evaluate_holdout_crop_policy", "outer_train_eval"}:
+        if str(job.get("stage", "")) in {"evaluate_holdout_crop_policy", "outer_final_retrain"}:
             return "candidate"
         return "full_subjects"
     return "candidate"

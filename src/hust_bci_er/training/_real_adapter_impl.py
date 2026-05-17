@@ -939,7 +939,7 @@ def run_real_classifier_route(
         crop_policy: Optional protocol job crop-policy override, used by P2 diagnostics.
         save_checkpoint_path: Optional path for a reusable torch classifier checkpoint.
         reuse_checkpoint_path: Optional reusable checkpoint path for evaluation-only jobs.
-        reuse_checkpoint_context: Optional protocol selection context for P3 selected checkpoints.
+        reuse_checkpoint_context: Optional protocol context for validating reusable checkpoint provenance.
     """
     if run_mode not in VALID_RUN_MODES:
         raise ValueError(f"unknown run_mode: {run_mode}; valid: {', '.join(sorted(VALID_RUN_MODES))}")

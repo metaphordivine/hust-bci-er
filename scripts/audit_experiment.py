@@ -26,6 +26,7 @@ from hust_bci_er.data.splits import assert_disjoint_subjects, assert_original_tr
 from hust_bci_er.evaluation.crop_policy import FIXED_CROP_POLICIES  # noqa: E402
 from hust_bci_er.evaluation.exact_single_crop import exact_all_correct_rate_from_matrix, exact_ba_from_matrix  # noqa: E402
 from hust_bci_er.evaluation.metrics import balanced_accuracy  # noqa: E402
+from hust_bci_er.evaluation.protocols.params import apply_param_overrides  # noqa: E402
 from hust_bci_er.inference.topk import topk_binary  # noqa: E402
 
 
@@ -258,6 +259,19 @@ def route_model_name(route_data: dict[str, Any]) -> str:
     return str(model or "")
 
 
+def p3_effective_route_data(manifest: dict[str, Any], route_data: dict[str, Any]) -> dict[str, Any]:
+    selected = manifest.get("protocol_selected_artifact")
+    if not isinstance(selected, dict):
+        return route_data
+    overrides = selected.get("selected_param_overrides")
+    if not isinstance(overrides, dict) or not overrides:
+        return route_data
+    try:
+        return apply_param_overrides(route_data, overrides)
+    except ValueError:
+        return route_data
+
+
 def route_implementation_paths(route_data: dict[str, Any], route_rel_path: str) -> list[str]:
     paths = {
         route_rel_path,
@@ -313,7 +327,8 @@ def check_route_model_kwargs_passthrough(
     *,
     gate: str,
 ) -> None:
-    expected = route_model_kwargs(route_data)
+    route_basis = p3_effective_route_data(manifest, route_data)
+    expected = route_model_kwargs(route_basis)
     if not expected:
         add_check(
             checks,
@@ -374,6 +389,15 @@ def check_evidence_lineage(
         message="audit_schema_version supports evidence lineage checks",
     )
     config_sha = manifest.get("config_sha256")
+    selected = manifest.get("protocol_selected_artifact")
+    p3_selected_config = (
+        isinstance(selected, dict)
+        and selected.get("final_route_config_policy") == "base_route_plus_selected_param_overrides"
+        and isinstance(config_sha, str)
+        and route_path.exists()
+        and selected.get("base_route_config_sha256") == sha256_file(route_path)
+        and selected.get("final_route_config_sha256") == config_sha
+    )
     if isinstance(config_sha, str) and route_path.exists() and sha256_file(route_path) == config_sha:
         add_check(
             checks,
@@ -381,6 +405,14 @@ def check_evidence_lineage(
             severity="INFO",
             status="PASS",
             message="manifest config_sha256 matches current route file",
+        )
+    elif p3_selected_config:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE",
+            severity="INFO",
+            status="PASS",
+            message="manifest config_sha256 matches a P3 selected-param effective route derived from the audited route file",
         )
     else:
         add_check(
