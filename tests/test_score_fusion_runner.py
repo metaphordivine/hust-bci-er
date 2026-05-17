@@ -1,6 +1,7 @@
 import csv
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -135,6 +136,12 @@ def _write_source_manifest(root: Path, *, seed: int, fold: int) -> Path:
     return manifest_path
 
 
+def _write_base_run(root: Path, route_id: str, *, seed: int, fold: int, base: float) -> None:
+    run_dir = root / route_id
+    _write_source_manifest(run_dir, seed=seed, fold=fold)
+    _write_score_matrix(run_dir / "score_matrix.csv", base=base)
+
+
 def test_score_fusion_manifest_merges_multiple_source_splits(tmp_path):
     conformer_matrix = tmp_path / "conformer_score_matrix.csv"
     srfnet_matrix = tmp_path / "srfnet_score_matrix.csv"
@@ -145,6 +152,7 @@ def test_score_fusion_manifest_merges_multiple_source_splits(tmp_path):
     assert export_component_scores.export_component_scores_from_score_matrix(conformer_matrix, "conformer_component", conformer_component) == 0
     assert export_component_scores.export_component_scores_from_score_matrix(srfnet_matrix, "srfnet_long_component", srfnet_component) == 0
     source_a = _write_source_manifest(tmp_path / "source_a", seed=42, fold=0)
+    source_a_dup = _write_source_manifest(tmp_path / "source_a_dup", seed=42, fold=0)
     source_b = _write_source_manifest(tmp_path / "source_b", seed=42, fold=1)
     output_dir = tmp_path / "run"
     rc, info = run_score_fusion_routes.assemble_score_fusion(
@@ -158,7 +166,7 @@ def test_score_fusion_manifest_merges_multiple_source_splits(tmp_path):
         ROUTE,
         output_dir,
         {"conformer_component": conformer_component, "srfnet_long_component": srfnet_component},
-        source_manifest_paths=[source_a, source_b],
+        source_manifest_paths=[source_a, source_a_dup, source_b],
         score_matrix_evidence=info["score_matrix_evidence"],
     )
 
@@ -167,4 +175,37 @@ def test_score_fusion_manifest_merges_multiple_source_splits(tmp_path):
     assert split["status"] == "merged_source_protocol_splits"
     assert {fold["fold"] for fold in split["fold_definitions"]} == {"seed42_fold0", "seed42_fold1"}
     assert {str(row["fold"]) for row in split["trial_rows"]} == {"seed42_fold0", "seed42_fold1"}
+    assert len(split["fold_definitions"]) == 2
     assert manifest["score_fusion_source_evidence"]["split_evidence"] == "merged_source_protocol_splits"
+
+
+def test_score_fusion_main_trusts_component_csvs_exported_earlier_in_same_run(tmp_path, monkeypatch):
+    base_runs = tmp_path / "base_runs"
+    _write_base_run(base_runs, "sliding_window_conformer_lite", seed=42, fold=0, base=0.0)
+    _write_base_run(base_runs, "sliding_window_srfnet", seed=42, fold=0, base=1.0)
+    _write_base_run(base_runs, "fixed_crop_ea_fbstcnet", seed=42, fold=0, base=2.0)
+
+    audit_calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        audit_calls.append([str(part) for part in cmd])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(run_score_fusion_routes.subprocess, "run", fake_run)
+
+    output_dir = tmp_path / "score_fusion"
+    rc = run_score_fusion_routes.main(
+        [
+            "--route-filter", "score_average",
+            "--base-runs-dir", str(base_runs),
+            "--export-missing",
+            "--output-dir", str(output_dir),
+            "--audit",
+        ]
+    )
+
+    summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
+    assert rc == 0
+    assert summary["passed"] == 3
+    assert [item["status"] for item in summary["results"]] == ["PASS", "PASS", "PASS"]
+    assert sum("repo_doctor.py" in call for cmd in audit_calls for call in cmd) == 3

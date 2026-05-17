@@ -632,6 +632,28 @@ def _apply_single_crop_policy_to_score_matrix(
     return out
 
 
+def _is_protocol_single_crop_policy(policy: str | Mapping[str, Any]) -> bool:
+    name = str(policy.get("name") if isinstance(policy, Mapping) else policy)
+    return name in {*FIXED_CROP_POLICIES, "random", "worst"}
+
+
+def _trial_rows_from_score_matrix(score_matrix_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in score_matrix_rows:
+        scores = [float(row[f"crop_{idx}"]) for idx in range(5)]
+        score = float(sum(scores) / len(scores))
+        rows.append(
+            {
+                "subject_id": row["subject_id"],
+                "trial_id": row["trial_id"],
+                "y_true": int(float(row["y_true"])),
+                "y_score": score,
+                "y_pred": int(score >= 0.5),
+            }
+        )
+    return rows
+
+
 def _write_evidence_manifests(
     run_dir: Path,
     *,
@@ -1100,6 +1122,9 @@ def run_real_classifier_route(
     score_matrix_rows, score_matrix_evidence = _build_score_matrix(eval_window_rows, crop_policy=active_crop_policy, seed=active_seed)
     score_matrix_path = run_dir / "score_matrix.csv"
     _write_score_matrix(score_matrix_path, score_matrix_rows)
+
+    if _is_protocol_single_crop_policy(active_crop_policy):
+        eval_trial_rows = _trial_rows_from_score_matrix(score_matrix_rows)
 
     # Build prediction records from trial-level rows
     prediction_records = [

@@ -540,6 +540,30 @@ def _unique_source_split_hashes(source_manifest_paths: list[Path]) -> set[str]:
     return hashes
 
 
+def _source_split_membership_hash(split_data: dict[str, Any]) -> str:
+    rows = []
+    for row in split_data.get("trial_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                "subject_id": str(row.get("subject_id", "")),
+                "trial_id": str(row.get("trial_id", row.get("original_trial_id", ""))),
+                "original_trial_id": str(row.get("original_trial_id", "")),
+                "split": str(row.get("split", "")),
+            }
+        )
+    payload = {
+        "train_subjects": sorted(map(str, split_data.get("train_subjects") or [])),
+        "val_subjects": sorted(map(str, split_data.get("val_subjects") or [])),
+        "test_subjects": sorted(map(str, split_data.get("test_subjects") or [])),
+        "trial_rows": sorted(rows, key=lambda item: (item["split"], item["subject_id"], item["trial_id"], item["original_trial_id"])),
+    }
+    import hashlib
+
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 def _write_merged_source_split(
     route_data: dict[str, Any],
     output_dir: Path,
@@ -548,6 +572,7 @@ def _write_merged_source_split(
     fold_definitions: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
     used_fold_ids: set[str] = set()
+    seen_alignment_keys: set[tuple[str, str, str]] = set()
     for index, manifest_path in enumerate(source_manifest_paths):
         manifest = _load_source_manifest(manifest_path)
         split_path = _source_split_path(manifest_path)
@@ -561,6 +586,11 @@ def _write_merged_source_split(
             continue
         seed = manifest.get("seed")
         fold = manifest.get("fold")
+        membership_hash = _source_split_membership_hash(split_data)
+        alignment_key = (str(seed), str(fold), membership_hash)
+        if alignment_key in seen_alignment_keys:
+            continue
+        seen_alignment_keys.add(alignment_key)
         base_fold_id = f"seed{seed}_fold{fold}" if seed is not None and fold is not None else f"source{index}"
         fold_id = base_fold_id
         suffix = 1
@@ -573,6 +603,7 @@ def _write_merged_source_split(
                 "fold": fold_id,
                 "source_manifest": _display_path(manifest_path),
                 "source_split_id": str(split_data.get("split_id") or manifest.get("split_id") or ""),
+                "source_split_membership_sha256": membership_hash,
                 "train_subjects": list(split_data.get("train_subjects") or []),
                 "val_subjects": list(split_data.get("val_subjects") or []),
                 "test_subjects": list(split_data.get("test_subjects") or []),
@@ -748,6 +779,7 @@ def main(argv: list[str] | None = None) -> int:
     results: list[dict[str, Any]] = []
     passed = 0
     failed = 0
+    exported_component_sources: dict[str, list[Path]] = {}
 
     for idx, (route_path, data) in enumerate(routes, 1):
         route_id = str(data["route_id"])
@@ -756,6 +788,7 @@ def main(argv: list[str] | None = None) -> int:
 
         component_scores: dict[str, Path] = {}
         source_manifest_paths: list[Path] = []
+        untrusted_component_scores: list[str] = []
         missing: list[str] = []
 
         for comp_id in components:
@@ -763,10 +796,13 @@ def main(argv: list[str] | None = None) -> int:
             base_route = base_route_for_component(comp_id)
             if expected.exists():
                 component_scores[comp_id] = expected
-                if args.export_missing and args.base_runs_dir and base_route is not None:
-                    for source in find_component_source_artifacts(args.base_runs_dir / base_route):
-                        if source.manifest_path is not None and source.manifest_path not in source_manifest_paths:
-                            source_manifest_paths.append(source.manifest_path)
+                current_run_sources = exported_component_sources.get(comp_id)
+                if current_run_sources:
+                    for manifest_path in current_run_sources:
+                        if manifest_path not in source_manifest_paths:
+                            source_manifest_paths.append(manifest_path)
+                else:
+                    untrusted_component_scores.append(comp_id)
                 continue
 
             # Try to export from base route predictions
@@ -785,6 +821,11 @@ def main(argv: list[str] | None = None) -> int:
                 rc = export_component_score(comp_id, base_route, source_artifacts, expected)
                 if rc == 0:
                     component_scores[comp_id] = expected
+                    exported_component_sources[comp_id] = [
+                        source.manifest_path
+                        for source in source_artifacts
+                        if source.manifest_path is not None
+                    ]
                     for source in source_artifacts:
                         if source.manifest_path is not None and source.manifest_path not in source_manifest_paths:
                             source_manifest_paths.append(source.manifest_path)
@@ -824,7 +865,11 @@ def main(argv: list[str] | None = None) -> int:
             result["status"] = "AUDIT_BLOCKED_NO_SOURCE_MANIFEST"
             result["reason"] = "--audit requires source run manifests; pre-exported component CSVs only produce diagnostic artifacts"
 
-        if rc == 0 and args.audit and source_manifest_paths:
+        if rc == 0 and args.audit and source_manifest_paths and untrusted_component_scores:
+            result["status"] = "AUDIT_BLOCKED_UNTRUSTED_COMPONENT_CSV"
+            result["reason"] = f"--audit requires source manifests for every component; pre-existing CSVs were not exported in this run: {untrusted_component_scores}"
+
+        if rc == 0 and args.audit and source_manifest_paths and not untrusted_component_scores:
             audit_proc = subprocess.run(
                 [
                     sys.executable,

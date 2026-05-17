@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -182,6 +183,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {route_id_from_path(p)}  ({p.relative_to(ROOT)})")
         return 0
 
+    data_root = args.data_root
+    if data_root is None and os.environ.get("HUST_BCI_ER_DATA_ROOT"):
+        data_root = Path(os.environ["HUST_BCI_ER_DATA_ROOT"])
+    if data_root is None:
+        parser.error("--data-root is required for executable torch diagnostics, or set HUST_BCI_ER_DATA_ROOT")
+
     output_base = args.output_dir or ROOT / "outputs" / "batch_diagnostic"
     summary_path = output_base / "batch_summary.json"
     output_base.mkdir(parents=True, exist_ok=True)
@@ -195,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{idx}/{len(routes)}] {route_id} ... ", end="", flush=True)
         result = run_route_diagnostic(
             route_path,
-            data_root=args.data_root,
+            data_root=data_root,
             device=args.device,
             seed=args.seed,
             n_folds=args.n_folds,
@@ -216,11 +223,11 @@ def main(argv: list[str] | None = None) -> int:
         "seed": args.seed,
         "n_folds": args.n_folds,
         "device": args.device,
-        "data_root": str(args.data_root) if args.data_root else None,
+        "data_root": str(data_root),
         "results": results,
     }
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"\nSummary: {passed} passed, {failed} failed  →  {summary_path.relative_to(ROOT)}")
+    print(f"\nSummary: {passed} passed, {failed} failed  ->  {summary_path.relative_to(ROOT)}")
     return 0 if failed == 0 else 1
 
 
