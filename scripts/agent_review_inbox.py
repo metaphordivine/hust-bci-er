@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -8,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from scripts.agent_plan_ingest import dedupe_issues, parse_text, write_issue_board
+    from scripts.agent_plan_ingest import COMMAND_RE, dedupe_issues, extract_expected_fix, parse_text, write_issue_board
 except ModuleNotFoundError:  # pragma: no cover - direct script execution path
-    from agent_plan_ingest import dedupe_issues, parse_text, write_issue_board
+    from agent_plan_ingest import COMMAND_RE, dedupe_issues, extract_expected_fix, parse_text, write_issue_board
 
 
 def fetch_pr_review_threads(pr_number: int) -> dict[str, Any]:
@@ -98,6 +99,84 @@ def review_text_from_payload(payload: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
+def _short_thread_id(thread_id: str) -> str:
+    safe = "".join(ch for ch in thread_id if ch.isalnum())
+    if safe:
+        return safe[-10:]
+    return hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:10]
+
+
+def infer_review_severity(body: str) -> str:
+    lowered = body.lower()
+    if any(marker in lowered for marker in ("[p0]", "p0:", "s0", "blocking", "no-go", "阻断")):
+        return "S0"
+    if any(marker in lowered for marker in ("[p1]", "p1:", "s1")):
+        return "S1"
+    if any(marker in lowered for marker in ("[p2]", "p2:", "s2")):
+        return "S2"
+    return "S1"
+
+
+def extract_review_title(body: str) -> str:
+    for line in body.splitlines():
+        clean = line.strip(" #*-`\t")
+        if not clean:
+            continue
+        clean = clean.removeprefix("[P0]").removeprefix("[P1]").removeprefix("[P2]").strip(" ：:-")
+        return clean[:140] or "Review thread"
+    return "Review thread"
+
+
+def issues_from_payload(payload: dict[str, Any], pr: int) -> list[dict[str, Any]]:
+    pr_data = payload.get("data", {}).get("repository", {}).get("pullRequest", {})
+    issues: list[dict[str, Any]] = []
+    for thread in pr_data.get("reviewThreads", {}).get("nodes", []):
+        if not isinstance(thread, dict) or thread.get("isResolved"):
+            continue
+        comments = [comment for comment in thread.get("comments", {}).get("nodes", []) if isinstance(comment, dict)]
+        if not comments:
+            continue
+        first = comments[0]
+        body = str(first.get("body") or "")
+        path = str(first.get("path") or "")
+        line = first.get("line")
+        thread_id = str(thread.get("id") or "")
+        issues.append(
+            {
+                "id": f"PR{pr}-{_short_thread_id(thread_id)}",
+                "source": f"pr:{pr}:thread:{thread_id}",
+                "severity": infer_review_severity(body),
+                "title": extract_review_title(body),
+                "problem": body.strip(),
+                "expected_fix": extract_expected_fix(body),
+                "files_hint": [path] if path else [],
+                "line_hint": line,
+                "thread_id": thread_id,
+                "validation_hint": [cmd.strip() for cmd in COMMAND_RE.findall(body)],
+                "status": "open",
+            }
+        )
+    for idx, comment in enumerate(pr_data.get("comments", {}).get("nodes", []), start=1):
+        if not isinstance(comment, dict) or not comment.get("body"):
+            continue
+        body = str(comment["body"])
+        created_at = str(comment.get("createdAt") or idx)
+        issues.append(
+            {
+                "id": f"PR{pr}-COMMENT-{idx}",
+                "source": f"pr:{pr}:comment:{created_at}",
+                "severity": infer_review_severity(body),
+                "title": extract_review_title(body),
+                "problem": body.strip(),
+                "expected_fix": extract_expected_fix(body),
+                "files_hint": [],
+                "validation_hint": [cmd.strip() for cmd in COMMAND_RE.findall(body)],
+                "status": "open",
+            }
+        )
+    return issues
+
+
 def ingest_review_inbox(pr: int, out_dir: Path, *, review_file: Path | None = None) -> list[dict[str, Any]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     issues: list[dict[str, Any]] = []
@@ -107,7 +186,7 @@ def ingest_review_inbox(pr: int, out_dir: Path, *, review_file: Path | None = No
         (out_dir / "pr_review_raw.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         text = review_text_from_payload(payload)
         (out_dir / "pr_review_inbox.md").write_text(text, encoding="utf-8")
-        issues.extend(parse_text(text, source=f"pr:{pr}:reviewThreads"))
+        issues.extend(issues_from_payload(payload, pr))
     except Exception as exc:  # noqa: BLE001 - CLI fallback should preserve clear failure text
         fetch_error = str(exc)
         if review_file is None:

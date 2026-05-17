@@ -8,6 +8,7 @@ from pathlib import Path
 from scripts.agent_context import CONTEXT_PACKS, context_for_task
 from scripts.agent_intake import classify, classify_with_deepseek, maybe_refine_with_deepseek
 from scripts.agent_plan_ingest import ingest
+from scripts.agent_review_inbox import ingest_review_inbox
 from scripts.agent_session import init_session
 
 
@@ -99,6 +100,22 @@ def test_pr_review_fix_intake():
     result = classify("修 PR17 unresolved review")
     assert result["mode"] == "review-fix"
     assert result["needs_pr_review_fetch"] is True
+    assert result["should_edit"] is True
+
+
+def test_read_only_pr_review_intake_does_not_allow_edits():
+    for message in ["review PR18", "深度review PR18", "看一下 PR18"]:
+        result = classify(message)
+        assert result["mode"] == "planning-only"
+        assert result["task_family"] == "review"
+        assert result["should_edit"] is False
+
+
+def test_unresolved_pr_review_fix_intake_allows_edits():
+    result = classify("修 PR18 unresolved review")
+    assert result["mode"] == "review-fix"
+    assert result["task_family"] == "review-fix"
+    assert result["should_edit"] is True
 
 
 def test_score_fusion_direct_task_intake():
@@ -144,6 +161,7 @@ python -m pytest tests/test_protocol_runner.py -q
     board = json.loads((tmp_path / "session" / "issue_board.json").read_text(encoding="utf-8"))
     assert len(issues) >= 2
     assert len(board["issues"]) >= 2
+    assert {issue["id"] for issue in board["issues"]} >= {"S0-1", "S0-2"}
     assert any("scripts/run_score_fusion_routes.py" in issue["files_hint"] for issue in board["issues"])
 
 
@@ -153,6 +171,22 @@ def test_agent_session_init_and_status(tmp_path):
     assert (session_dir / "session.md").exists()
     proc = run_script("scripts/agent_session.py", "status", "--session-dir", str(session_dir))
     assert "context-engineering" in proc.stdout
+
+
+def test_agent_session_tracks_reads_commands_validation_and_next_action(tmp_path):
+    session_dir = init_session("context-engineering", tmp_path / "session", intake_mode="direct-task")
+    run_script("scripts/agent_session.py", "read", "--session-dir", str(session_dir), "--file", "scripts/agent_intake.py")
+    run_script("scripts/agent_session.py", "command", "--session-dir", str(session_dir), "--command", "python -m pytest tests/test_agent_intake_workflow.py -q")
+    run_script("scripts/agent_session.py", "validation", "--session-dir", str(session_dir), "--status", "pass", "--message", "targeted tests passed")
+    run_script("scripts/agent_session.py", "next", "--session-dir", str(session_dir), "--message", "run repo_doctor fast")
+    data = json.loads((session_dir / "session.json").read_text(encoding="utf-8"))
+    markdown = (session_dir / "session.md").read_text(encoding="utf-8")
+    assert data["files_read"] == ["scripts/agent_intake.py"]
+    assert data["commands_run"][0]["command"] == "python -m pytest tests/test_agent_intake_workflow.py -q"
+    assert data["validation_status"] == "pass"
+    assert data["next_action"] == "run repo_doctor fast"
+    assert "scripts/agent_intake.py" in markdown
+    assert "python -m pytest tests/test_agent_intake_workflow.py -q" in markdown
 
 
 def test_agents_md_no_longer_requires_all_eight_full_docs_for_every_task():
@@ -179,6 +213,82 @@ def test_context_mapping_is_static_for_all_task_families():
     for task in TASK_FAMILIES:
         data = context_for_task(task)
         assert data["context_pack_path"].startswith("agent_context/")
+
+
+def test_json_output_is_pure_json_for_intake_and_context():
+    intake = run_script(
+        "scripts/agent_intake.py",
+        "--deterministic",
+        "--json",
+        "--message",
+        "score-fusion：修 component map 的 whitening 绑定问题",
+    )
+    assert json.loads(intake.stdout)["task_family"] == "score-fusion"
+    context = run_script("scripts/agent_context.py", "--json", "--task", "score-fusion")
+    assert json.loads(context.stdout)["context_pack_path"] == "agent_context/score_fusion_pack.md"
+
+
+def test_review_inbox_creates_one_issue_per_unresolved_thread(monkeypatch, tmp_path):
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "nodes": [
+                            {
+                                "id": "THREAD_alpha",
+                                "isResolved": False,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "Please keep --json output parseable.\npython scripts/agent_intake.py --json --message x",
+                                            "path": "scripts/agent_intake.py",
+                                            "line": 450,
+                                            "author": {"login": "reviewer"},
+                                            "createdAt": "2026-05-17T00:00:00Z",
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "THREAD_beta",
+                                "isResolved": False,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "Read-only PR review must not be editable.",
+                                            "path": "scripts/agent_intake.py",
+                                            "line": 120,
+                                            "author": {"login": "reviewer"},
+                                            "createdAt": "2026-05-17T00:01:00Z",
+                                        }
+                                    ]
+                                },
+                            },
+                        ]
+                    },
+                    "comments": {"nodes": []},
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr("scripts.agent_review_inbox.fetch_pr_review_threads", lambda pr: payload)
+    issues = ingest_review_inbox(18, tmp_path)
+    board = json.loads((tmp_path / "issue_board.json").read_text(encoding="utf-8"))
+    assert len(issues) == 2
+    assert len(board["issues"]) == 2
+    assert {issue["thread_id"] for issue in board["issues"]} == {"THREAD_alpha", "THREAD_beta"}
+    assert {issue["line_hint"] for issue in board["issues"]} == {120, 450}
+    assert all(issue["files_hint"] == ["scripts/agent_intake.py"] for issue in board["issues"])
+
+
+def test_agent_brief_warns_about_deepseek_private_review_content():
+    text = read("agent_protocols/AGENT_BRIEF.md")
+    assert "may transmit user task text to the external DeepSeek API" in text
+    assert "private review content" in text
 
 
 def test_deepseek_refinement_uses_local_schema_and_flags(monkeypatch):

@@ -31,6 +31,9 @@ deterministic classifier. Use `--deterministic` to force local-only intake, or
 `--require-deepseek` to fail instead of falling back. Model output may refine
 `mode`, `task_family`, `confidence`, and `reason`, but local code must recompute
 issue-board flags, edit permission, ask-human flags, and selected context pack.
+Because DeepSeek-first intake sends the user task text to an external API, use
+`--deterministic` for private review content unless the human explicitly allows
+external API use.
 
 ## Session State
 

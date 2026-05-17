@@ -162,7 +162,7 @@ CONTEXT_PACKS: dict[str, dict[str, Any]] = {
             "python scripts/repo_doctor.py fast",
         ],
         "context_budget": "brief, context-engineering pack, router docs, agent scripts/tests",
-        "escalation_conditions": ["request expands into route/evidence changes", "intake classifier needs non-deterministic behavior"],
+        "escalation_conditions": ["request expands into route/evidence changes", "API-backed intake changes safety flags instead of only refining mode/task family"],
     },
 }
 
@@ -219,10 +219,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Select minimal context pack for a repository task family.")
     parser.add_argument("--list", action="store_true", help="List supported task families.")
     parser.add_argument("--task", help="Task family to select.")
-    parser.add_argument("--json", action="store_true", help="Print JSON payload.")
+    parser.add_argument("--json", action="store_true", help="Print JSON payload only.")
+    parser.add_argument("--human", action="store_true", help="Print human-readable summary. This is the default without --json.")
     args = parser.parse_args(argv)
 
     if args.list:
+        if args.json:
+            print(json.dumps(sorted(CONTEXT_PACKS), indent=2, ensure_ascii=False))
+            return 0
         for task in sorted(CONTEXT_PACKS):
             print(task)
         return 0
@@ -233,7 +237,6 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
     if args.json:
-        print_human(data)
         print(json.dumps(data, indent=2, ensure_ascii=False))
     else:
         print_human(data)

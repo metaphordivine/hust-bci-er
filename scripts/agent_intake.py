@@ -53,7 +53,22 @@ PLAN_SIGNALS = (
     "phase",
     "任务",
 )
-REVIEW_WORDS = ("review", "conversation", "unresolved", "comment", "comments", "pr", "修一下", "修复")
+READONLY_REVIEW_WORDS = ("review", "code review", "看一下", "看下", "看看", "深度review", "深度 review", "审一下", "检查")
+REVIEW_FIX_WORDS = (
+    "fix",
+    "修",
+    "修一下",
+    "修复",
+    "处理",
+    "解决",
+    "address",
+    "resolve",
+    "unresolved",
+    "conversation",
+    "comment",
+    "comments",
+    "requested changes",
+)
 PLANNING_WORDS = ("what should we do", "怎么做", "该怎么做", "分析", "计划", "给计划", "review only", "怎么看")
 EDIT_WORDS = ("fix", "修", "实现", "改", "edit", "implement", "处理")
 COMMAND_ONLY_PATTERNS = (
@@ -104,11 +119,19 @@ def detect_task_family(text: str) -> str:
     return "review" if "review" in lowered else "repo-fast" if "fast" in lowered else "context-engineering" if "agent" in lowered else "repo-fast"
 
 
-def has_pr_review_signal(text: str) -> bool:
+def has_pr_number(text: str) -> bool:
     lowered = text.lower()
-    has_pr = re.search(r"\bpr\s*#?\d+\b", lowered) is not None or re.search(r"\bpull request\s*#?\d+\b", lowered) is not None
-    has_review = any(word in lowered for word in REVIEW_WORDS)
-    return bool(has_pr and has_review)
+    return bool(re.search(r"\bpr\s*#?\d+\b", lowered) or re.search(r"\bpull request\s*#?\d+\b", lowered))
+
+
+def has_review_fix_signal(text: str) -> bool:
+    lowered = text.lower()
+    return has_pr_number(text) and any(word in lowered for word in REVIEW_FIX_WORDS)
+
+
+def has_readonly_review_signal(text: str) -> bool:
+    lowered = text.lower()
+    return has_pr_number(text) and any(word in lowered for word in READONLY_REVIEW_WORDS) and not has_review_fix_signal(text)
 
 
 def has_plan_signal(text: str) -> bool:
@@ -162,10 +185,14 @@ def classify(text: str) -> dict[str, Any]:
         mode = "command-only"
         confidence = 0.88
         reason = "Input asks only to run a named check/command."
-    elif has_pr_review_signal(text):
+    elif has_review_fix_signal(text):
         mode = "review-fix"
         confidence = 0.92
-        reason = "Input mentions PR plus review/conversation/unresolved fix signals."
+        reason = "Input mentions PR plus actionable review-fix signals."
+    elif has_readonly_review_signal(text) and not has_plan_signal(text):
+        mode = "planning-only"
+        confidence = 0.88
+        reason = "Input asks for PR review/inspection without fix signals."
     elif asks_planning_only(text):
         mode = "planning-only"
         confidence = 0.86
@@ -184,6 +211,8 @@ def classify(text: str) -> dict[str, Any]:
         task_family = "repo-fast"
     if mode == "review-fix":
         task_family = "review-fix"
+    if mode == "planning-only" and has_readonly_review_signal(text):
+        task_family = "review"
     if mode == "planning-only" and task_family == "repo-fast":
         task_family = "review"
     if mode == "state-changing" and "promot" in lowered:
@@ -242,6 +271,12 @@ def _json_from_text(text: str) -> dict[str, Any]:
 def _recompute_flags(result: dict[str, Any], original_text: str) -> dict[str, Any]:
     mode = str(result.get("mode") or "ambiguous")
     task_family = str(result.get("task_family") or detect_task_family(original_text))
+    if has_review_fix_signal(original_text):
+        mode = "review-fix"
+        task_family = "review-fix"
+    elif has_readonly_review_signal(original_text) and not has_plan_signal(original_text):
+        mode = "planning-only"
+        task_family = "review"
     if mode not in MODE_ORDER:
         mode = "ambiguous"
     if task_family not in CONTEXT_PACKS:
@@ -427,7 +462,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Classify user input into the repository adaptive agent intake workflow.")
     parser.add_argument("--message", help="User message to classify.")
     parser.add_argument("--message-file", type=Path, help="File containing user message to classify.")
-    parser.add_argument("--json", action="store_true", help="Also print JSON payload.")
+    parser.add_argument("--json", action="store_true", help="Print JSON payload only.")
+    parser.add_argument("--human", action="store_true", help="Print human-readable summary. This is the default without --json.")
     parser.add_argument("--list-modes", action="store_true", help="List supported intake modes.")
     parser.add_argument(
         "--intake-engine",
@@ -471,9 +507,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     except RuntimeError as exc:
         parser.error(str(exc))
-    print_human(result)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print_human(result)
     return 0
 
 

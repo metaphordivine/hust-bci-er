@@ -46,8 +46,33 @@ def write_session(session_dir: Path, data: dict[str, Any]) -> None:
         f"- validation_status: {data.get('validation_status', '')}",
         f"- next_action: {data.get('next_action', '')}",
         "",
-        "## Issues",
+        "## Files Read",
     ]
+    files_read = data.get("files_read") or []
+    if not files_read:
+        lines.append("- none")
+    for item in files_read:
+        lines.append(f"- {item}")
+    lines.extend(
+        [
+            "",
+            "## Commands Run",
+        ]
+    )
+    commands_run = data.get("commands_run") or []
+    if not commands_run:
+        lines.append("- none")
+    for item in commands_run:
+        if isinstance(item, dict):
+            lines.append(f"- {item.get('timestamp', '')}: {item.get('command', '')}")
+        else:
+            lines.append(f"- {item}")
+    lines.extend(
+        [
+        "",
+        "## Issues",
+        ]
+    )
     issues = data.get("issues") or {}
     if not issues:
         lines.append("- none")
@@ -103,6 +128,42 @@ def update_issue(session_dir: Path, issue_id: str, status: str, message: str) ->
     write_session(session_dir, data)
 
 
+def record_file_read(session_dir: Path, file_path: str) -> None:
+    data = load_session(session_dir)
+    files = data.setdefault("files_read", [])
+    if file_path not in files:
+        files.append(file_path)
+    data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    write_session(session_dir, data)
+
+
+def record_command(session_dir: Path, command: str) -> None:
+    data = load_session(session_dir)
+    data.setdefault("commands_run", []).append(
+        {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "command": command,
+        }
+    )
+    data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    write_session(session_dir, data)
+
+
+def update_validation(session_dir: Path, status: str, message: str) -> None:
+    data = load_session(session_dir)
+    data["validation_status"] = status
+    data["validation_message"] = message
+    data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    write_session(session_dir, data)
+
+
+def update_next_action(session_dir: Path, message: str) -> None:
+    data = load_session(session_dir)
+    data["next_action"] = message
+    data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    write_session(session_dir, data)
+
+
 def print_status(session_dir: Path) -> None:
     data = load_session(session_dir)
     print(f"session_dir: {session_dir}")
@@ -113,6 +174,8 @@ def print_status(session_dir: Path) -> None:
     print(f"next_action: {data.get('next_action', '')}")
     issues = data.get("issues") or {}
     print(f"issues: {len(issues)}")
+    print(f"files_read: {len(data.get('files_read') or [])}")
+    print(f"commands_run: {len(data.get('commands_run') or [])}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -134,6 +197,23 @@ def main(argv: list[str] | None = None) -> int:
     issue.add_argument("--status", choices=["open", "fixed", "deferred"], required=True)
     issue.add_argument("--message", required=True)
 
+    read = sub.add_parser("read")
+    read.add_argument("--session-dir", type=Path, required=True)
+    read.add_argument("--file", required=True)
+
+    command = sub.add_parser("command")
+    command.add_argument("--session-dir", type=Path, required=True)
+    command.add_argument("--command", dest="command_text", required=True)
+
+    validation = sub.add_parser("validation")
+    validation.add_argument("--session-dir", type=Path, required=True)
+    validation.add_argument("--status", choices=["not_run", "pass", "fail"], required=True)
+    validation.add_argument("--message", required=True)
+
+    next_action = sub.add_parser("next")
+    next_action.add_argument("--session-dir", type=Path, required=True)
+    next_action.add_argument("--message", required=True)
+
     status = sub.add_parser("status")
     status.add_argument("--session-dir", type=Path, required=True)
 
@@ -145,6 +225,14 @@ def main(argv: list[str] | None = None) -> int:
         add_note(args.session_dir, args.message)
     elif args.command == "issue":
         update_issue(args.session_dir, args.issue, args.status, args.message)
+    elif args.command == "read":
+        record_file_read(args.session_dir, args.file)
+    elif args.command == "command":
+        record_command(args.session_dir, args.command_text)
+    elif args.command == "validation":
+        update_validation(args.session_dir, args.status, args.message)
+    elif args.command == "next":
+        update_next_action(args.session_dir, args.message)
     elif args.command == "status":
         print_status(args.session_dir)
     return 0

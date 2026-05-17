@@ -17,6 +17,11 @@ code must still recompute safety flags, context pack selection, and red-line
 behavior after the model response. Use `--deterministic` for offline or CI-only
 local classification.
 
+DeepSeek-first intake may transmit user task text to the external DeepSeek API.
+Do not use it for private review content, confidential PR comments, or sensitive
+plans unless the human explicitly allows external API use; use `--deterministic`
+in those cases.
+
 Read full protocol documents only when the selected context pack requires them,
 validation points there, or the task explicitly edits that protocol.
 

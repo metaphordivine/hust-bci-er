@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-SECTION_RE = re.compile(r"(?im)^\s*(?:#{1,6}\s*)?(?P<label>S[0-2](?:-\d+)?|Blocking|No-Go|仍然阻断|需要补)\s*[:：\-]?\s*(?P<title>.*)$")
+SECTION_RE = re.compile(r"(?im)^\s*(?:#{1,6}\s*)?(?P<label>S[0-2](?:-\d+)?|P[0-3](?:-\d+)?|Blocking|No-Go|仍然阻断|需要补)\s*[:：\-]?\s*(?P<title>.*)$")
 PATH_RE = re.compile(r"(?<![\w.-])(?:[\w.-]+/[\w./-]+|[\w.-]+\\[\w.\\/-]+|\w+\.py|\w+\.md|\w+\.yaml|\w+\.json)(?![\w.-])")
 COMMAND_RE = re.compile(r"(?m)^\s*(?:python|pytest|git|gh)\s+[^\n]+")
 
@@ -25,6 +25,12 @@ def severity_from_label(label: str, body: str) -> str:
     if value.startswith("S1"):
         return "S1"
     if value.startswith("S2"):
+        return "S2"
+    if value.startswith("P0") or value.startswith("P1"):
+        return "S0"
+    if value.startswith("P2"):
+        return "S1"
+    if value.startswith("P3"):
         return "S2"
     return "S1"
 
@@ -63,7 +69,10 @@ def split_sections(text: str) -> list[tuple[str, str, str]]:
     return sections
 
 
-def issue_id(title: str, problem: str) -> str:
+def issue_id(label: str, title: str, problem: str) -> str:
+    normalized_label = label.strip().upper()
+    if re.fullmatch(r"S[0-2]-\d+", normalized_label):
+        return normalized_label
     digest = hashlib.sha1(normalize(title + " " + problem).encode("utf-8")).hexdigest()[:8]
     return f"ISS-{digest}"
 
@@ -81,7 +90,7 @@ def parse_text(text: str, *, source: str) -> list[dict[str, Any]]:
         files = sorted({match.rstrip(".,;:)") for match in PATH_RE.findall(problem)})
         commands = [cmd.strip() for cmd in COMMAND_RE.findall(problem)]
         issue = {
-            "id": issue_id(title, problem),
+            "id": issue_id(label, title, problem),
             "source": source,
             "severity": severity_from_label(label, problem),
             "title": title,
