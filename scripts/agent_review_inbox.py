@@ -108,11 +108,11 @@ def _short_thread_id(thread_id: str) -> str:
 
 def infer_review_severity(body: str) -> str:
     lowered = body.lower()
-    if any(marker in lowered for marker in ("[p0]", "p0:", "s0", "blocking", "no-go", "阻断")):
+    if any(marker in lowered for marker in ("[p0]", "p0:", "[p1]", "p1:", "s0", "blocking", "no-go", "阻断")):
         return "S0"
-    if any(marker in lowered for marker in ("[p1]", "p1:", "s1")):
+    if any(marker in lowered for marker in ("[p2]", "p2:", "s1")):
         return "S1"
-    if any(marker in lowered for marker in ("[p2]", "p2:", "s2")):
+    if any(marker in lowered for marker in ("[p3]", "p3:", "s2")):
         return "S2"
     return "S1"
 
@@ -122,12 +122,36 @@ def extract_review_title(body: str) -> str:
         clean = line.strip(" #*-`\t")
         if not clean:
             continue
-        clean = clean.removeprefix("[P0]").removeprefix("[P1]").removeprefix("[P2]").strip(" ：:-")
+        clean = clean.removeprefix("[P0]").removeprefix("[P1]").removeprefix("[P2]").removeprefix("[P3]").strip(" ：:-")
         return clean[:140] or "Review thread"
     return "Review thread"
 
 
-def issues_from_payload(payload: dict[str, Any], pr: int) -> list[dict[str, Any]]:
+ACTIONABLE_PR_COMMENT_WORDS = (
+    "fix",
+    "修",
+    "处理",
+    "解决",
+    "address",
+    "resolve",
+    "unresolved",
+    "requested changes",
+    "需要",
+    "请",
+    "must",
+    "should",
+    "blocking",
+    "no-go",
+    "阻断",
+)
+
+
+def is_actionable_pr_comment(body: str) -> bool:
+    lowered = body.lower()
+    return any(word in lowered for word in ACTIONABLE_PR_COMMENT_WORDS)
+
+
+def issues_from_payload(payload: dict[str, Any], pr: int, *, include_pr_comments: bool = False) -> list[dict[str, Any]]:
     pr_data = payload.get("data", {}).get("repository", {}).get("pullRequest", {})
     issues: list[dict[str, Any]] = []
     for thread in pr_data.get("reviewThreads", {}).get("nodes", []):
@@ -160,6 +184,8 @@ def issues_from_payload(payload: dict[str, Any], pr: int) -> list[dict[str, Any]
         if not isinstance(comment, dict) or not comment.get("body"):
             continue
         body = str(comment["body"])
+        if not include_pr_comments and not is_actionable_pr_comment(body):
+            continue
         created_at = str(comment.get("createdAt") or idx)
         issues.append(
             {
@@ -177,7 +203,7 @@ def issues_from_payload(payload: dict[str, Any], pr: int) -> list[dict[str, Any]
     return issues
 
 
-def ingest_review_inbox(pr: int, out_dir: Path, *, review_file: Path | None = None) -> list[dict[str, Any]]:
+def ingest_review_inbox(pr: int, out_dir: Path, *, review_file: Path | None = None, include_pr_comments: bool = False) -> list[dict[str, Any]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     issues: list[dict[str, Any]] = []
     fetch_error: str | None = None
@@ -186,7 +212,7 @@ def ingest_review_inbox(pr: int, out_dir: Path, *, review_file: Path | None = No
         (out_dir / "pr_review_raw.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         text = review_text_from_payload(payload)
         (out_dir / "pr_review_inbox.md").write_text(text, encoding="utf-8")
-        issues.extend(issues_from_payload(payload, pr))
+        issues.extend(issues_from_payload(payload, pr, include_pr_comments=include_pr_comments))
     except Exception as exc:  # noqa: BLE001 - CLI fallback should preserve clear failure text
         fetch_error = str(exc)
         if review_file is None:
@@ -206,9 +232,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--review-file", type=Path)
+    parser.add_argument("--include-pr-comments", action="store_true", help="Include all top-level PR comments, not only actionable comments.")
     args = parser.parse_args(argv)
     try:
-        issues = ingest_review_inbox(args.pr, args.out, review_file=args.review_file)
+        issues = ingest_review_inbox(args.pr, args.out, review_file=args.review_file, include_pr_comments=args.include_pr_comments)
     except RuntimeError as exc:
         print(str(exc))
         return 1

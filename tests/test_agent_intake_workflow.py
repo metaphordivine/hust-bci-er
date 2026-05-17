@@ -6,9 +6,9 @@ import sys
 from pathlib import Path
 
 from scripts.agent_context import CONTEXT_PACKS, context_for_task
-from scripts.agent_intake import classify, classify_with_deepseek, maybe_refine_with_deepseek
-from scripts.agent_plan_ingest import ingest
-from scripts.agent_review_inbox import ingest_review_inbox
+from scripts.agent_intake import classify, classify_with_deepseek, main as intake_main, maybe_refine_with_deepseek
+from scripts.agent_plan_ingest import ingest, parse_text
+from scripts.agent_review_inbox import infer_review_severity, ingest_review_inbox, issues_from_payload
 from scripts.agent_session import init_session
 
 
@@ -104,7 +104,7 @@ def test_pr_review_fix_intake():
 
 
 def test_read_only_pr_review_intake_does_not_allow_edits():
-    for message in ["review PR18", "深度review PR18", "看一下 PR18"]:
+    for message in ["review PR18", "深度review PR18", "看一下 PR18", "看一下 PR18 conversation review", "review PR18 comments"]:
         result = classify(message)
         assert result["mode"] == "planning-only"
         assert result["task_family"] == "review"
@@ -112,10 +112,25 @@ def test_read_only_pr_review_intake_does_not_allow_edits():
 
 
 def test_unresolved_pr_review_fix_intake_allows_edits():
-    result = classify("修 PR18 unresolved review")
-    assert result["mode"] == "review-fix"
-    assert result["task_family"] == "review-fix"
-    assert result["should_edit"] is True
+    for message in ["修 PR18 unresolved review", "修 PR18 conversation review", "处理 PR18 comments"]:
+        result = classify(message)
+        assert result["mode"] == "review-fix"
+        assert result["task_family"] == "review-fix"
+        assert result["should_edit"] is True
+
+
+def test_evaluation_protocol_planning_is_not_state_changing():
+    for message in ["which evaluation protocol should I use?", "帮我分析 P1/P2/P3 评估协议"]:
+        result = classify(message)
+        assert result["mode"] == "planning-only"
+        assert result["should_edit"] is False
+
+
+def test_protected_protocol_and_split_changes_are_state_changing():
+    for message in ["修改 evaluation protocol", "删除 split evidence"]:
+        result = classify(message)
+        assert result["mode"] == "state-changing"
+        assert result["should_ask_human"] is True
 
 
 def test_score_fusion_direct_task_intake():
@@ -215,6 +230,15 @@ def test_context_mapping_is_static_for_all_task_families():
         assert data["context_pack_path"].startswith("agent_context/")
 
 
+def test_explicit_task_family_overrides_keyword_scan():
+    result = classify("Task family: context-engineering\nreview PR18 comments")
+    assert result["mode"] == "planning-only"
+    assert result["task_family"] == "context-engineering"
+
+    result = classify("task_family: context-engineering score-fusion")
+    assert result["task_family"] == "context-engineering"
+
+
 def test_json_output_is_pure_json_for_intake_and_context():
     intake = run_script(
         "scripts/agent_intake.py",
@@ -285,6 +309,36 @@ def test_review_inbox_creates_one_issue_per_unresolved_thread(monkeypatch, tmp_p
     assert all(issue["files_hint"] == ["scripts/agent_intake.py"] for issue in board["issues"])
 
 
+def test_review_inbox_filters_pr_level_comments_by_default():
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {"nodes": []},
+                    "comments": {
+                        "nodes": [
+                            {"body": "Looks good to me.", "createdAt": "2026-05-17T00:00:00Z"},
+                            {"body": "Please fix the JSON output.", "createdAt": "2026-05-17T00:01:00Z"},
+                        ]
+                    },
+                }
+            }
+        }
+    }
+
+    default_issues = issues_from_payload(payload, 18)
+    included_issues = issues_from_payload(payload, 18, include_pr_comments=True)
+    assert [issue["title"] for issue in default_issues] == ["Please fix the JSON output."]
+    assert len(included_issues) == 2
+
+
+def test_p2_p3_severity_mapping_is_consistent():
+    plan_issues = parse_text("### P2 medium issue\nbody\n\n### P3 low issue\nbody", source="test")
+    assert [issue["severity"] for issue in plan_issues] == ["S1", "S2"]
+    assert infer_review_severity("[P2] please fix this") == "S1"
+    assert infer_review_severity("[P3] optional follow-up") == "S2"
+
+
 def test_agent_brief_warns_about_deepseek_private_review_content():
     text = read("agent_protocols/AGENT_BRIEF.md")
     assert "may transmit user task text to the external DeepSeek API" in text
@@ -351,7 +405,21 @@ def test_deepseek_refinement_uses_local_schema_and_flags(monkeypatch):
     assert result["deepseek"]["used"] is True
 
 
-def test_auto_intake_prefers_deepseek_when_key_is_available(monkeypatch):
+def test_default_intake_does_not_call_deepseek_when_key_exists(monkeypatch, capsys):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("DeepSeek should not be called by default")
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.delenv("AGENT_INTAKE_ENGINE", raising=False)
+    monkeypatch.setattr("scripts.agent_intake.classify_with_deepseek", fail_if_called)
+
+    assert intake_main(["--json", "--message", "score-fusion：修 component map 的 whitening 绑定问题"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["task_family"] == "score-fusion"
+    assert "deepseek" not in result
+
+
+def test_explicit_deepseek_flag_calls_deepseek(monkeypatch, capsys):
     def fake_refine(text, deterministic_result, *, api_key, model, base_url, timeout):
         assert api_key == "test-key"
         refined = dict(deterministic_result)
@@ -359,24 +427,16 @@ def test_auto_intake_prefers_deepseek_when_key_is_available(monkeypatch):
         refined["deepseek"] = {"used": True, "model": model, "base_url": base_url}
         return refined
 
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr("scripts.agent_intake.classify_with_deepseek", fake_refine)
-    deterministic = classify("score-fusion：修 component map 的 whitening 绑定问题")
-    result = maybe_refine_with_deepseek(
-        "score-fusion：修 component map 的 whitening 绑定问题",
-        deterministic,
-        engine="auto",
-        api_key="test-key",
-        model="deepseek-v4-flash",
-        base_url="https://api.deepseek.com",
-        timeout=3,
-        require_deepseek=False,
-    )
+    assert intake_main(["--deepseek", "--json", "--message", "score-fusion：修 component map 的 whitening 绑定问题"]) == 0
+    result = json.loads(capsys.readouterr().out)
 
     assert result["deepseek"]["used"] is True
     assert result["confidence"] == 0.96
 
 
-def test_auto_intake_falls_back_to_deterministic_without_key():
+def test_auto_intake_is_deterministic_without_key():
     deterministic = classify("score-fusion：修 component map 的 whitening 绑定问题")
     result = maybe_refine_with_deepseek(
         "score-fusion：修 component map 的 whitening 绑定问题",

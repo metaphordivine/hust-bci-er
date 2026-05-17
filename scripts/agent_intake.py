@@ -32,8 +32,8 @@ TASK_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ("route-config", ("route-config", "route config", "route 配置", "configs/routes", "validate_route")),
     ("model-backbone", ("model-backbone", "backbone", "model factory", "factory", "fbstcnet", "conformer", "deformer", "模型")),
     ("summary-report", ("summary-report", "summary report", "route summary", "summarize", "报告", "summary")),
-    ("protocol-runner", ("protocol-runner", "protocol runner", "run_evaluation_protocol", "p1", "p2", "p3", "materialize", "协议")),
-    ("review-fix", ("review fix", "unresolved review", "conversation review", "pr review", "修 review")),
+    ("protocol-runner", ("protocol-runner", "protocol runner", "evaluation protocol", "run_evaluation_protocol", "p1", "p2", "p3", "materialize", "协议")),
+    ("review-fix", ("review fix", "fix pr review", "unresolved review", "requested changes", "修 review", "修 pr")),
     ("context-engineering", ("context-engineering", "context engineering", "agent intake", "context pack", "issue board", "minimal context")),
     ("repo-fast", ("repo fast", "fast gate", "repo_doctor.py fast", "仓库健康")),
 ]
@@ -54,6 +54,7 @@ PLAN_SIGNALS = (
     "任务",
 )
 READONLY_REVIEW_WORDS = ("review", "code review", "看一下", "看下", "看看", "深度review", "深度 review", "审一下", "检查")
+REVIEW_SOURCE_WORDS = ("review", "conversation", "comment", "comments", "pr comment", "pr comments")
 REVIEW_FIX_WORDS = (
     "fix",
     "修",
@@ -64,36 +65,41 @@ REVIEW_FIX_WORDS = (
     "address",
     "resolve",
     "unresolved",
-    "conversation",
-    "comment",
-    "comments",
     "requested changes",
 )
-PLANNING_WORDS = ("what should we do", "怎么做", "该怎么做", "分析", "计划", "给计划", "review only", "怎么看")
+PLANNING_WORDS = ("what should we do", "which", "should i use", "怎么做", "该怎么做", "应该用", "用哪个", "分析", "帮我分析", "计划", "给计划", "review only", "怎么看")
 EDIT_WORDS = ("fix", "修", "实现", "改", "edit", "implement", "处理")
 COMMAND_ONLY_PATTERNS = (
     r"^\s*(跑|run|执行)\s+.*(fast gate|repo fast|repo_doctor\.py fast|dry-run|dry run|smoke|pytest|check)",
     r"^\s*python\s+scripts/[^\n]+$",
 )
-STATE_CHANGING_WORDS = (
-    "merge pr",
-    "合并",
-    "promote",
-    "promoted",
+STATE_CHANGE_ACTION_WORDS = (
+    "change",
+    "modify",
+    "alter",
+    "delete",
+    "remove",
+    "set",
+    "改",
+    "改成",
+    "修改",
+    "删除",
+    "移除",
+    "变更",
+)
+STATE_CHANGE_PROTECTED_OBJECTS = (
     "route status",
-    "改成 promoted",
-    "change route status",
-    "delete evidence",
-    "删除 evidence",
-    "删除证据",
-    "modify split",
-    "change split",
-    "修改 split",
-    "alter splits",
+    "split evidence",
+    "split definition",
+    "split definitions",
+    "split",
     "evaluation protocol",
+    "evidence",
     "评估协议",
+    "证据",
 )
 AUDIT_EVIDENCE_WORDS = ("audit report", "audit pass", "candidate gate pass", "promoted gate pass", "审计通过", "audit evidence")
+EXPLICIT_TASK_FAMILY_RE = re.compile(r"(?im)\btask[_ -]?family\s*:\s*([a-z0-9_-]+)")
 
 
 def read_message(args: argparse.Namespace) -> str:
@@ -112,6 +118,9 @@ def count_commands(text: str) -> int:
 
 
 def detect_task_family(text: str) -> str:
+    explicit = detect_explicit_task_family(text)
+    if explicit is not None:
+        return explicit
     lowered = text.lower()
     for family, keywords in TASK_KEYWORDS:
         if any(keyword in lowered for keyword in keywords):
@@ -124,6 +133,14 @@ def has_pr_number(text: str) -> bool:
     return bool(re.search(r"\bpr\s*#?\d+\b", lowered) or re.search(r"\bpull request\s*#?\d+\b", lowered))
 
 
+def detect_explicit_task_family(text: str) -> str | None:
+    match = EXPLICIT_TASK_FAMILY_RE.search(text)
+    if not match:
+        return None
+    key = match.group(1).strip().lower().replace("_", "-")
+    return key if key in CONTEXT_PACKS else None
+
+
 def has_review_fix_signal(text: str) -> bool:
     lowered = text.lower()
     return has_pr_number(text) and any(word in lowered for word in REVIEW_FIX_WORDS)
@@ -131,7 +148,8 @@ def has_review_fix_signal(text: str) -> bool:
 
 def has_readonly_review_signal(text: str) -> bool:
     lowered = text.lower()
-    return has_pr_number(text) and any(word in lowered for word in READONLY_REVIEW_WORDS) and not has_review_fix_signal(text)
+    has_review_source = any(word in lowered for word in READONLY_REVIEW_WORDS) or any(word in lowered for word in REVIEW_SOURCE_WORDS)
+    return has_pr_number(text) and has_review_source and not has_review_fix_signal(text)
 
 
 def has_plan_signal(text: str) -> bool:
@@ -142,7 +160,13 @@ def has_plan_signal(text: str) -> bool:
 
 def has_state_change_signal(text: str) -> bool:
     lowered = text.lower()
-    return any(word in lowered for word in STATE_CHANGING_WORDS)
+    if re.search(r"\bmerge\s+pr\b", lowered) or "合并" in lowered:
+        return True
+    if re.search(r"\bpromote\b|\bpromoted\b", lowered):
+        return True
+    has_action = any(word in lowered for word in STATE_CHANGE_ACTION_WORDS)
+    has_protected_object = any(word in lowered for word in STATE_CHANGE_PROTECTED_OBJECTS)
+    return has_action and has_protected_object
 
 
 def has_audit_evidence(text: str) -> bool:
@@ -173,6 +197,7 @@ def known_direct_task(text: str) -> bool:
 def classify(text: str) -> dict[str, Any]:
     text = text or ""
     lowered = text.lower()
+    explicit_task_family = detect_explicit_task_family(text)
     mode = "ambiguous"
     confidence = 0.35
     reason = "No strong deterministic trigger matched."
@@ -211,11 +236,13 @@ def classify(text: str) -> dict[str, Any]:
         task_family = "repo-fast"
     if mode == "review-fix":
         task_family = "review-fix"
-    if mode == "planning-only" and has_readonly_review_signal(text):
+    if explicit_task_family is None and mode == "planning-only" and has_readonly_review_signal(text):
         task_family = "review"
-    if mode == "planning-only" and task_family == "repo-fast":
+    if explicit_task_family is None and mode == "planning-only" and task_family == "repo-fast":
         task_family = "review"
-    if mode == "state-changing" and "promot" in lowered:
+    if explicit_task_family is None and mode == "state-changing" and ("protocol" in lowered or "评估协议" in lowered):
+        task_family = "protocol-runner"
+    if explicit_task_family is None and mode == "state-changing" and ("promot" in lowered or "evidence" in lowered or "证据" in lowered or "split" in lowered or "route status" in lowered):
         task_family = "evidence-gate"
 
     context = context_for_task(task_family)
@@ -271,12 +298,13 @@ def _json_from_text(text: str) -> dict[str, Any]:
 def _recompute_flags(result: dict[str, Any], original_text: str) -> dict[str, Any]:
     mode = str(result.get("mode") or "ambiguous")
     task_family = str(result.get("task_family") or detect_task_family(original_text))
+    explicit_task_family = detect_explicit_task_family(original_text)
     if has_review_fix_signal(original_text):
         mode = "review-fix"
-        task_family = "review-fix"
+        task_family = explicit_task_family or "review-fix"
     elif has_readonly_review_signal(original_text) and not has_plan_signal(original_text):
         mode = "planning-only"
-        task_family = "review"
+        task_family = explicit_task_family or "review"
     if mode not in MODE_ORDER:
         mode = "ambiguous"
     if task_family not in CONTEXT_PACKS:
@@ -421,9 +449,7 @@ def maybe_refine_with_deepseek(
     timeout: float,
     require_deepseek: bool,
 ) -> dict[str, Any]:
-    if engine == "deterministic":
-        return deterministic_result
-    if engine == "auto" and not api_key:
+    if engine != "deepseek":
         return deterministic_result
     if not api_key:
         if require_deepseek:
@@ -467,9 +493,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-modes", action="store_true", help="List supported intake modes.")
     parser.add_argument(
         "--intake-engine",
-        choices=("auto", "deepseek", "deterministic"),
-        default=os.environ.get("AGENT_INTAKE_ENGINE", "auto"),
-        help="auto prefers DeepSeek when DEEPSEEK_API_KEY is set and falls back to deterministic intake.",
+        choices=("deterministic", "deepseek", "auto"),
+        default=os.environ.get("AGENT_INTAKE_ENGINE", "deterministic"),
+        help="deterministic is the default; deepseek enables API refinement with deterministic fallback.",
     )
     parser.add_argument("--deepseek", action="store_true", help="Prefer DeepSeek intake; falls back unless --require-deepseek is set.")
     parser.add_argument("--deterministic", action="store_true", help="Force deterministic local intake.")
@@ -493,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.deterministic:
         engine = "deterministic"
     if engine not in {"auto", "deepseek", "deterministic"}:
-        parser.error("AGENT_INTAKE_ENGINE must be one of: auto, deepseek, deterministic")
+        parser.error("AGENT_INTAKE_ENGINE must be one of: deterministic, deepseek, auto")
     try:
         result = maybe_refine_with_deepseek(
             message,

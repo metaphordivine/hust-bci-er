@@ -27,7 +27,7 @@ Simplified Chinese.
 | "track training", "cache derived features", "refresh component docs", "check registry consistency" | Foundation Maintenance Skill | `direct-task` | `agent_context/repo_fast_pack.md` | Use training monitor, cache manager, registry checker, or docs generator from `agent_protocols/foundation_usage.md` | Generated maintenance artifact is local or concise, and fast gate passes |
 | "prepare promoted evidence" | Promotion Audit Skill | `state-changing` | `agent_context/evidence_gate_pack.md` | Fill `reports/promotion_audits/<route_id>_promotion.md` from template only with passing candidate audit evidence | Promoted gate references a passing candidate audit report |
 | "review this PR/code" | Chinese Code Review Skill | `planning-only` | `agent_context/review_pack.md` | Inspect changes and lead with findings | All review summaries and comments are in Simplified Chinese |
-| "fix PR review", "修 PR17 review", "conversation review" | Review Fix Skill | `review-fix` | `agent_context/review_fix_pack.md` | Fetch or ingest reviews with `scripts/agent_review_inbox.py`; create issue board before implementation edits | Targeted tests and fast gate pass |
+| "fix PR review", "修 PR17 review", "处理 unresolved review" | Review Fix Skill | `review-fix` | `agent_context/review_fix_pack.md` | Fetch or ingest reviews with `scripts/agent_review_inbox.py`; create issue board before implementation edits | Targeted tests and fast gate pass |
 | "执行下面计划", long AI review, S0/S1/S2 plan | Plan Ingest Skill | `plan-driven` | task-specific pack selected by `scripts/agent_intake.py` | Save raw plan, run `scripts/agent_plan_ingest.py`, create issue board before implementation edits | Issue board items fixed/deferred and validation passes |
 | "agent intake", "context pack", "minimal context", "context-engineering" | Context Engineering Skill | `direct-task` | `agent_context/context_engineering_pack.md` | Update agent-facing context/intake/session docs and tests only | Intake/context tests and fast gate pass |
 
@@ -40,11 +40,11 @@ changes:
 2. `agent_protocols/skill_router.md`
 
 Then classify the request with `scripts/agent_intake.py`, select a context pack
-with `scripts/agent_context.py`, and read only that pack's listed files. Intake
-is DeepSeek-first when `DEEPSEEK_API_KEY` is available and falls back to
-deterministic heuristics when the key or API is unavailable. Full protocol docs
-are read only when the selected pack requires them, a validation failure points
-there, or the task explicitly edits that protocol.
+with `scripts/agent_context.py`, and read only that pack's listed files.
+Deterministic intake is the default; use `--deepseek` or
+`AGENT_INTAKE_ENGINE=deepseek` only when external API refinement is explicitly
+allowed. Full protocol docs are read only when the selected pack requires them,
+a validation failure points there, or the task explicitly edits that protocol.
 
 ## Skill Rules
 

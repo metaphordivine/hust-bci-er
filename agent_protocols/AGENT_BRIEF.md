@@ -11,16 +11,14 @@ Before reading large protocol documents, agents must classify the user input.
 Use `scripts/agent_intake.py`, then select a context pack with
 `scripts/agent_context.py --task <task_family>`.
 
-`scripts/agent_intake.py` uses DeepSeek-first intake when `DEEPSEEK_API_KEY` is
-available, with deterministic fallback when the key or API is unavailable. Local
-code must still recompute safety flags, context pack selection, and red-line
-behavior after the model response. Use `--deterministic` for offline or CI-only
-local classification.
+`scripts/agent_intake.py` uses deterministic intake by default. Use
+`--deepseek` or `AGENT_INTAKE_ENGINE=deepseek` only when external API refinement
+is explicitly allowed. Local code must still recompute safety flags, context
+pack selection, and red-line behavior after the model response.
 
-DeepSeek-first intake may transmit user task text to the external DeepSeek API.
+DeepSeek intake may transmit user task text to the external DeepSeek API.
 Do not use it for private review content, confidential PR comments, or sensitive
-plans unless the human explicitly allows external API use; use `--deterministic`
-in those cases.
+plans unless the human explicitly allows external API use.
 
 Read full protocol documents only when the selected context pack requires them,
 validation points there, or the task explicitly edits that protocol.
