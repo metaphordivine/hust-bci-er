@@ -465,13 +465,13 @@ def _mode_for_job(gate: str, job: Mapping[str, Any]) -> str:
 
     Smoke gate uses ``full_subjects`` mode to avoid candidate-only
     constraints (test-only prediction scope, epoch override rejection).
-    P2 holdout evaluation is the exception: even smoke diagnostics must
-    evaluate the materialized holdout/test split rather than validation
-    subjects, while still auditing with the smoke gate.
+    P2 holdout and P3 final evaluation are the exceptions: even smoke
+    diagnostics must evaluate the materialized holdout/test split rather
+    than validation subjects, while still auditing with the smoke gate.
     Candidate gate always uses ``candidate`` mode.
     """
     if gate == "smoke":
-        if str(job.get("stage", "")) == "evaluate_holdout_crop_policy":
+        if str(job.get("stage", "")) in {"evaluate_holdout_crop_policy", "outer_train_eval"}:
             return "candidate"
         return "full_subjects"
     return "candidate"
@@ -563,6 +563,15 @@ def execute_protocol_jobs(
     jobs = [job for job in manifest.get("jobs", []) if isinstance(job, Mapping)]
     runnable = [job for job in jobs if "predictions.csv" in job.get("expected_artifacts", [])]
     artifact_only = [job for job in jobs if "predictions.csv" not in job.get("expected_artifacts", [])]
+    diagnostic_independent_p2_train_jobs = {
+        str(job.get("job_id", ""))
+        for job in artifact_only
+        if gate == "smoke"
+        and allow_artifact_only
+        and str(job.get("protocol", "")) == "p2_pseudo_public_holdout"
+        and str(job.get("stage", "")) == "train_holdout_model"
+        and any(str(item.get("stage", "")) == "evaluate_holdout_crop_policy" for item in runnable)
+    }
     if gate == "candidate" and artifact_only and allow_artifact_only:
         attempted = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
         raise ValueError(
@@ -586,7 +595,25 @@ def execute_protocol_jobs(
         return execution_budget is not None and executed_count >= execution_budget
 
     for job in artifact_only:
-        if allow_artifact_only:
+        if str(job.get("job_id", "")) in diagnostic_independent_p2_train_jobs:
+            result = {
+                "job_id": str(job.get("job_id", "")),
+                "route_config": str(job.get("route_config", "")),
+                "run_dir": None,
+                "status": "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT",
+                "reason": (
+                    "P2 smoke eval jobs train independently through run_route_job; "
+                    "the diagnostic train_holdout checkpoint shim is not generated "
+                    "because it is not reused by those eval jobs."
+                ),
+                "command_returncode": None,
+                "audit_gate": gate,
+                "audit_returncode": None,
+                "stdout_tail": "",
+                "stderr_tail": "",
+                "requested_device": effective_device,
+            }
+        elif allow_artifact_only:
             if budget_exhausted():
                 result = {
                     "job_id": str(job.get("job_id", "")),

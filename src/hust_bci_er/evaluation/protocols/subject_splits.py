@@ -64,6 +64,66 @@ def validation_subjects_from_training_pool(
     return train_subjects, val_subjects
 
 
+def _allocate_holdout_counts_by_cohort(
+    cohorts: Mapping[str, Sequence[str]],
+    *,
+    n_holdout_subjects: int,
+) -> dict[str, int]:
+    total_subjects = sum(len(subjects) for subjects in cohorts.values())
+    if n_holdout_subjects >= total_subjects:
+        raise ValueError("n_holdout_subjects must be less than the total number of subjects")
+    if not cohorts:
+        raise ValueError("trial_rows must contain subjects")
+
+    minimum = 1 if n_holdout_subjects >= len(cohorts) else 0
+    raw_counts = {
+        cohort: (len(subjects) * float(n_holdout_subjects)) / float(total_subjects)
+        for cohort, subjects in cohorts.items()
+    }
+    counts = {
+        cohort: min(len(cohorts[cohort]), max(minimum, int(raw_counts[cohort])))
+        for cohort in cohorts
+    }
+
+    def add_order() -> list[str]:
+        return sorted(
+            cohorts,
+            key=lambda cohort: (
+                raw_counts[cohort] - int(raw_counts[cohort]),
+                len(cohorts[cohort]) - counts[cohort],
+                cohort,
+            ),
+            reverse=True,
+        )
+
+    while sum(counts.values()) < n_holdout_subjects:
+        for cohort in add_order():
+            if counts[cohort] < len(cohorts[cohort]):
+                counts[cohort] += 1
+                break
+        else:
+            raise ValueError("could not allocate requested P2 holdout subjects")
+
+    while sum(counts.values()) > n_holdout_subjects:
+        removable = [
+            cohort
+            for cohort, count in counts.items()
+            if count > (1 if n_holdout_subjects >= len(cohorts) else 0)
+        ]
+        if not removable:
+            raise ValueError("could not allocate requested P2 holdout subjects")
+        cohort = min(
+            removable,
+            key=lambda item: (
+                raw_counts[item] - int(raw_counts[item]),
+                counts[item],
+                item,
+            ),
+        )
+        counts[cohort] -= 1
+    return counts
+
+
 def p1_subject_split(
     trial_rows: Sequence[Mapping[str, Any]],
     *,
@@ -112,26 +172,35 @@ def p2_subject_split(
     """
     if n_holdout_subjects < 1:
         raise ValueError("n_holdout_subjects must be >= 1")
-    all_subjects: set[str] = set()
-    for row in trial_rows:
-        all_subjects.add(str(row.get("subject_id") or ""))
-    if not all_subjects:
-        raise ValueError("trial_rows must contain subjects")
+    cohorts = subjects_by_cohort(trial_rows)
+    all_subjects = sorted({subject for subjects in cohorts.values() for subject in subjects})
     if n_holdout_subjects >= len(all_subjects):
         raise ValueError("n_holdout_subjects must be less than the total number of subjects")
 
-    rng_holdout = random.Random(int(holdout_seed))
-    subjects_list = sorted(all_subjects)
-    shuffled = list(subjects_list)
-    rng_holdout.shuffle(shuffled)
-    test_subjects = sorted(shuffled[: n_holdout_subjects])
-    remaining = shuffled[n_holdout_subjects:]
-
-    train_subjects, val_subjects = validation_subjects_from_training_pool(
-        remaining,
-        seed=int(train_seed),
-        val_fraction=val_fraction,
+    holdout_counts = _allocate_holdout_counts_by_cohort(
+        cohorts,
+        n_holdout_subjects=int(n_holdout_subjects),
     )
+    train_subjects: list[str] = []
+    val_subjects: list[str] = []
+    test_subjects: list[str] = []
+    for cohort, subjects in cohorts.items():
+        rng_holdout = random.Random(int(holdout_seed) + sum(ord(ch) for ch in cohort))
+        shuffled = list(subjects)
+        rng_holdout.shuffle(shuffled)
+        cohort_test = sorted(shuffled[: holdout_counts[cohort]])
+        cohort_remaining = sorted(shuffled[holdout_counts[cohort] :])
+        cohort_train, cohort_val = validation_subjects_from_training_pool(
+            cohort_remaining,
+            seed=int(train_seed) + sum(ord(ch) for ch in cohort),
+            val_fraction=val_fraction,
+        )
+        train_subjects.extend(cohort_train)
+        val_subjects.extend(cohort_val)
+        test_subjects.extend(cohort_test)
+    train_subjects = sorted(train_subjects)
+    val_subjects = sorted(val_subjects)
+    test_subjects = sorted(test_subjects)
     if not train_subjects or not val_subjects or not test_subjects:
         raise ValueError("P2 split requires non-empty train, val, and test subjects")
     return train_subjects, val_subjects, test_subjects
