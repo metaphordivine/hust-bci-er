@@ -60,6 +60,7 @@ class SourceArtifact:
     seed: int | None = None
     fold: int | None = None
     manifest_path: Path | None = None
+    score_matrix_evidence: str = "synthetic"
 
 
 def route_config_paths() -> list[Path]:
@@ -141,6 +142,23 @@ def _protocol_job_metadata(run_dir: Path) -> dict[str, dict[str, Any]]:
     }
 
 
+def _source_manifest_protocol_job_metadata(manifest_path: Path) -> dict[str, Any]:
+    job_dir = manifest_path.parent
+    if job_dir.parent.name != "job_runs":
+        return {}
+    return _protocol_job_metadata(job_dir.parent.parent).get(job_dir.name, {})
+
+
+def _manifest_score_matrix_evidence(manifest_path: Path | None, *, default: str = "synthetic") -> str:
+    if manifest_path is None or not manifest_path.exists():
+        return default
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return default
+    return str(manifest.get("score_matrix_evidence") or default)
+
+
 def find_component_source_artifacts(run_dir: Path) -> list[SourceArtifact]:
     """Find component-producing artifacts, preferring score_matrix.csv.
 
@@ -161,7 +179,17 @@ def find_component_source_artifacts(run_dir: Path) -> list[SourceArtifact]:
                     fold = int(manifest["fold"])
             except json.JSONDecodeError:
                 pass
-        return [SourceArtifact(run_dir / "score_matrix.csv", "score_matrix", seed=seed, fold=fold, manifest_path=manifest_path if manifest_path.exists() else None)]
+        manifest_ref = manifest_path if manifest_path.exists() else None
+        return [
+            SourceArtifact(
+                run_dir / "score_matrix.csv",
+                "score_matrix",
+                seed=seed,
+                fold=fold,
+                manifest_path=manifest_ref,
+                score_matrix_evidence=_manifest_score_matrix_evidence(manifest_ref),
+            )
+        ]
     if (run_dir / "predictions.csv").exists():
         manifest_path = run_dir / "manifest.json"
         return [SourceArtifact(run_dir / "predictions.csv", "predictions", manifest_path=manifest_path if manifest_path.exists() else None)]
@@ -174,6 +202,7 @@ def find_component_source_artifacts(run_dir: Path) -> list[SourceArtifact]:
             job_id = path.parent.name
             job = job_meta.get(job_id, {})
             manifest_path = path.parent / "manifest.json"
+            manifest_ref = manifest_path if manifest_path.exists() else None
             sources.append(
                 SourceArtifact(
                     path,
@@ -181,7 +210,8 @@ def find_component_source_artifacts(run_dir: Path) -> list[SourceArtifact]:
                     job_id=job_id,
                     seed=int(job["seed"]) if type(job.get("seed")) is int else None,
                     fold=int(job["fold"]) if type(job.get("fold")) is int else None,
-                    manifest_path=manifest_path if manifest_path.exists() else None,
+                    manifest_path=manifest_ref,
+                    score_matrix_evidence=_manifest_score_matrix_evidence(manifest_ref),
                 )
             )
         return sources
@@ -233,6 +263,7 @@ def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str)
                 "crop_id": str(crop_id),
                 "score": str(row[crop_col]),
                 "y_true": str(row["y_true"]),
+                "score_matrix_evidence": source.score_matrix_evidence,
             }
             if source.seed is not None:
                 item["seed"] = str(source.seed)
@@ -261,6 +292,7 @@ def _component_rows_from_predictions(source: SourceArtifact, component_id: str) 
             "subject_id": str(row["subject_id"]),
             "trial_id": str(row["trial_id"]),
             "score": str(row[score_col]),
+            "score_matrix_evidence": "synthetic",
         }
         if row.get("y_true") not in {None, ""}:
             item["y_true"] = str(row["y_true"])
@@ -302,11 +334,33 @@ def export_component_score(
         print(f"  export failed for {component_id}: {exc}", file=sys.stderr)
         return 1
     fieldnames = ["component_id"]
-    for col in ("seed", "fold", "subject_id", "trial_id", "crop_id", "score", "y_true"):
+    for col in ("seed", "fold", "subject_id", "trial_id", "crop_id", "score", "y_true", "score_matrix_evidence"):
         if col in {"subject_id", "trial_id", "score"} or any(row.get(col) not in {None, ""} for row in rows):
             fieldnames.append(col)
     _write_csv(output_path, rows, fieldnames)
     return 0
+
+
+def _component_score_evidence_from_csv(path: Path) -> str:
+    rows = _read_csv(path)
+    if not rows or "score_matrix_evidence" not in rows[0]:
+        return "synthetic"
+    values = {str(row.get("score_matrix_evidence") or "synthetic") for row in rows}
+    return "genuine" if values == {"genuine"} else "synthetic"
+
+
+def _component_score_evidence_from_sources(source_artifacts: list[SourceArtifact]) -> str:
+    if not source_artifacts:
+        return "synthetic"
+    return "genuine" if all(source.kind == "score_matrix" and source.score_matrix_evidence == "genuine" for source in source_artifacts) else "synthetic"
+
+
+def _combined_score_matrix_evidence(assembly_evidence: str, component_evidence: dict[str, str]) -> str:
+    if assembly_evidence != "genuine":
+        return "synthetic"
+    if not component_evidence:
+        return "synthetic"
+    return "genuine" if all(value == "genuine" for value in component_evidence.values()) else "synthetic"
 
 
 def assemble_score_fusion(
@@ -569,6 +623,7 @@ def _write_merged_source_split(
     output_dir: Path,
     source_manifest_paths: list[Path],
 ) -> Path | None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     fold_definitions: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
     used_fold_ids: set[str] = set()
@@ -586,6 +641,11 @@ def _write_merged_source_split(
             continue
         seed = manifest.get("seed")
         fold = manifest.get("fold")
+        job_meta = _source_manifest_protocol_job_metadata(manifest_path)
+        if seed is None and type(job_meta.get("seed")) is int:
+            seed = int(job_meta["seed"])
+        if fold is None and type(job_meta.get("fold")) is int:
+            fold = int(job_meta["fold"])
         membership_hash = _source_split_membership_hash(split_data)
         alignment_key = (str(seed), str(fold), membership_hash)
         if alignment_key in seen_alignment_keys:
@@ -637,6 +697,7 @@ def _write_score_fusion_manifest(
     *,
     source_manifest_paths: list[Path],
     score_matrix_evidence: str,
+    component_score_evidence: dict[str, str],
 ) -> Path:
     route_data = load_route(route_path)
     route_id = str(route_data.get("route_id") or route_path.stem)
@@ -715,6 +776,7 @@ def _write_score_fusion_manifest(
             "component_id": comp_id,
             "path": _display_path(path),
             "sha256": sha256_file(path),
+            "score_matrix_evidence": component_score_evidence.get(comp_id, _component_score_evidence_from_csv(path)),
         }
         for comp_id, path in sorted(component_score_paths.items())
     ]
@@ -780,6 +842,7 @@ def main(argv: list[str] | None = None) -> int:
     passed = 0
     failed = 0
     exported_component_sources: dict[str, list[Path]] = {}
+    exported_component_evidence: dict[str, str] = {}
 
     for idx, (route_path, data) in enumerate(routes, 1):
         route_id = str(data["route_id"])
@@ -787,6 +850,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{idx}/{len(routes)}] {route_id}")
 
         component_scores: dict[str, Path] = {}
+        component_score_evidence: dict[str, str] = {}
         source_manifest_paths: list[Path] = []
         untrusted_component_scores: list[str] = []
         missing: list[str] = []
@@ -796,6 +860,7 @@ def main(argv: list[str] | None = None) -> int:
             base_route = base_route_for_component(comp_id)
             if expected.exists():
                 component_scores[comp_id] = expected
+                component_score_evidence[comp_id] = exported_component_evidence.get(comp_id) or _component_score_evidence_from_csv(expected)
                 current_run_sources = exported_component_sources.get(comp_id)
                 if current_run_sources:
                     for manifest_path in current_run_sources:
@@ -821,6 +886,9 @@ def main(argv: list[str] | None = None) -> int:
                 rc = export_component_score(comp_id, base_route, source_artifacts, expected)
                 if rc == 0:
                     component_scores[comp_id] = expected
+                    component_evidence = _component_score_evidence_from_sources(source_artifacts)
+                    component_score_evidence[comp_id] = component_evidence
+                    exported_component_evidence[comp_id] = component_evidence
                     exported_component_sources[comp_id] = [
                         source.manifest_path
                         for source in source_artifacts
@@ -853,12 +921,17 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         if rc == 0:
+            score_matrix_evidence = _combined_score_matrix_evidence(
+                str(assembly_info.get("score_matrix_evidence") or "synthetic"),
+                component_score_evidence,
+            )
             _write_score_fusion_manifest(
                 route_path,
                 output_dir,
                 component_scores,
                 source_manifest_paths=source_manifest_paths,
-                score_matrix_evidence=str(assembly_info.get("score_matrix_evidence") or "synthetic"),
+                score_matrix_evidence=score_matrix_evidence,
+                component_score_evidence=component_score_evidence,
             )
 
         if rc == 0 and args.audit and not source_manifest_paths:
@@ -869,7 +942,11 @@ def main(argv: list[str] | None = None) -> int:
             result["status"] = "AUDIT_BLOCKED_UNTRUSTED_COMPONENT_CSV"
             result["reason"] = f"--audit requires source manifests for every component; pre-existing CSVs were not exported in this run: {untrusted_component_scores}"
 
-        if rc == 0 and args.audit and source_manifest_paths and not untrusted_component_scores:
+        if rc == 0 and args.audit and source_manifest_paths and not untrusted_component_scores and any(value != "genuine" for value in component_score_evidence.values()):
+            result["status"] = "AUDIT_BLOCKED_SYNTHETIC_COMPONENT_EVIDENCE"
+            result["reason"] = f"--audit requires genuine five-crop component score evidence; component evidence: {component_score_evidence}"
+
+        if rc == 0 and args.audit and source_manifest_paths and not untrusted_component_scores and all(value == "genuine" for value in component_score_evidence.values()):
             audit_proc = subprocess.run(
                 [
                     sys.executable,

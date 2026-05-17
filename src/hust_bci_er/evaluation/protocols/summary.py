@@ -28,11 +28,25 @@ def prediction_jobs(protocol_manifest: Mapping[str, Any]) -> list[dict[str, Any]
     ]
 
 
+def artifact_only_jobs(protocol_manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(job)
+        for job in protocol_manifest.get("jobs", [])
+        if isinstance(job, Mapping) and "predictions.csv" not in (job.get("expected_artifacts") or [])
+    ]
+
+
 def completed_job_rows(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     protocol_manifest = _read_json(run_dir / "protocol_run_manifest.json")
     job_rows: list[dict[str, Any]] = []
     subject_rows: list[dict[str, Any]] = []
     missing: list[str] = []
+    for job in artifact_only_jobs(protocol_manifest):
+        job_id = str(job["job_id"])
+        job_run = run_dir / "job_runs" / job_id
+        for artifact in job.get("expected_artifacts") or []:
+            if isinstance(artifact, str) and artifact and not (job_run / artifact).exists():
+                missing.append(f"{job_id}: {artifact}")
     for job in prediction_jobs(protocol_manifest):
         job_id = str(job["job_id"])
         job_run = run_dir / "job_runs" / job_id
@@ -152,6 +166,7 @@ def write_protocol_summary(run_dir: Path) -> dict[str, Any]:
     audit = {
         "status": "COMPLETE" if not missing else "INCOMPLETE",
         "n_prediction_jobs": len(prediction_jobs(_read_json(run_dir / "protocol_run_manifest.json"))),
+        "n_artifact_only_jobs": len(artifact_only_jobs(_read_json(run_dir / "protocol_run_manifest.json"))),
         "n_completed_jobs": len(job_rows),
         "missing_artifacts": missing,
         "board": board_path.as_posix(),

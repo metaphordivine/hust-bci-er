@@ -547,6 +547,50 @@ def test_protocol_summary_writes_fold_aggregate_outputs(tmp_path):
     assert (run_dir / "protocol1_subject_ba.csv").exists()
 
 
+def test_protocol_summary_marks_missing_artifact_only_jobs_incomplete(tmp_path):
+    run_dir = tmp_path / "p2_incomplete"
+    (run_dir / "job_runs" / "p2__route__eval_crop1").mkdir(parents=True)
+    (run_dir / "protocol_run_manifest.json").write_text(
+        json.dumps(
+            {
+                "protocol": "p2_pseudo_public_holdout",
+                "jobs": [
+                    {
+                        "job_id": "p2__route__train_seed42",
+                        "route_id": "route_a",
+                        "seed": 42,
+                        "stage": "train_holdout_model",
+                        "split_id": "split_a",
+                        "expected_artifacts": ["checkpoint.local", "train_manifest.json"],
+                    },
+                    {
+                        "job_id": "p2__route__eval_crop1",
+                        "route_id": "route_a",
+                        "seed": 42,
+                        "stage": "evaluate_holdout_crop_policy",
+                        "split_id": "split_a",
+                        "expected_artifacts": ["predictions.csv", "manifest.json"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    eval_run = run_dir / "job_runs" / "p2__route__eval_crop1"
+    (eval_run / "manifest.json").write_text(
+        json.dumps({"primary_metric": "exact_single_crop_expected_BA", "metrics": {"exact_single_crop_expected_BA": 0.5}}),
+        encoding="utf-8",
+    )
+    (eval_run / "audit_report.json").write_text(json.dumps({"overall": "PASS"}), encoding="utf-8")
+
+    audit = write_protocol_summary(run_dir)
+
+    assert audit["status"] == "INCOMPLETE"
+    assert audit["n_artifact_only_jobs"] == 1
+    assert "p2__route__train_seed42: checkpoint.local" in audit["missing_artifacts"]
+    assert (run_dir / "protocol2_audit.json").exists()
+
+
 def test_write_run_manifest_locks_artifact_hashes(monkeypatch, tmp_path):
     lock_pythonhashseed(monkeypatch, 42)
     run_dir = tmp_path / "run"
