@@ -170,7 +170,7 @@ def test_build_score_matrix_applies_p2_fixed_crop_policy():
         crop_policy={"name": "crop3", "selection": "fixed_index", "crop_index": 2},
         seed=42,
     )
-    assert evidence == "synthetic"
+    assert evidence == "genuine"
     assert len(result) == 1
     assert {result[0][f"crop_{idx}"] for idx in range(5)} == {"0.57000000"}
     assert {result[0][f"crop_{idx}_source_crop_id"] for idx in range(5)} == {"2"}
@@ -194,6 +194,45 @@ def test_trial_rows_from_policy_score_matrix_match_selected_crop():
             "y_pred": 0,
         }
     ]
+
+
+def test_p3_selected_checkpoint_context_allows_inner_split_seed_reuse():
+    from hust_bci_er.training.real_adapter import _validate_reuse_checkpoint
+
+    payload = {
+        "artifact_kind": "torch_classifier_checkpoint",
+        "job_id": "inner_p1_f0",
+        "outer_fold": 0,
+        "param_index": 1,
+        "route_id": "route_a",
+        "split_id": "inner_split",
+        "seed": 123,
+        "model_name": "shallow_conv_net",
+        "model_kwargs": {"drop_prob": 0.25},
+        "n_times": 2000,
+        "preprocessing": ["zscore"],
+        "training_epochs_overridden": False,
+        "model_state_dict": {},
+    }
+
+    _validate_reuse_checkpoint(
+        payload,
+        route_id="route_a",
+        split_id="outer_final_split",
+        seed=42,
+        model_name="shallow_conv_net",
+        model_kwargs={"drop_prob": 0.25},
+        n_times=2000,
+        preproc=["zscore"],
+        run_mode="candidate",
+        reuse_checkpoint_context={
+            "protocol": "p3_nested_selection",
+            "stage": "inner_select",
+            "source_job_id": "inner_p1_f0",
+            "outer_fold": 0,
+            "selected_param_index": 1,
+        },
+    )
 
 
 def test_build_score_matrix_preserves_y_true():

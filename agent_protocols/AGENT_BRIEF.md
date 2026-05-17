@@ -12,9 +12,11 @@ Use `scripts/agent_intake.py`, then select a context pack with
 `scripts/agent_context.py --task <task_family>`.
 
 `scripts/agent_intake.py` uses deterministic intake by default. Use
-`--deepseek` or `AGENT_INTAKE_ENGINE=deepseek` only when external API refinement
-is explicitly allowed. Local code must still recompute safety flags, context
-pack selection, and red-line behavior after the model response.
+`--deepseek` or configure `AGENT_INTAKE_ENGINE=deepseek` in the process,
+Windows User, or Windows Machine environment when external API refinement is
+explicitly allowed. Review digest parsing follows the same rule for
+`AGENT_REVIEW_DIGEST_ENGINE=deepseek`. Local code must still recompute safety
+flags, context pack selection, and red-line behavior after the model response.
 
 DeepSeek intake may transmit user task text to the external DeepSeek API.
 Do not use it for private review content, confidential PR comments, or sensitive

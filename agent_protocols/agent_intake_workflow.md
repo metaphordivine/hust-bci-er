@@ -25,15 +25,17 @@ default is minimal context selected by task family.
 6. For `command-only`, do not do broad discovery.
 7. For `state-changing`, do not proceed without explicit audit evidence or human approval.
 
-Deterministic intake is the default. Use `--deepseek` or
-`AGENT_INTAKE_ENGINE=deepseek` only when external API refinement is explicitly
-allowed; if the API is unavailable, `scripts/agent_intake.py` falls back to the
-deterministic classifier unless `--require-deepseek` is set. Model output may
-refine `mode`, `task_family`, `confidence`, and `reason`, but local code must
-recompute issue-board flags, edit permission, ask-human flags, and selected
-context pack. Because DeepSeek intake sends the user task text to an external
-API, use deterministic intake for private review content unless the human
-explicitly allows external API use.
+Deterministic intake is the default. Use `--deepseek` or configure
+`AGENT_INTAKE_ENGINE=deepseek` in the process, Windows User, or Windows Machine
+environment when external API refinement is explicitly allowed. Review digest
+parsing follows the same rule for `AGENT_REVIEW_DIGEST_ENGINE=deepseek`. If the
+API is unavailable, `scripts/agent_intake.py` falls back to the deterministic
+classifier unless `--require-deepseek` is set. Model output may refine `mode`,
+`task_family`, `confidence`, and `reason`, but local code must recompute
+issue-board flags, edit permission, ask-human flags, and selected context pack.
+Because DeepSeek intake sends the user task text to an external API, use
+deterministic intake for private review content unless the human explicitly
+allows external API use.
 
 ## Session State
 

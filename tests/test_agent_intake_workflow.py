@@ -594,6 +594,43 @@ def test_copilot_digest_deepseek_engine_can_split(monkeypatch):
     assert issues[0]["files_hint"] == ["scripts/agent_review_inbox.py"]
 
 
+def test_review_digest_uses_deepseek_from_user_env_when_process_env_missing(monkeypatch):
+    captured = {}
+
+    def fake_windows_env_value(name, scope):
+        if scope == "User" and name == "AGENT_REVIEW_DIGEST_ENGINE":
+            return "deepseek"
+        return None
+
+    def fake_parse(body, pr, comment_ref, *, api_key, model, base_url, timeout):
+        captured["api_key"] = api_key
+        return [
+            {
+                "id": "PR18-COPILOT-deepseek-1",
+                "source": f"pr:{pr}:copilot_digest:{comment_ref}:deepseek",
+                "kind": "copilot_digest_comment",
+                "severity": "S1",
+                "title": "DeepSeek user-env issue",
+                "problem": body,
+                "expected_fix": "",
+                "files_hint": [],
+                "validation_hint": [],
+                "status": "open",
+            }
+        ]
+
+    monkeypatch.delenv("AGENT_REVIEW_DIGEST_ENGINE", raising=False)
+    monkeypatch.setenv("AGENT_ENABLE_EXTERNAL_ENV_LOOKUP_FOR_TESTS", "1")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr("scripts.agent_env._windows_env_value", fake_windows_env_value)
+    monkeypatch.setattr("scripts.agent_review_inbox.parse_copilot_digest_comment_with_deepseek", fake_parse)
+
+    issues = parse_copilot_digest("### 🟠 中风险\n`x.py` digest issue", 18, "COMMENT_deepseek")
+
+    assert captured["api_key"] == "test-key"
+    assert issues[0]["source"].endswith(":deepseek")
+
+
 def test_review_file_copilot_digest_uses_digest_parser(monkeypatch, tmp_path):
     review_file = tmp_path / "copilot.md"
     review_file.write_text(
@@ -756,6 +793,29 @@ def test_default_intake_does_not_call_deepseek_when_key_exists(monkeypatch, caps
     result = json.loads(capsys.readouterr().out)
     assert result["task_family"] == "score-fusion"
     assert "deepseek" not in result
+
+
+def test_intake_uses_deepseek_from_user_env_when_process_env_missing(monkeypatch, capsys):
+    def fake_windows_env_value(name, scope):
+        if scope == "User" and name == "AGENT_INTAKE_ENGINE":
+            return "deepseek"
+        return None
+
+    def fake_refine(text, deterministic_result, *, api_key, model, base_url, timeout):
+        assert api_key == "test-key"
+        refined = dict(deterministic_result)
+        refined["deepseek"] = {"used": True, "model": model, "base_url": base_url}
+        return refined
+
+    monkeypatch.delenv("AGENT_INTAKE_ENGINE", raising=False)
+    monkeypatch.setenv("AGENT_ENABLE_EXTERNAL_ENV_LOOKUP_FOR_TESTS", "1")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr("scripts.agent_env._windows_env_value", fake_windows_env_value)
+    monkeypatch.setattr("scripts.agent_intake.classify_with_deepseek", fake_refine)
+
+    assert intake_main(["--json", "--message", "score-fusion：修 component map 的 whitening 绑定问题"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["deepseek"]["used"] is True
 
 
 def test_explicit_deepseek_flag_calls_deepseek(monkeypatch, capsys):

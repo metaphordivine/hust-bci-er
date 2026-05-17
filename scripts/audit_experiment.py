@@ -23,8 +23,10 @@ from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
 from hust_bci_er.data.splits import assert_disjoint_subjects, assert_original_trial_not_cross_split  # noqa: E402
+from hust_bci_er.evaluation.crop_policy import FIXED_CROP_POLICIES  # noqa: E402
 from hust_bci_er.evaluation.exact_single_crop import exact_all_correct_rate_from_matrix, exact_ba_from_matrix  # noqa: E402
 from hust_bci_er.evaluation.metrics import balanced_accuracy  # noqa: E402
+from hust_bci_er.evaluation.protocols.params import apply_param_overrides  # noqa: E402
 from hust_bci_er.inference.topk import topk_binary  # noqa: E402
 
 
@@ -257,6 +259,19 @@ def route_model_name(route_data: dict[str, Any]) -> str:
     return str(model or "")
 
 
+def p3_effective_route_data(manifest: dict[str, Any], route_data: dict[str, Any]) -> dict[str, Any]:
+    selected = manifest.get("protocol_selected_artifact")
+    if not isinstance(selected, dict):
+        return route_data
+    overrides = selected.get("selected_param_overrides")
+    if not isinstance(overrides, dict) or not overrides:
+        return route_data
+    try:
+        return apply_param_overrides(route_data, overrides)
+    except ValueError:
+        return route_data
+
+
 def route_implementation_paths(route_data: dict[str, Any], route_rel_path: str) -> list[str]:
     paths = {
         route_rel_path,
@@ -312,7 +327,8 @@ def check_route_model_kwargs_passthrough(
     *,
     gate: str,
 ) -> None:
-    expected = route_model_kwargs(route_data)
+    route_basis = p3_effective_route_data(manifest, route_data)
+    expected = route_model_kwargs(route_basis)
     if not expected:
         add_check(
             checks,
@@ -373,6 +389,15 @@ def check_evidence_lineage(
         message="audit_schema_version supports evidence lineage checks",
     )
     config_sha = manifest.get("config_sha256")
+    selected = manifest.get("protocol_selected_artifact")
+    p3_selected_config = (
+        isinstance(selected, dict)
+        and selected.get("final_route_config_policy") == "base_route_plus_selected_param_overrides"
+        and isinstance(config_sha, str)
+        and route_path.exists()
+        and selected.get("base_route_config_sha256") == sha256_file(route_path)
+        and selected.get("final_route_config_sha256") == config_sha
+    )
     if isinstance(config_sha, str) and route_path.exists() and sha256_file(route_path) == config_sha:
         add_check(
             checks,
@@ -380,6 +405,14 @@ def check_evidence_lineage(
             severity="INFO",
             status="PASS",
             message="manifest config_sha256 matches current route file",
+        )
+    elif p3_selected_config:
+        add_check(
+            checks,
+            rule_id="EVIDENCE_CONFIG_SHA_MATCHES_WORKTREE",
+            severity="INFO",
+            status="PASS",
+            message="manifest config_sha256 matches a P3 selected-param effective route derived from the audited route file",
         )
     else:
         add_check(
@@ -1712,6 +1745,17 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
     bad_score_numeric: list[str] = []
     bad_crop_provenance: list[str] = []
     require_crop_provenance = manifest.get("score_matrix_evidence") == "genuine"
+    crop_policy_data = manifest.get("crop_policy")
+    crop_policy_name = str(crop_policy_data.get("name") if isinstance(crop_policy_data, dict) else "")
+    selected_single_crop_policy = crop_policy_name in {*FIXED_CROP_POLICIES, "random", "worst"}
+    fixed_selected_crop_policy = crop_policy_name in FIXED_CROP_POLICIES
+    expected_fixed_crop_id = None
+    if fixed_selected_crop_policy:
+        expected_fixed_crop_id = str(
+            int(crop_policy_data.get("crop_index", FIXED_CROP_POLICIES[crop_policy_name]))
+            if isinstance(crop_policy_data, dict)
+            else int(FIXED_CROP_POLICIES[crop_policy_name])
+        )
     dataset_provenance_keys: set[tuple[str, str, str, str]] = set()
     if require_crop_provenance and run_dir is not None:
         provenance_errors: list[str] = []
@@ -1754,8 +1798,18 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
                     window_starts.append(start_sec)
                     if dataset_provenance_keys and (str(row[subject_col]), str(row[trial_col]), crop_id, f"{start_sec:.8f}") not in dataset_provenance_keys:
                         bad_crop_provenance.append(group_id)
-                if crop_ids and (len(set(crop_ids)) != 5 or len(set(window_starts)) != 5):
-                    bad_crop_provenance.append(group_id)
+                if crop_ids:
+                    crop_id_set = set(crop_ids)
+                    window_start_set = {f"{value:.8f}" for value in window_starts}
+                    if selected_single_crop_policy:
+                        if len(crop_id_set) != 1 or len(window_start_set) != 1:
+                            bad_crop_provenance.append(group_id)
+                        elif fixed_selected_crop_policy and next(iter(crop_id_set)) != expected_fixed_crop_id:
+                            bad_crop_provenance.append(group_id)
+                        elif not fixed_selected_crop_policy and not all(item in {"0", "1", "2", "3", "4"} for item in crop_id_set):
+                            bad_crop_provenance.append(group_id)
+                    elif len(crop_id_set) != 5 or len(window_start_set) != 5:
+                        bad_crop_provenance.append(group_id)
             parsed_row: list[float] = []
             for col in score_cols:
                 try:
@@ -1801,8 +1855,8 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
             checks,
             rule_id="SCORE_MATRIX_CROP_PROVENANCE",
             bad=bad_crop_provenance,
-            message="genuine score matrix rows must record five distinct crop provenance keys",
-            fix="Write crop source crop_id and window_start_sec columns for every score matrix crop.",
+            message="genuine score matrix rows must record valid crop provenance keys",
+            fix="Write crop source crop_id and window_start_sec columns for every score matrix crop; selected single-crop policies may repeat one valid crop key.",
         )
     if bad_group_size or bad_trial_unique or bad_label_binary or bad_truth_balance or bad_score_numeric or bad_crop_provenance:
         raise ValueError("score matrix semantic checks failed")

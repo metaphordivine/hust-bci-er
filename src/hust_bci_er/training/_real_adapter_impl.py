@@ -568,7 +568,7 @@ def _build_score_matrix(
             rows.append(row)
     policy_name = str(crop_policy.get("name") if isinstance(crop_policy, Mapping) else crop_policy)
     if policy_name in {*FIXED_CROP_POLICIES, "random", "worst"}:
-        return _apply_single_crop_policy_to_score_matrix(rows, crop_policy=crop_policy, seed=seed), "synthetic"
+        return _apply_single_crop_policy_to_score_matrix(rows, crop_policy=crop_policy, seed=seed), "genuine" if all_genuine else "synthetic"
     return rows, "genuine" if all_genuine else "synthetic"
 
 
@@ -803,6 +803,81 @@ def _resolve_device(device_str: str = "auto") -> str:
     return device_str
 
 
+def _torch_load_checkpoint(path: Path) -> Mapping[str, Any]:
+    import torch
+
+    # weights_only=False is required to load full protocol checkpoints that
+    # include numpy arrays (ea_transform) and arbitrary Python objects.
+    # These checkpoints are only loaded from paths the protocol runner itself
+    # wrote; never pass user-supplied paths to this function.
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        payload = torch.load(path, map_location="cpu")
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"checkpoint must contain a mapping payload: {path}")
+    return payload
+
+
+def _checkpoint_ea_transform(payload: Mapping[str, Any], preproc: Sequence[Any]) -> np.ndarray | None:
+    raw = payload.get("ea_transform")
+    if raw is None:
+        if "euclidean_alignment" in _preprocessing_names(preproc):
+            raise ValueError("reused checkpoint is missing euclidean_alignment transform")
+        return None
+    return np.asarray(raw, dtype=np.float32)
+
+
+def _validate_reuse_checkpoint(
+    payload: Mapping[str, Any],
+    *,
+    route_id: str,
+    split_id: str,
+    seed: int,
+    model_name: str,
+    model_kwargs: Mapping[str, Any],
+    n_times: int,
+    preproc: Sequence[Any],
+    run_mode: str,
+    reuse_checkpoint_context: Mapping[str, Any] | None = None,
+) -> None:
+    if payload.get("artifact_kind") != "torch_classifier_checkpoint":
+        raise ValueError("reuse checkpoint is not a torch_classifier_checkpoint artifact")
+    p3_selected_checkpoint = (
+        isinstance(reuse_checkpoint_context, Mapping)
+        and str(reuse_checkpoint_context.get("protocol", "")) == "p3_nested_selection"
+        and str(reuse_checkpoint_context.get("stage", "")) == "inner_select"
+    )
+    mismatches: list[str] = []
+    if str(payload.get("route_id", "")) != route_id:
+        mismatches.append("route_id")
+    if str(payload.get("split_id", "")) != split_id and not p3_selected_checkpoint:
+        mismatches.append("split_id")
+    if int(payload.get("seed", -1)) != int(seed) and not p3_selected_checkpoint:
+        mismatches.append("seed")
+    if p3_selected_checkpoint:
+        if str(payload.get("job_id", "")) != str(reuse_checkpoint_context.get("source_job_id", "")):
+            mismatches.append("source_job_id")
+        if payload.get("outer_fold") != reuse_checkpoint_context.get("outer_fold"):
+            mismatches.append("outer_fold")
+        if payload.get("param_index") != reuse_checkpoint_context.get("selected_param_index"):
+            mismatches.append("param_index")
+    if str(payload.get("model_name", "")) != model_name:
+        mismatches.append("model_name")
+    if dict(payload.get("model_kwargs") or {}) != dict(model_kwargs or {}):
+        mismatches.append("model_kwargs")
+    if int(payload.get("n_times", -1)) != int(n_times):
+        mismatches.append("n_times")
+    if list(payload.get("preprocessing") or []) != list(preproc):
+        mismatches.append("preprocessing")
+    if mismatches:
+        raise ValueError("reuse checkpoint does not match this protocol job: " + ", ".join(mismatches))
+    if run_mode == "candidate" and bool(payload.get("training_epochs_overridden")):
+        raise ValueError("candidate evaluation cannot reuse a checkpoint trained with an epoch override")
+    if not isinstance(payload.get("model_state_dict"), Mapping):
+        raise ValueError("reuse checkpoint is missing model_state_dict")
+
+
 @dataclass(frozen=True)
 class RealRunArtifacts:
     run_dir: Path
@@ -841,6 +916,9 @@ def run_real_classifier_route(
     smoke_epochs: int | None = None,
     device: str = "auto",
     crop_policy: Mapping[str, Any] | None = None,
+    save_checkpoint_path: Path | None = None,
+    reuse_checkpoint_path: Path | None = None,
+    reuse_checkpoint_context: Mapping[str, Any] | None = None,
 ) -> RealRunArtifacts:
     """Run a real EEG classifier route end-to-end.
 
@@ -859,6 +937,9 @@ def run_real_classifier_route(
         smoke_epochs: Override epoch count (smoke mode).
         device: Torch device.
         crop_policy: Optional protocol job crop-policy override, used by P2 diagnostics.
+        save_checkpoint_path: Optional path for a reusable torch classifier checkpoint.
+        reuse_checkpoint_path: Optional reusable checkpoint path for evaluation-only jobs.
+        reuse_checkpoint_context: Optional protocol context for validating reusable checkpoint provenance.
     """
     if run_mode not in VALID_RUN_MODES:
         raise ValueError(f"unknown run_mode: {run_mode}; valid: {', '.join(sorted(VALID_RUN_MODES))}")
@@ -947,6 +1028,13 @@ def run_real_classifier_route(
     input_window_sec = float(route_data.get("input_window_sec", 10))
     preproc = list(route_data.get("preprocessing", []) or [])
     _validate_adapter_preprocessing(preproc)
+    checkpoint_payload: Mapping[str, Any] | None = None
+    checkpoint_reuse: dict[str, Any] | None = None
+    checkpoint_ea_transform: np.ndarray | None = None
+    if reuse_checkpoint_path is not None:
+        reuse_checkpoint_path = Path(reuse_checkpoint_path).resolve()
+        checkpoint_payload = _torch_load_checkpoint(reuse_checkpoint_path)
+        checkpoint_ea_transform = _checkpoint_ea_transform(checkpoint_payload, preproc)
 
     if has_sliding_aug:
         source_trial_sec = float(augmentation["source_trial_sec"])
@@ -1020,8 +1108,9 @@ def run_real_classifier_route(
     if not raw_eval:
         raise ValueError(f"no {eval_split} windows created")
 
-    # Fit EA on all raw training windows
-    ea_transform = _fit_ea_on_windows(raw_train, preproc)
+    # Fit EA on all raw training windows, or reuse the transform bound to the
+    # checkpoint that produced this protocol model.
+    ea_transform = checkpoint_ea_transform if checkpoint_payload is not None else _fit_ea_on_windows(raw_train, preproc)
 
     # Apply preprocessing (including EA if fitted)
     def _apply_preproc_to_windows(windows, ea):
@@ -1096,12 +1185,87 @@ def run_real_classifier_route(
         grad_clip_norm=grad_clip,
     )
 
-    # Train
-    train_loader = DataLoader(_WindowDataset(train_windows), batch_size=batch_size, shuffle=True, num_workers=0)
-    val_dataset = _WindowDataset(val_windows)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    result: TrainResult | None
+    if checkpoint_payload is not None:
+        _validate_reuse_checkpoint(
+            checkpoint_payload,
+            route_id=route_id,
+            split_id=active_split_id,
+            seed=active_seed,
+            model_name=model_name,
+            model_kwargs=model_kwargs,
+            n_times=n_times,
+            preproc=preproc,
+            run_mode=run_mode,
+            reuse_checkpoint_context=reuse_checkpoint_context,
+        )
+        model.load_state_dict(checkpoint_payload["model_state_dict"])
+        model.to(device_str)
+        checkpoint_reuse = {
+            "checkpoint_path": str(Path(reuse_checkpoint_path).resolve()),
+            "checkpoint_sha256": sha256_file(Path(reuse_checkpoint_path)),
+            "source_job_id": checkpoint_payload.get("job_id"),
+            "source_run_dir": checkpoint_payload.get("run_dir"),
+            "checkpoint_schema_version": checkpoint_payload.get("checkpoint_schema_version"),
+        }
+        if reuse_checkpoint_context is not None:
+            checkpoint_reuse["selection_context"] = dict(reuse_checkpoint_context)
+        result = None
+    else:
+        # Train
+        train_loader = DataLoader(_WindowDataset(train_windows), batch_size=batch_size, shuffle=True, num_workers=0)
+        val_dataset = _WindowDataset(val_windows)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
-    result: TrainResult = fit_classifier(model, train_loader, val_loader=val_loader, config=train_config)
+        result = fit_classifier(model, train_loader, val_loader=val_loader, config=train_config)
+        if save_checkpoint_path is not None:
+            save_checkpoint_path = Path(save_checkpoint_path).resolve()
+            save_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            if result.best_state_dict is None:
+                raise ValueError("cannot save reusable checkpoint without best_state_dict")
+            torch.save(
+                {
+                    "checkpoint_schema_version": 1,
+                    "artifact_kind": "torch_classifier_checkpoint",
+                    "adapter": "torch_classifier",
+                    "job_id": None,
+                    "route_id": route_id,
+                    "split_id": active_split_id,
+                    "source_split_id": str(route_data["split_id"]),
+                    "seed": active_seed,
+                    "source_seed": int(route_data["seed"]),
+                    "model_name": model_name,
+                    "model_kwargs": model_kwargs,
+                    "n_times": n_times,
+                    "window_sec": window_sec,
+                    "input_window_sec": input_window_sec,
+                    "preprocessing": preproc,
+                    "augmentation": augmentation if isinstance(augmentation, Mapping) else None,
+                    "ea_transform": ea_transform.tolist() if ea_transform is not None else None,
+                    "model_state_dict": result.best_state_dict,
+                    "best_epoch": int(result.best_epoch),
+                    "best_metric": float(result.best_metric),
+                    "epochs_ran": len(result.history),
+                    "training_epochs": int(epochs),
+                    "source_training_epochs": int(source_epochs),
+                    "training_epochs_overridden": bool(epochs != source_epochs),
+                    "checkpoint_selection": {
+                        "rule": "best_monitored_epoch",
+                        "monitor": str(early_stopping.monitor if early_stopping is not None else "val_loss"),
+                        "mode": str(early_stopping.mode if early_stopping is not None else "min"),
+                        "tie_break": "earliest_epoch",
+                        "restore_best": True,
+                    },
+                    "run_mode": run_mode,
+                    "requested_device": device,
+                    "resolved_device": device_str,
+                    "train_subjects": sorted(train_subjects),
+                    "val_subjects": sorted(val_subjects),
+                    "test_subjects": sorted(test_subjects),
+                    "run_dir": str(run_dir),
+                },
+                save_checkpoint_path,
+            )
 
     # Predict on the audited split. Smoke/full_subjects are val-only diagnostics;
     # candidate mode evaluates held-out test subjects.
@@ -1169,17 +1333,24 @@ def run_real_classifier_route(
     )
 
     # Write model state
+    best_epoch = int(checkpoint_payload.get("best_epoch", 0)) if checkpoint_payload is not None else int(result.best_epoch)
+    best_metric = float(checkpoint_payload.get("best_metric", float("nan"))) if checkpoint_payload is not None else float(result.best_metric)
+    epochs_ran = int(checkpoint_payload.get("epochs_ran", 0)) if checkpoint_payload is not None else len(result.history)
+    artifact_training_epochs = int(checkpoint_payload.get("training_epochs", epochs)) if checkpoint_payload is not None else int(epochs)
+    artifact_source_epochs = int(checkpoint_payload.get("source_training_epochs", source_epochs)) if checkpoint_payload is not None else int(source_epochs)
+    artifact_epochs_overridden = bool(checkpoint_payload.get("training_epochs_overridden", epochs != source_epochs)) if checkpoint_payload is not None else bool(epochs != source_epochs)
+
     (run_dir / "model_state.local.json").write_text(
         json.dumps({
             "adapter": "torch_classifier",
             "model_name": model_name,
             "model_kwargs": model_kwargs,
-            "best_epoch": result.best_epoch,
-            "best_metric": result.best_metric,
-            "epochs_ran": len(result.history),
-            "training_epochs": epochs,
-            "source_training_epochs": source_epochs,
-            "training_epochs_overridden": epochs != source_epochs,
+            "best_epoch": best_epoch,
+            "best_metric": best_metric,
+            "epochs_ran": epochs_ran,
+            "training_epochs": artifact_training_epochs,
+            "source_training_epochs": artifact_source_epochs,
+            "training_epochs_overridden": artifact_epochs_overridden,
             "seed": active_seed,
             "run_mode": run_mode,
             "requested_device": device,
@@ -1189,6 +1360,7 @@ def run_real_classifier_route(
             "score_matrix_evidence": score_matrix_evidence,
             "crop_policy": active_crop_policy,
             "protocol_job_split_manifest": str(Path(split_manifest_path).resolve()) if split_manifest_path is not None else None,
+            "checkpoint_reuse": checkpoint_reuse,
             "augmentation_transforms": train_transform_configs,
             "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
         }, indent=2, ensure_ascii=False) + "\n",
@@ -1227,12 +1399,14 @@ def run_real_classifier_route(
         "val": len(val_subjects),
         "test": len(test_subjects),
     }
-    manifest["training_epochs"] = epochs
-    manifest["source_training_epochs"] = source_epochs
-    manifest["training_epochs_overridden"] = epochs != source_epochs
+    manifest["training_epochs"] = artifact_training_epochs
+    manifest["source_training_epochs"] = artifact_source_epochs
+    manifest["training_epochs_overridden"] = artifact_epochs_overridden
     manifest["requested_device"] = device
     manifest["resolved_device"] = device_str
     manifest["score_matrix_evidence"] = score_matrix_evidence
+    if checkpoint_reuse is not None:
+        manifest["checkpoint_reuse"] = checkpoint_reuse
     manifest["augmentation_transforms"] = train_transform_configs
     manifest["augmentation_transform_scope"] = "train_only" if train_transform_configs else "none"
     manifest["declared_protocol"] = str(route_data["evaluation"]["protocol"])

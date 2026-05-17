@@ -77,7 +77,11 @@ def test_protocol_runner_materializes_p2_crop_jobs(tmp_path):
     assert manifest["route_locks"][0]["source_split_manifest_path"] == "configs/splits/p1_seed42_fold0.yaml"
     assert len(manifest["experiment_gate_job_ids"]) == 7
     assert manifest["artifact_only_job_ids"] == ["p2__ea_deformer__train_seed42"]
-    assert "artifact-only" in manifest["completion_rule"]
+    assert "reusable checkpoint" in manifest["completion_rule"]
+    train_job = next(job for job in manifest["jobs"] if job["stage"] == "train_holdout_model")
+    assert train_job["expected_artifacts"] == ["config_snapshot.yaml", "checkpoint.pt", "train_manifest.json"]
+    assert random_job["reuse_checkpoint_job_id"] == "p2__ea_deformer__train_seed42"
+    assert random_job["reuse_checkpoint_path"] == "job_runs/p2__ea_deformer__train_seed42/checkpoint.pt"
     assert (tmp_path / "p2_run" / "protocol_run_manifest.json").exists()
     split_path = tmp_path / "p2_run" / random_job["split_manifest_path"]
     assert split_path.exists()
@@ -107,7 +111,7 @@ def test_protocol_execute_candidate_rejects_artifact_only_skips(tmp_path):
     run_dir = tmp_path / "p2_run"
     manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
 
-    with pytest.raises(ValueError, match="cannot skip artifact-only training/selection jobs"):
+    with pytest.raises(ValueError, match="cannot be bounded"):
         execute_protocol_jobs(
             manifest,
             protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
@@ -116,18 +120,28 @@ def test_protocol_execute_candidate_rejects_artifact_only_skips(tmp_path):
         )
 
 
-def test_protocol_execute_candidate_rejects_diagnostic_artifact_adapter(tmp_path):
+def test_protocol_execute_candidate_runs_artifact_adapter_before_dependent_eval(tmp_path, monkeypatch):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
     run_dir = tmp_path / "p2_run"
     manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
 
-    with pytest.raises(ValueError, match="cannot use the diagnostic artifact-only adapter"):
-        execute_protocol_jobs(
-            manifest,
-            protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
-            gate="candidate",
-            allow_artifact_only=True,
-            max_jobs=1,
-        )
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: Completed())
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        gate="candidate",
+        allow_artifact_only=True,
+    )
+
+    assert results[0]["status"] == "EXECUTED_ARTIFACT"
+    assert all(item["status"] == "SKIPPED_DEPENDENCY_FAILED" for item in results[1:])
 
 
 def test_protocol_runner_counts_p1_and_p3_jobs():
@@ -147,13 +161,20 @@ def test_protocol_runner_counts_p1_and_p3_jobs():
 
 
 def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_path):
+    param_grid = {
+        "ea_deformer": [
+            {"training.optimizer.lr": 0.0001},
+            {"training.optimizer.lr": 0.001},
+            {"training.optimizer.lr": 0.01},
+        ]
+    }
     manifest = materialize_protocol_run(
         "p3",
         [ROUTE],
         run_dir=tmp_path / "p3_run",
         outer_folds=2,
         inner_folds=2,
-        grid_sizes={"ea_deformer": 3},
+        param_grids=param_grid,
     )
     inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
 
@@ -163,6 +184,24 @@ def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_p
     assert split_payload["param_indices"] == [0, 1, 2]
     assert "seed" not in split_payload
     assert split_payload["seeds"] == [123, 124, 125]
+    assert "checkpoint.pt" in inner_job["expected_artifacts"]
+    assert inner_job["param_overrides"] == {"training.optimizer.lr": 0.0001}
+    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_final_retrain")
+    assert len(final_job["selection_artifact_job_ids"]) == 6
+    assert all(path.endswith("selection_metrics.json") for path in final_job["selection_artifact_paths"])
+    assert "reuse_checkpoint_path" not in final_job or final_job["reuse_checkpoint_path"] is None
+
+
+def test_p3_materialization_rejects_abstract_multi_param_grid(tmp_path):
+    with pytest.raises(ValueError, match="requires concrete parameter overrides"):
+        materialize_protocol_run(
+            "p3",
+            [ROUTE],
+            run_dir=tmp_path / "p3_abstract",
+            outer_folds=2,
+            inner_folds=2,
+            grid_sizes={"ea_deformer": 3},
+        )
 
 
 def test_protocol_runner_records_multiple_routes_in_shared_split_contract(tmp_path):
@@ -242,7 +281,7 @@ def test_protocol_runner_materializes_formal_p3_inner_and_final_splits_from_hust
         grid_sizes={"ea_deformer": 1},
     )
     inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
-    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_train_eval")
+    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_final_retrain")
     inner_split = yaml.safe_load((tmp_path / "p3_formal" / inner_job["split_manifest_path"]).read_text(encoding="utf-8"))
     final_split = yaml.safe_load((tmp_path / "p3_formal" / final_job["split_manifest_path"]).read_text(encoding="utf-8"))
 
@@ -253,7 +292,7 @@ def test_protocol_runner_materializes_formal_p3_inner_and_final_splits_from_hust
     assert set(final_split["train_subjects"]).isdisjoint(final_split["test_subjects"])
 
 
-def test_protocol_execute_skips_p2_train_artifact_when_eval_jobs_run(tmp_path, monkeypatch):
+def test_protocol_execute_runs_artifact_job_first_then_skips_remaining_on_budget(tmp_path, monkeypatch):
     import hust_bci_er.evaluation.protocols.runner as runner
 
     run_dir = tmp_path / "p2_run"
@@ -273,9 +312,8 @@ def test_protocol_execute_skips_p2_train_artifact_when_eval_jobs_run(tmp_path, m
         max_jobs=1,
     )
 
-    assert results[0]["status"] == "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT"
-    assert results[1]["status"] == "EXECUTED"
-    assert all(item["status"] == "SKIPPED_MAX_JOBS" for item in results[2:])
+    assert results[0]["status"] == "EXECUTED_ARTIFACT"
+    assert all(item["status"] == "SKIPPED_MAX_JOBS" for item in results[1:])
 
 
 def test_p2_smoke_executes_holdout_eval_in_test_scope(tmp_path, monkeypatch):
@@ -292,6 +330,10 @@ def test_p2_smoke_executes_holdout_eval_in_test_scope(tmp_path, monkeypatch):
 
     def fake_run(cmd, *args, **kwargs):
         commands.append([str(item) for item in cmd])
+        if "scripts/run_artifact_job.py" in [str(item) for item in cmd]:
+            checkpoint = run_dir / "job_runs" / "p2__ea_deformer__train_seed42" / "checkpoint.pt"
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint.write_bytes(b"checkpoint")
         return Completed()
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
@@ -304,13 +346,13 @@ def test_p2_smoke_executes_holdout_eval_in_test_scope(tmp_path, monkeypatch):
         max_jobs=2,
     )
 
-    assert results[0]["status"] == "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT"
+    assert results[0]["status"] == "EXECUTED_ARTIFACT"
     assert results[1]["status"] == "EXECUTED"
     route_command = next(cmd for cmd in commands if "scripts/run_route_job.py" in cmd)
     assert route_command[route_command.index("--mode") + 1] == "candidate"
 
 
-def test_p3_smoke_executes_outer_final_eval_in_test_scope(tmp_path, monkeypatch):
+def test_p3_smoke_executes_outer_final_retrain_in_test_scope(tmp_path, monkeypatch):
     import hust_bci_er.evaluation.protocols.runner as runner
 
     run_dir = tmp_path / "p3_run"
@@ -322,6 +364,23 @@ def test_p3_smoke_executes_outer_final_eval_in_test_scope(tmp_path, monkeypatch)
         inner_folds=2,
         grid_sizes={"ea_deformer": 1},
     )
+    for path in next(job for job in manifest["jobs"] if job["stage"] == "outer_final_retrain")["selection_artifact_paths"]:
+        selection = run_dir / path
+        checkpoint = selection.parent / "checkpoint.pt"
+        selection.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_bytes(b"checkpoint")
+        selection.write_text(
+            json.dumps(
+                {
+                    "stage": "inner_select",
+                    "primary_metric": "exact_single_crop_expected_BA",
+                    "metric_value": 0.5,
+                    "checkpoint_path": "checkpoint.pt",
+                    "checkpoint_sha256": sha256_file(checkpoint),
+                }
+            ),
+            encoding="utf-8",
+        )
     commands: list[list[str]] = []
 
     class Completed:
@@ -377,6 +436,9 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
     split = run_dir / "splits" / "job_split.yaml"
     split.parent.mkdir(parents=True)
     split.write_text("split_id: job_split\ntrain_subjects: [s1]\nval_subjects: [s2]\ntest_subjects: [s3]\ntrial_rows: []\n", encoding="utf-8")
+    checkpoint = run_dir / "job_runs" / "train_job" / "checkpoint.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
     protocol = {
         "jobs": [
             {
@@ -387,6 +449,7 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
                 "seed": 123,
                 "expected_artifacts": ["predictions.csv"],
                 "crop_policy": {"name": "crop3", "selection": "fixed_index", "crop_index": 2},
+                "reuse_checkpoint_path": "job_runs/train_job/checkpoint.pt",
             }
         ]
     }
@@ -429,6 +492,260 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
     assert captured["device"] == "cpu"
     assert captured["smoke_epochs"] == 1
     assert captured["crop_policy"]["name"] == "crop3"
+    assert captured["reuse_checkpoint_path"] == checkpoint
+
+
+def test_run_route_job_treats_null_reuse_checkpoint_as_absent(tmp_path, monkeypatch):
+    from scripts import run_route_job
+    import hust_bci_er.training.real_adapter as real_adapter
+
+    route = tmp_path / "route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: tmp_real",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: base_split",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: shallow_conv_net}",
+                "adaptation: none",
+                "training: {trainer: torch_classifier, job_adapter: torch_classifier, epochs: 1, batch_size: 2, optimizer: {name: adamw, lr: 0.001}, loss: cross_entropy}",
+                "inference: {top4: true, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: exact_single_crop_expected_BA}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "protocol"
+    split = run_dir / "splits" / "job_split.yaml"
+    split.parent.mkdir(parents=True)
+    split.write_text("split_id: job_split\ntrain_subjects: [s1]\nval_subjects: [s2]\ntest_subjects: [s3]\ntrial_rows: []\n", encoding="utf-8")
+    protocol = {
+        "jobs": [
+            {
+                "job_id": "job1",
+                "route_config": route.as_posix(),
+                "split_id": "job_split",
+                "split_manifest_path": "splits/job_split.yaml",
+                "seed": 123,
+                "expected_artifacts": ["predictions.csv"],
+                "reuse_checkpoint_path": None,
+            }
+        ]
+    }
+    protocol_path = run_dir / "protocol_run_manifest.json"
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+    captured = {}
+
+    class Artifacts:
+        run_dir = tmp_path / "out" / "job1"
+        manifest_json = run_dir / "manifest.json"
+
+    def fake_run_real_classifier_route(**kwargs):
+        captured.update(kwargs)
+        Artifacts.run_dir.mkdir(parents=True)
+        Artifacts.manifest_json.write_text("{}", encoding="utf-8")
+        return Artifacts
+
+    monkeypatch.setattr(real_adapter, "run_real_classifier_route", fake_run_real_classifier_route)
+
+    assert run_route_job.main(
+        [
+            "--protocol-run",
+            protocol_path.as_posix(),
+            "--job-id",
+            "job1",
+            "--output-root",
+            (tmp_path / "out").as_posix(),
+        ]
+    ) == 0
+    assert captured["split_manifest_path"] == split
+    assert captured["reuse_checkpoint_path"] is None
+
+
+def test_run_route_job_rejects_missing_declared_reuse_checkpoint(tmp_path, monkeypatch):
+    from scripts import run_route_job
+    import hust_bci_er.training.real_adapter as real_adapter
+
+    route = tmp_path / "route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: tmp_real",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: base_split",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: shallow_conv_net}",
+                "adaptation: none",
+                "training: {trainer: torch_classifier, job_adapter: torch_classifier, epochs: 1, batch_size: 2, optimizer: {name: adamw, lr: 0.001}, loss: cross_entropy}",
+                "inference: {top4: true, crop_policy: single}",
+                "evaluation: {protocol: p1_repeated_group_kfold, primary_metric: exact_single_crop_expected_BA}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "protocol"
+    split = run_dir / "splits" / "job_split.yaml"
+    split.parent.mkdir(parents=True)
+    split.write_text("split_id: job_split\ntrain_subjects: [s1]\nval_subjects: [s2]\ntest_subjects: [s3]\ntrial_rows: []\n", encoding="utf-8")
+    protocol = {
+        "jobs": [
+            {
+                "job_id": "job1",
+                "route_config": route.as_posix(),
+                "split_id": "job_split",
+                "split_manifest_path": "splits/job_split.yaml",
+                "seed": 123,
+                "expected_artifacts": ["predictions.csv"],
+                "reuse_checkpoint_path": "job_runs/train_job/missing_checkpoint.pt",
+            }
+        ]
+    }
+    protocol_path = run_dir / "protocol_run_manifest.json"
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+
+    def fail_if_called(**kwargs):
+        raise AssertionError("missing reuse checkpoint must fail before adapter dispatch")
+
+    monkeypatch.setattr(real_adapter, "run_real_classifier_route", fail_if_called)
+
+    with pytest.raises(ValueError, match="reuse_checkpoint_path"):
+        run_route_job.main(
+            [
+                "--protocol-run",
+                protocol_path.as_posix(),
+                "--job-id",
+                "job1",
+                "--output-root",
+                (tmp_path / "out").as_posix(),
+            ]
+        )
+
+
+def test_run_route_job_selects_best_p3_params_retrains_and_records_manifest(tmp_path, monkeypatch):
+    from scripts import run_route_job
+    import hust_bci_er.training.real_adapter as real_adapter
+
+    route = tmp_path / "route.yaml"
+    route.write_text(
+        "\n".join(
+            [
+                "route_id: tmp_real",
+                "status: IDEA",
+                "dataset_version: train_v1",
+                "split_id: base_split",
+                "seed: 42",
+                "input_window_sec: 10",
+                "preprocessing: [zscore]",
+                "features: []",
+                "model: {name: shallow_conv_net}",
+                "adaptation: none",
+                "training: {trainer: torch_classifier, job_adapter: torch_classifier, epochs: 1, batch_size: 2, optimizer: {name: adamw, lr: 0.001}, loss: cross_entropy}",
+                "inference: {top4: true, crop_policy: single}",
+                "evaluation: {protocol: p3_nested_selection, primary_metric: exact_single_crop_expected_BA}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "protocol"
+    split = run_dir / "splits" / "job_split.yaml"
+    split.parent.mkdir(parents=True)
+    split.write_text("split_id: job_split\ntrain_subjects: [s1]\nval_subjects: [s2]\ntest_subjects: [s3]\ntrial_rows: []\n", encoding="utf-8")
+    selection_paths = []
+    for job_id, param_index, inner_fold, metric in [
+        ("inner_p0_f0", 0, 0, 0.5),
+        ("inner_p0_f1", 0, 1, 0.7),
+        ("inner_p1_f0", 1, 0, 0.8),
+        ("inner_p1_f1", 1, 1, 0.6),
+    ]:
+        job_dir = run_dir / "job_runs" / job_id
+        job_dir.mkdir(parents=True)
+        checkpoint = job_dir / "checkpoint.pt"
+        checkpoint.write_bytes(f"checkpoint-{job_id}".encode("utf-8"))
+        selection = job_dir / "selection_metrics.json"
+        selection.write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "stage": "inner_select",
+                    "protocol": "p3_nested_selection",
+                    "param_index": param_index,
+                    "outer_fold": 0,
+                    "inner_fold": inner_fold,
+                    "param_overrides": {"training.optimizer.lr": 0.001 * (param_index + 1)},
+                    "primary_metric": "exact_single_crop_expected_BA",
+                    "metric_value": metric,
+                    "checkpoint_path": "checkpoint.pt",
+                    "checkpoint_sha256": sha256_file(checkpoint),
+                }
+            ),
+            encoding="utf-8",
+        )
+        selection_paths.append(f"job_runs/{job_id}/selection_metrics.json")
+    protocol = {
+        "jobs": [
+            {
+                "job_id": "final",
+                "route_config": route.as_posix(),
+                "split_id": "job_split",
+                "split_manifest_path": "splits/job_split.yaml",
+                "seed": 42,
+                "stage": "outer_final_retrain",
+                "expected_artifacts": ["predictions.csv"],
+                "selection_artifact_paths": selection_paths,
+            }
+        ]
+    }
+    protocol_path = run_dir / "protocol_run_manifest.json"
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+    captured = {}
+
+    class Artifacts:
+        run_dir = tmp_path / "out" / "final"
+        manifest_json = run_dir / "manifest.json"
+
+    def fake_run_real_classifier_route(**kwargs):
+        captured.update(kwargs)
+        Artifacts.run_dir.mkdir(parents=True, exist_ok=True)
+        Artifacts.manifest_json.write_text("{}", encoding="utf-8")
+        return Artifacts
+
+    monkeypatch.setattr(real_adapter, "run_real_classifier_route", fake_run_real_classifier_route)
+
+    assert run_route_job.main(
+        [
+            "--protocol-run",
+            protocol_path.as_posix(),
+            "--job-id",
+            "final",
+            "--output-root",
+            (tmp_path / "out").as_posix(),
+            "--device",
+            "cpu",
+        ]
+    ) == 0
+
+    assert captured["reuse_checkpoint_path"] is None
+    assert captured["reuse_checkpoint_context"] is None
+    selected_route = Path(captured["route_config_path"])
+    selected_route_payload = yaml.safe_load(selected_route.read_text(encoding="utf-8"))
+    assert selected_route_payload["training"]["optimizer"]["lr"] == pytest.approx(0.002)
+    patched = json.loads(Artifacts.manifest_json.read_text(encoding="utf-8"))
+    assert patched["protocol_selected_artifact"]["selected_param_index"] == 1
+    assert patched["protocol_selected_artifact"]["source_job_id"] == "inner_p1_f0"
+    assert patched["protocol_selected_artifact"]["selected_param_overrides"] == {"training.optimizer.lr": 0.002}
+    assert patched["protocol_selected_artifact"]["inner_checkpoint_reused_for_outer_test"] is False
 
 
 def test_run_route_job_uses_protocol_default_device_and_data_root(tmp_path, monkeypatch):
@@ -561,7 +878,7 @@ def test_protocol_summary_marks_missing_artifact_only_jobs_incomplete(tmp_path):
                         "seed": 42,
                         "stage": "train_holdout_model",
                         "split_id": "split_a",
-                        "expected_artifacts": ["checkpoint.local", "train_manifest.json"],
+                        "expected_artifacts": ["checkpoint.pt", "train_manifest.json"],
                     },
                     {
                         "job_id": "p2__route__eval_crop1",
@@ -587,7 +904,7 @@ def test_protocol_summary_marks_missing_artifact_only_jobs_incomplete(tmp_path):
 
     assert audit["status"] == "INCOMPLETE"
     assert audit["n_artifact_only_jobs"] == 1
-    assert "p2__route__train_seed42: checkpoint.local" in audit["missing_artifacts"]
+    assert "p2__route__train_seed42: checkpoint.pt" in audit["missing_artifacts"]
     assert (run_dir / "protocol2_audit.json").exists()
 
 

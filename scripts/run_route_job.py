@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -10,6 +11,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from hust_bci_er.audit.manifest import sha256_file  # noqa: E402
+from hust_bci_er.evaluation.protocols.params import write_effective_route_config  # noqa: E402
 from hust_bci_er.training.toy_adapter import run_toy_route  # noqa: E402
 
 
@@ -35,6 +38,199 @@ def route_adapter_name(route_data: dict) -> str:
     if adapter not in SUPPORTED_ADAPTERS:
         raise ValueError(f"unsupported protocol job adapter: {adapter}")
     return str(adapter)
+
+
+def _required_protocol_path(protocol_root: Path, value: object, *, field: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} is declared but empty")
+    root = protocol_root.resolve()
+    path = (root / value).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{field} must stay under protocol run: {value}") from exc
+    if not path.exists():
+        raise ValueError(f"{field} declares a missing protocol artifact: {value}")
+    return path
+
+
+def _selection_artifacts(protocol_root: Path, job: dict) -> list[dict[str, str]]:
+    from hust_bci_er.audit.manifest import sha256_file
+
+    out: list[dict[str, str]] = []
+    for value in job.get("selection_artifact_paths") or []:
+        path = _required_protocol_path(protocol_root, value, field="selection_artifact_paths")
+        out.append({"path": str(path), "sha256": sha256_file(path)})
+    return out
+
+
+def _selection_metric_mode(metric_name: str) -> str:
+    lower = metric_name.lower()
+    return "min" if lower == "loss" or lower.endswith("_loss") or "loss" in lower else "max"
+
+
+def _metric_value(payload: dict, *, path: Path) -> float:
+    value = payload.get("metric_value")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"selection metric is not numeric in {path}: {value!r}") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"selection metric is not finite in {path}: {value!r}")
+    return parsed
+
+
+def _param_sort_value(value: object) -> tuple[int, int | str]:
+    try:
+        return (0, int(value))
+    except (TypeError, ValueError):
+        return (1, str(value))
+
+
+def _select_p3_artifact(protocol_root: Path, job: dict) -> dict | None:
+    selection_paths = job.get("selection_artifact_paths") or []
+    if not selection_paths:
+        return None
+
+    loaded: list[dict] = []
+    for value in selection_paths:
+        path = _required_protocol_path(protocol_root, value, field="selection_artifact_paths")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"selection artifact must be a JSON object: {path}")
+        if str(payload.get("stage", "")) != "inner_select":
+            raise ValueError(f"selection artifact stage must be inner_select: {path}")
+        primary_metric = str(payload.get("primary_metric") or "")
+        if not primary_metric:
+            raise ValueError(f"selection artifact missing primary_metric: {path}")
+        checkpoint_rel = payload.get("checkpoint_path")
+        checkpoint_path = _required_protocol_path(path.parent, checkpoint_rel, field="selection checkpoint_path")
+        checkpoint_sha256 = sha256_file(checkpoint_path)
+        declared_sha = payload.get("checkpoint_sha256")
+        if isinstance(declared_sha, str) and declared_sha and declared_sha != checkpoint_sha256:
+            raise ValueError(f"selection checkpoint sha256 mismatch: {path}")
+        param_overrides = payload.get("param_overrides")
+        if param_overrides is None:
+            param_overrides = {}
+        if not isinstance(param_overrides, dict):
+            raise ValueError(f"selection artifact param_overrides must be a mapping: {path}")
+        loaded.append(
+            {
+                "payload": payload,
+                "param_overrides": dict(param_overrides),
+                "metric_value": _metric_value(payload, path=path),
+                "selection_metrics_path": path,
+                "selection_metrics_protocol_path": path.relative_to(protocol_root).as_posix(),
+                "selection_metrics_sha256": sha256_file(path),
+                "checkpoint_path": checkpoint_path,
+                "checkpoint_protocol_path": checkpoint_path.relative_to(protocol_root).as_posix(),
+                "checkpoint_sha256": checkpoint_sha256,
+            }
+        )
+
+    primary_metrics = {str(item["payload"].get("primary_metric")) for item in loaded}
+    if len(primary_metrics) != 1:
+        raise ValueError("selection artifacts disagree on primary_metric: " + ", ".join(sorted(primary_metrics)))
+    primary_metric = next(iter(primary_metrics))
+    mode = _selection_metric_mode(primary_metric)
+
+    by_param: dict[object, list[dict]] = {}
+    for item in loaded:
+        by_param.setdefault(item["payload"].get("param_index"), []).append(item)
+
+    group_summaries = []
+    for param_index, items in by_param.items():
+        override_payloads = {json.dumps(item["param_overrides"], sort_keys=True, ensure_ascii=False) for item in items}
+        if len(override_payloads) != 1:
+            raise ValueError(f"selection artifacts disagree on param_overrides for param_index={param_index}")
+        values = [float(item["metric_value"]) for item in items]
+        group_summaries.append(
+            {
+                "param_index": param_index,
+                "n_inner_artifacts": len(items),
+                "mean_metric_value": sum(values) / len(values),
+                "metric_values": values,
+                "param_overrides": dict(items[0]["param_overrides"]),
+            }
+        )
+    group_summaries.sort(
+        key=lambda item: (
+            -float(item["mean_metric_value"]) if mode == "max" else float(item["mean_metric_value"]),
+            _param_sort_value(item["param_index"]),
+        )
+    )
+    selected_param = group_summaries[0]["param_index"]
+    selected_group = [item for item in loaded if item["payload"].get("param_index") == selected_param]
+    selected_group.sort(
+        key=lambda item: (
+            -float(item["metric_value"]) if mode == "max" else float(item["metric_value"]),
+            _param_sort_value(item["payload"].get("inner_fold")),
+            str(item["payload"].get("job_id", "")),
+        )
+    )
+    selected = selected_group[0]
+    selected_payload = selected["payload"]
+    return {
+        "selection_rule": "mean_inner_primary_metric_by_param_index_then_outer_train_retrain",
+        "protocol": str(selected_payload.get("protocol", "")),
+        "stage": str(selected_payload.get("stage", "")),
+        "primary_metric": primary_metric,
+        "metric_mode": mode,
+        "selected_param_index": selected_param,
+        "selected_param_overrides": dict(selected["param_overrides"]),
+        "selected_metric_mean": group_summaries[0]["mean_metric_value"],
+        "selected_metric_value": float(selected["metric_value"]),
+        "source_job_id": str(selected_payload.get("job_id", "")),
+        "outer_fold": selected_payload.get("outer_fold"),
+        "inner_fold": selected_payload.get("inner_fold"),
+        "selection_metrics_path": str(selected["selection_metrics_path"]),
+        "selection_metrics_protocol_path": selected["selection_metrics_protocol_path"],
+        "selection_metrics_sha256": selected["selection_metrics_sha256"],
+        "selected_inner_checkpoint_path": str(selected["checkpoint_path"]),
+        "selected_inner_checkpoint_protocol_path": selected["checkpoint_protocol_path"],
+        "selected_inner_checkpoint_sha256": selected["checkpoint_sha256"],
+        "inner_checkpoint_reused_for_outer_test": False,
+        "final_training_scope": "outer_train_with_route_validation_split",
+        "param_group_summaries": group_summaries,
+    }
+
+
+def _route_for_selected_p3_final(route_path: Path, route_data: dict, run_dir: Path, selected_artifact: dict | None) -> Path:
+    if selected_artifact is None:
+        return route_path
+    selected_artifact["base_route_config_path"] = route_path.as_posix()
+    selected_artifact["base_route_config_sha256"] = sha256_file(route_path)
+    overrides = selected_artifact.get("selected_param_overrides")
+    if not isinstance(overrides, dict) or not overrides:
+        selected_artifact["final_route_config_path"] = route_path.as_posix()
+        selected_artifact["final_route_config_sha256"] = sha256_file(route_path)
+        selected_artifact["final_route_config_policy"] = "base_route_without_param_overrides"
+        return route_path
+    effective = write_effective_route_config(
+        base_route_data=route_data,
+        overrides=overrides,
+        output_dir=run_dir / "effective_route_config",
+    )
+    selected_artifact["final_route_config_path"] = effective.as_posix()
+    selected_artifact["final_route_config_sha256"] = sha256_file(effective)
+    selected_artifact["final_route_config_policy"] = "base_route_plus_selected_param_overrides"
+    return effective
+
+
+def _patch_selection_artifact_provenance(run_dir: Path, artifacts: list[dict[str, str]], selected_artifact: dict | None) -> None:
+    if not artifacts and selected_artifact is None:
+        return
+    for name in ("manifest.json", "model_state.local.json"):
+        path = run_dir / name
+        if not path.exists():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            if artifacts:
+                payload["protocol_selection_artifacts"] = artifacts
+            if selected_artifact is not None:
+                payload["protocol_selected_artifact"] = selected_artifact
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,6 +264,17 @@ def main(argv: list[str] | None = None) -> int:
     route_data = load_route(route_path)
     adapter_name = route_adapter_name(route_data)
     split_path = protocol_root / str(job["split_manifest_path"])
+    reuse_checkpoint_value = job.get("reuse_checkpoint_path")
+    reuse_checkpoint_path = (
+        _required_protocol_path(protocol_root, reuse_checkpoint_value, field="reuse_checkpoint_path")
+        if reuse_checkpoint_value is not None
+        else None
+    )
+    selection_artifacts = _selection_artifacts(protocol_root, job)
+    selected_artifact = _select_p3_artifact(protocol_root, job)
+    if selected_artifact is not None and reuse_checkpoint_path is not None:
+        raise ValueError("P3 outer final retrain must not declare reuse_checkpoint_path")
+    effective_route_path = _route_for_selected_p3_final(route_path, route_data, run_dir, selected_artifact)
     command = [
         "python",
         "scripts/run_route_job.py",
@@ -87,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if adapter_name == "toy_centroid":
         artifacts = run_toy_route(
-            route_config_path=route_path,
+            route_config_path=effective_route_path,
             run_dir=run_dir,
             split_id=str(job["split_id"]),
             seed=int(job["seed"]),
@@ -97,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         from hust_bci_er.training.real_adapter import run_real_classifier_route  # noqa: E402
 
         artifacts = run_real_classifier_route(
-            route_config_path=route_path,
+            route_config_path=effective_route_path,
             run_dir=run_dir,
             run_mode=args.mode,
             split_id=str(job["split_id"]),
@@ -108,8 +315,11 @@ def main(argv: list[str] | None = None) -> int:
             smoke_epochs=args.epochs_override,
             device=effective_device,
             crop_policy=job.get("crop_policy") if isinstance(job.get("crop_policy"), dict) else None,
+            reuse_checkpoint_path=reuse_checkpoint_path,
+            reuse_checkpoint_context=None,
         )
-    print(json.dumps({"job_id": args.job_id, "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json)}, ensure_ascii=False))
+    _patch_selection_artifact_provenance(run_dir, selection_artifacts, selected_artifact)
+    print(json.dumps({"job_id": args.job_id, "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json), "route_config": str(effective_route_path)}, ensure_ascii=False))
     return 0
 
 
