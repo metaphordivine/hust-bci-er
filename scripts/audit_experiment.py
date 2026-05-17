@@ -23,6 +23,7 @@ from hust_bci_er.config.registry import AUDIT_DECISIONS  # noqa: E402
 from hust_bci_er.config.schema import validate_route_config  # noqa: E402
 from hust_bci_er.contracts.prediction import canonical_prediction_column, prediction_schema  # noqa: E402
 from hust_bci_er.data.splits import assert_disjoint_subjects, assert_original_trial_not_cross_split  # noqa: E402
+from hust_bci_er.evaluation.crop_policy import FIXED_CROP_POLICIES  # noqa: E402
 from hust_bci_er.evaluation.exact_single_crop import exact_all_correct_rate_from_matrix, exact_ba_from_matrix  # noqa: E402
 from hust_bci_er.evaluation.metrics import balanced_accuracy  # noqa: E402
 from hust_bci_er.inference.topk import topk_binary  # noqa: E402
@@ -1714,7 +1715,7 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
     require_crop_provenance = manifest.get("score_matrix_evidence") == "genuine"
     crop_policy_data = manifest.get("crop_policy")
     crop_policy_name = str(crop_policy_data.get("name") if isinstance(crop_policy_data, dict) else "")
-    selected_single_crop_policy = crop_policy_name in {"crop1", "crop2", "crop3", "crop4", "crop5", "random", "worst"}
+    selected_single_crop_policy = crop_policy_name in {*FIXED_CROP_POLICIES, "random", "worst"}
     dataset_provenance_keys: set[tuple[str, str, str, str]] = set()
     if require_crop_provenance and run_dir is not None:
         provenance_errors: list[str] = []

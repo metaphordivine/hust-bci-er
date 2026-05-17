@@ -806,6 +806,10 @@ def _resolve_device(device_str: str = "auto") -> str:
 def _torch_load_checkpoint(path: Path) -> Mapping[str, Any]:
     import torch
 
+    # weights_only=False is required to load full protocol checkpoints that
+    # include numpy arrays (ea_transform) and arbitrary Python objects.
+    # These checkpoints are only loaded from paths the protocol runner itself
+    # wrote; never pass user-supplied paths to this function.
     try:
         payload = torch.load(path, map_location="cpu", weights_only=False)
     except TypeError:
@@ -847,7 +851,7 @@ def _validate_reuse_checkpoint(
         mismatches.append("seed")
     if str(payload.get("model_name", "")) != model_name:
         mismatches.append("model_name")
-    if dict(payload.get("model_kwargs") or {}) != dict(model_kwargs):
+    if dict(payload.get("model_kwargs") or {}) != dict(model_kwargs or {}):
         mismatches.append("model_kwargs")
     if int(payload.get("n_times", -1)) != int(n_times):
         mismatches.append("n_times")

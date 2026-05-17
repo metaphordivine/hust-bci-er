@@ -179,6 +179,8 @@ ARTIFACT_HANDLERS = {
 def _patch_checkpoint_metadata(checkpoint_path: Path, *, job: dict, run_dir: Path) -> None:
     import torch
 
+    # weights_only=False: this checkpoint was just written by the protocol
+    # artifact adapter; it is never sourced from user-supplied paths.
     try:
         payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     except TypeError:

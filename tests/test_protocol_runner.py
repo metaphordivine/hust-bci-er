@@ -271,7 +271,7 @@ def test_protocol_runner_materializes_formal_p3_inner_and_final_splits_from_hust
     assert set(final_split["train_subjects"]).isdisjoint(final_split["test_subjects"])
 
 
-def test_protocol_execute_skips_p2_train_artifact_when_eval_jobs_run(tmp_path, monkeypatch):
+def test_protocol_execute_runs_artifact_job_first_then_skips_remaining_on_budget(tmp_path, monkeypatch):
     import hust_bci_er.evaluation.protocols.runner as runner
 
     run_dir = tmp_path / "p2_run"
