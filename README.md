@@ -17,9 +17,11 @@ agent 协作默认使用最小上下文。先读：
 3. 用 `scripts/agent_intake.py` 分类任务
 4. 用 `scripts/agent_context.py --task <task_family>` 选择最小 context pack
 
-`scripts/agent_intake.py` 默认使用本地 deterministic heuristics。只有显式加
-`--deepseek`，或设置 `AGENT_INTAKE_ENGINE=deepseek` 时，才会调用 DeepSeek；
-API 不可用时会回退本地规则，除非同时加 `--require-deepseek`。
+`scripts/agent_intake.py` 默认使用本地 deterministic heuristics。显式加
+`--deepseek`，或在当前进程 / Windows User / Windows Machine 环境中设置
+`AGENT_INTAKE_ENGINE=deepseek` 时，会调用 DeepSeek；API 不可用时会回退本地规则，
+除非同时加 `--require-deepseek`。review digest 解析同理使用
+`AGENT_REVIEW_DIGEST_ENGINE=deepseek`。
 
 只有 selected context pack、验证失败或任务本身要求时，才继续读完整协议文档，例如 `docs/04_evaluation_protocols.md` 或 `agent_protocols/foundation_usage.md`。
 
@@ -48,7 +50,7 @@ python scripts/repo_doctor.py fast
 - 基础预处理、手工特征、Top-4、score route 组装函数。
 - PyTorch classifier component trainer。
 - deterministic runtime helpers、environment/requirements lock、run manifest writer。
-- P1/P2/P3 protocol runner manifest materialization，以及 P2/P3 checkpoint/selection artifact 执行与复用。
+- P1/P2/P3 protocol runner manifest materialization、P2 checkpoint reuse，以及 P3 selected-param/checkpoint artifact 执行与复用。
 - score route 从 component score CSV 到 `score/pred_top4` prediction table 的最小执行入口。
 - Foundation Usage Skill，用于把 dataset/split evidence、prediction/report、run manifest、promotion、registry/cache/monitor 等公共基座路由成稳定 agent 工作流。
 - toy end-to-end audit smoke：`toy_eegnet` 可生成 synthetic dataset/split、prediction、score matrix、metric report、run manifest，并通过 candidate audit，用于 CI 和新人环境验证。
@@ -61,7 +63,7 @@ python scripts/repo_doctor.py fast
 - 复杂训练 callback。
 - 按 route 默认训练轮数完成并提交绑定 summary 的 candidate 级真实实验结果。
 
-P1/P2/P3 当前已迁入为 protocol 配置、dry-run plan 和统一 runner manifest。plan 只看工作量；runner 会锁定 route/config/dataset/source split、job-specific split contract、seed、environment 和 job artifact contract。P2/P3 的 artifact-only job 会写出可复用 checkpoint / selection artifact；candidate 执行不会跳过这些依赖，也不会伪造训练结果：
+P1/P2/P3 当前已迁入为 protocol 配置、dry-run plan 和统一 runner manifest。plan 只看工作量；runner 会锁定 route/config/dataset/source split、job-specific split contract、seed、environment 和 job artifact contract。P2 的 artifact-only job 会写出可复用 checkpoint；P3 `inner_select` 会写出 checkpoint 和 `selection_metrics.json`，outer final job 会按 inner primary metric 选择 best param/checkpoint、复用该 checkpoint，并把 selected artifact 写进 final manifest。candidate 执行不会跳过这些依赖，也不会伪造训练结果：
 
 ```bash
 python scripts/plan_evaluation_protocol.py --protocol p1 --route-config configs/routes/models/ea_deformer.yaml

@@ -1716,6 +1716,14 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
     crop_policy_data = manifest.get("crop_policy")
     crop_policy_name = str(crop_policy_data.get("name") if isinstance(crop_policy_data, dict) else "")
     selected_single_crop_policy = crop_policy_name in {*FIXED_CROP_POLICIES, "random", "worst"}
+    fixed_selected_crop_policy = crop_policy_name in FIXED_CROP_POLICIES
+    expected_fixed_crop_id = None
+    if fixed_selected_crop_policy:
+        expected_fixed_crop_id = str(
+            int(crop_policy_data.get("crop_index", FIXED_CROP_POLICIES[crop_policy_name]))
+            if isinstance(crop_policy_data, dict)
+            else int(FIXED_CROP_POLICIES[crop_policy_name])
+        )
     dataset_provenance_keys: set[tuple[str, str, str, str]] = set()
     if require_crop_provenance and run_dir is not None:
         provenance_errors: list[str] = []
@@ -1758,8 +1766,18 @@ def recompute_exact_metric_from_matrix(path: Path, *, metric_name: str, manifest
                     window_starts.append(start_sec)
                     if dataset_provenance_keys and (str(row[subject_col]), str(row[trial_col]), crop_id, f"{start_sec:.8f}") not in dataset_provenance_keys:
                         bad_crop_provenance.append(group_id)
-                if crop_ids and not selected_single_crop_policy and (len(set(crop_ids)) != 5 or len(set(window_starts)) != 5):
-                    bad_crop_provenance.append(group_id)
+                if crop_ids:
+                    crop_id_set = set(crop_ids)
+                    window_start_set = {f"{value:.8f}" for value in window_starts}
+                    if selected_single_crop_policy:
+                        if len(crop_id_set) != 1 or len(window_start_set) != 1:
+                            bad_crop_provenance.append(group_id)
+                        elif fixed_selected_crop_policy and next(iter(crop_id_set)) != expected_fixed_crop_id:
+                            bad_crop_provenance.append(group_id)
+                        elif not fixed_selected_crop_policy and not all(item in {"0", "1", "2", "3", "4"} for item in crop_id_set):
+                            bad_crop_provenance.append(group_id)
+                    elif len(crop_id_set) != 5 or len(window_start_set) != 5:
+                        bad_crop_provenance.append(group_id)
             parsed_row: list[float] = []
             for col in score_cols:
                 try:

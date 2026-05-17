@@ -839,16 +839,29 @@ def _validate_reuse_checkpoint(
     n_times: int,
     preproc: Sequence[Any],
     run_mode: str,
+    reuse_checkpoint_context: Mapping[str, Any] | None = None,
 ) -> None:
     if payload.get("artifact_kind") != "torch_classifier_checkpoint":
         raise ValueError("reuse checkpoint is not a torch_classifier_checkpoint artifact")
+    p3_selected_checkpoint = (
+        isinstance(reuse_checkpoint_context, Mapping)
+        and str(reuse_checkpoint_context.get("protocol", "")) == "p3_nested_selection"
+        and str(reuse_checkpoint_context.get("stage", "")) == "inner_select"
+    )
     mismatches: list[str] = []
     if str(payload.get("route_id", "")) != route_id:
         mismatches.append("route_id")
-    if str(payload.get("split_id", "")) != split_id:
+    if str(payload.get("split_id", "")) != split_id and not p3_selected_checkpoint:
         mismatches.append("split_id")
-    if int(payload.get("seed", -1)) != int(seed):
+    if int(payload.get("seed", -1)) != int(seed) and not p3_selected_checkpoint:
         mismatches.append("seed")
+    if p3_selected_checkpoint:
+        if str(payload.get("job_id", "")) != str(reuse_checkpoint_context.get("source_job_id", "")):
+            mismatches.append("source_job_id")
+        if payload.get("outer_fold") != reuse_checkpoint_context.get("outer_fold"):
+            mismatches.append("outer_fold")
+        if payload.get("param_index") != reuse_checkpoint_context.get("selected_param_index"):
+            mismatches.append("param_index")
     if str(payload.get("model_name", "")) != model_name:
         mismatches.append("model_name")
     if dict(payload.get("model_kwargs") or {}) != dict(model_kwargs or {}):
@@ -905,6 +918,7 @@ def run_real_classifier_route(
     crop_policy: Mapping[str, Any] | None = None,
     save_checkpoint_path: Path | None = None,
     reuse_checkpoint_path: Path | None = None,
+    reuse_checkpoint_context: Mapping[str, Any] | None = None,
 ) -> RealRunArtifacts:
     """Run a real EEG classifier route end-to-end.
 
@@ -925,6 +939,7 @@ def run_real_classifier_route(
         crop_policy: Optional protocol job crop-policy override, used by P2 diagnostics.
         save_checkpoint_path: Optional path for a reusable torch classifier checkpoint.
         reuse_checkpoint_path: Optional reusable checkpoint path for evaluation-only jobs.
+        reuse_checkpoint_context: Optional protocol selection context for P3 selected checkpoints.
     """
     if run_mode not in VALID_RUN_MODES:
         raise ValueError(f"unknown run_mode: {run_mode}; valid: {', '.join(sorted(VALID_RUN_MODES))}")
@@ -1182,6 +1197,7 @@ def run_real_classifier_route(
             n_times=n_times,
             preproc=preproc,
             run_mode=run_mode,
+            reuse_checkpoint_context=reuse_checkpoint_context,
         )
         model.load_state_dict(checkpoint_payload["model_state_dict"])
         model.to(device_str)
@@ -1192,6 +1208,8 @@ def run_real_classifier_route(
             "source_run_dir": checkpoint_payload.get("run_dir"),
             "checkpoint_schema_version": checkpoint_payload.get("checkpoint_schema_version"),
         }
+        if reuse_checkpoint_context is not None:
+            checkpoint_reuse["selection_context"] = dict(reuse_checkpoint_context)
         result = None
     else:
         # Train

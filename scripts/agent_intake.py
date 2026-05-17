@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import urllib.error
 import urllib.request
@@ -10,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from scripts.agent_env import configured_env
     from scripts.agent_context import CONTEXT_PACKS, context_for_task
 except ModuleNotFoundError:  # pragma: no cover - direct script execution path
+    from agent_env import configured_env
     from agent_context import CONTEXT_PACKS, context_for_task
 
 
@@ -494,14 +495,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--intake-engine",
         choices=("deterministic", "deepseek", "auto"),
-        default=os.environ.get("AGENT_INTAKE_ENGINE", "deterministic"),
+        default=str(configured_env("AGENT_INTAKE_ENGINE", "deterministic")).lower(),
         help="deterministic is the default; deepseek enables API refinement with deterministic fallback.",
     )
     parser.add_argument("--deepseek", action="store_true", help="Prefer DeepSeek intake; falls back unless --require-deepseek is set.")
     parser.add_argument("--deterministic", action="store_true", help="Force deterministic local intake.")
     parser.add_argument("--require-deepseek", action="store_true", help="Fail instead of falling back when DeepSeek intake is unavailable.")
-    parser.add_argument("--deepseek-model", default=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"))
-    parser.add_argument("--deepseek-base-url", default=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
+    parser.add_argument("--deepseek-model", default=configured_env("DEEPSEEK_MODEL", "deepseek-v4-flash"))
+    parser.add_argument("--deepseek-base-url", default=configured_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
     parser.add_argument("--deepseek-timeout", type=float, default=20.0)
     args = parser.parse_args(argv)
 
@@ -525,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
             message,
             result,
             engine=engine,
-            api_key=os.environ.get("DEEPSEEK_API_KEY"),
+            api_key=configured_env("DEEPSEEK_API_KEY"),
             model=args.deepseek_model,
             base_url=args.deepseek_base_url,
             timeout=args.deepseek_timeout,

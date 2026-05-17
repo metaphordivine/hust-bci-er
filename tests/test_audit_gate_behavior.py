@@ -446,6 +446,95 @@ def test_genuine_score_matrix_requires_crop_provenance(tmp_path):
     assert rules["SCORE_MATRIX_CROP_PROVENANCE"] == "FAIL"
 
 
+def _write_selected_crop_score_matrix(path: Path, *, crop_ids: list[list[str]], window_starts: list[list[str]]) -> None:
+    fieldnames = ["subject_id", "trial_id", "y_true"]
+    for idx in range(5):
+        fieldnames.extend([f"crop_{idx}", f"crop_{idx}_source_crop_id", f"crop_{idx}_window_start_sec"])
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for idx in range(8):
+            crop_id_row = crop_ids[idx]
+            window_start_row = window_starts[idx]
+            row = {
+                "subject_id": "S1",
+                "trial_id": f"t{idx}",
+                "y_true": 1 if idx < 4 else 0,
+            }
+            for crop_idx in range(5):
+                row[f"crop_{crop_idx}"] = str(0.9 - idx * 0.01)
+                row[f"crop_{crop_idx}_source_crop_id"] = crop_id_row[crop_idx]
+                row[f"crop_{crop_idx}_window_start_sec"] = window_start_row[crop_idx]
+            writer.writerow(row)
+
+
+def _score_matrix_crop_provenance_status(matrix: Path, *, crop_policy: dict) -> str:
+    checks = []
+    try:
+        recompute_exact_metric_from_matrix(
+            matrix,
+            metric_name="exact_single_crop_expected_BA",
+            manifest={
+                "score_matrix_evidence": "genuine",
+                "metric_group_keys": ["subject_id"],
+                "crop_policy": crop_policy,
+            },
+            checks=checks,
+        )
+    except ValueError:
+        pass
+    rules = {check["rule_id"]: check["status"] for check in checks}
+    return rules["SCORE_MATRIX_CROP_PROVENANCE"]
+
+
+def test_selected_fixed_crop_rejects_mixed_provenance(tmp_path):
+    matrix = tmp_path / "score_matrix.csv"
+    _write_selected_crop_score_matrix(
+        matrix,
+        crop_ids=[["2", "2", "3", "2", "2"] for _ in range(8)],
+        window_starts=[["20", "20", "30", "20", "20"] for _ in range(8)],
+    )
+
+    status = _score_matrix_crop_provenance_status(
+        matrix,
+        crop_policy={"name": "crop3", "selection": "fixed_index", "crop_index": 2, "tie_break": "not_applicable"},
+    )
+
+    assert status == "FAIL"
+
+
+def test_selected_fixed_crop_rejects_wrong_repeated_crop(tmp_path):
+    matrix = tmp_path / "score_matrix.csv"
+    _write_selected_crop_score_matrix(
+        matrix,
+        crop_ids=[["1", "1", "1", "1", "1"] for _ in range(8)],
+        window_starts=[["10", "10", "10", "10", "10"] for _ in range(8)],
+    )
+
+    status = _score_matrix_crop_provenance_status(
+        matrix,
+        crop_policy={"name": "crop3", "selection": "fixed_index", "crop_index": 2, "tie_break": "not_applicable"},
+    )
+
+    assert status == "FAIL"
+
+
+def test_random_selected_crop_accepts_per_row_repeated_provenance(tmp_path):
+    matrix = tmp_path / "score_matrix.csv"
+    _write_selected_crop_score_matrix(
+        matrix,
+        crop_ids=[[str(idx % 5)] * 5 for idx in range(8)],
+        window_starts=[[str((idx % 5) * 10)] * 5 for idx in range(8)],
+    )
+
+    status = _score_matrix_crop_provenance_status(
+        matrix,
+        crop_policy={"name": "random", "selection": "per_trial_uniform_crop", "random_seed": 42, "tie_break": "not_applicable"},
+    )
+
+    assert status == "PASS"
+
+
 def test_exact_metric_rejects_score_matrix_with_extra_crop_column(tmp_path):
     matrix = tmp_path / "score_matrix.csv"
     fieldnames = ["subject_id", "trial_id", "y_true", "crop_0", "crop_1", "crop_2", "crop_3", "crop_4", "crop_5"]

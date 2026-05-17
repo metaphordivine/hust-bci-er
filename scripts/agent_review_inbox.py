@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -13,8 +12,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from scripts.agent_env import configured_env
     from scripts.agent_plan_ingest import COMMAND_RE, PATH_RE, dedupe_issues, extract_expected_fix, parse_text, write_issue_board
 except ModuleNotFoundError:  # pragma: no cover - direct script execution path
+    from agent_env import configured_env
     from agent_plan_ingest import COMMAND_RE, PATH_RE, dedupe_issues, extract_expected_fix, parse_text, write_issue_board
 
 
@@ -513,13 +514,16 @@ def parse_copilot_digest(
     pr: int,
     comment_ref: str,
     *,
-    digest_engine: str = "deterministic",
+    digest_engine: str | None = None,
     deepseek_api_key: str | None = None,
     deepseek_model: str = "deepseek-v4-flash",
     deepseek_base_url: str = "https://api.deepseek.com",
     deepseek_timeout: float = 20.0,
     require_deepseek: bool = False,
 ) -> list[dict[str, Any]]:
+    digest_engine = str(digest_engine or configured_env("AGENT_REVIEW_DIGEST_ENGINE", "deterministic")).lower()
+    if digest_engine == "deepseek" and not deepseek_api_key:
+        deepseek_api_key = configured_env("DEEPSEEK_API_KEY")
     if digest_engine == "deepseek" and deepseek_api_key:
         try:
             return parse_copilot_digest_comment_with_deepseek(
@@ -544,7 +548,7 @@ def issues_from_payload(
     pr: int,
     *,
     include_pr_comments: bool = False,
-    digest_engine: str = "deterministic",
+    digest_engine: str | None = None,
     deepseek_api_key: str | None = None,
     deepseek_model: str = "deepseek-v4-flash",
     deepseek_base_url: str = "https://api.deepseek.com",
@@ -633,7 +637,7 @@ def ingest_review_inbox(
     *,
     review_file: Path | None = None,
     include_pr_comments: bool = False,
-    digest_engine: str = "deterministic",
+    digest_engine: str | None = None,
     deepseek_api_key: str | None = None,
     deepseek_model: str = "deepseek-v4-flash",
     deepseek_base_url: str = "https://api.deepseek.com",
@@ -697,9 +701,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--review-file", type=Path)
     parser.add_argument("--include-pr-comments", action="store_true", help="Include all top-level PR comments, not only actionable comments.")
-    parser.add_argument("--digest-engine", choices=("deterministic", "deepseek"), default=os.environ.get("AGENT_REVIEW_DIGEST_ENGINE", "deterministic"))
-    parser.add_argument("--deepseek-model", default=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"))
-    parser.add_argument("--deepseek-base-url", default=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
+    parser.add_argument("--digest-engine", choices=("deterministic", "deepseek"), default=str(configured_env("AGENT_REVIEW_DIGEST_ENGINE", "deterministic")).lower())
+    parser.add_argument("--deepseek-model", default=configured_env("DEEPSEEK_MODEL", "deepseek-v4-flash"))
+    parser.add_argument("--deepseek-base-url", default=configured_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
     parser.add_argument("--deepseek-timeout", type=float, default=20.0)
     parser.add_argument("--require-deepseek", action="store_true")
     args = parser.parse_args(argv)
@@ -710,7 +714,7 @@ def main(argv: list[str] | None = None) -> int:
             review_file=args.review_file,
             include_pr_comments=args.include_pr_comments,
             digest_engine=args.digest_engine,
-            deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY"),
+            deepseek_api_key=configured_env("DEEPSEEK_API_KEY"),
             deepseek_model=args.deepseek_model,
             deepseek_base_url=args.deepseek_base_url,
             deepseek_timeout=args.deepseek_timeout,

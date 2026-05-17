@@ -468,7 +468,7 @@ def materialize_protocol_run(
         "jobs": [job.as_dict() for job in jobs],
         "experiment_gate_job_ids": experiment_gate_job_ids,
         "artifact_only_job_ids": artifact_only_job_ids,
-        "completion_rule": "jobs with predictions.csv must write manifest.json and pass the requested experiment gate; artifact-only train/selection jobs must write reusable checkpoint/selection artifacts before dependent candidate evaluation jobs run",
+        "completion_rule": "jobs with predictions.csv must write manifest.json and pass the requested experiment gate; P2 artifact jobs must write reusable checkpoints; P3 inner_select jobs must write checkpoint plus selection_metrics.json before dependent final jobs select and reuse the best checkpoint",
     }
     (run_dir / "protocol_run_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return manifest
@@ -546,8 +546,23 @@ def _missing_dependency_artifacts(job: Mapping[str, Any], *, run_manifest: Path)
     if isinstance(reuse_path, str) and reuse_path and not (protocol_root / reuse_path).exists():
         missing.append(reuse_path)
     for path in job.get("selection_artifact_paths") or []:
-        if isinstance(path, str) and path and not (protocol_root / path).exists():
+        if not isinstance(path, str) or not path:
+            continue
+        artifact_path = protocol_root / path
+        if not artifact_path.exists():
             missing.append(path)
+            continue
+        try:
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            missing.append(f"{path}: invalid JSON")
+            continue
+        checkpoint_rel = payload.get("checkpoint_path") if isinstance(payload, Mapping) else None
+        if not isinstance(checkpoint_rel, str) or not checkpoint_rel:
+            missing.append(f"{path}: checkpoint_path")
+            continue
+        if not (artifact_path.parent / checkpoint_rel).exists():
+            missing.append(f"{path}: {checkpoint_rel}")
     return missing
 
 
@@ -637,14 +652,14 @@ def execute_protocol_jobs(
     dependency_failed = any(item.get("status") in {"FAILED_ARTIFACT", "SKIPPED_MAX_JOBS"} for item in results)
     for job in runnable:
         missing_dependencies = _missing_dependency_artifacts(job, run_manifest=run_manifest)
-        if gate == "candidate" and (dependency_failed or missing_dependencies):
+        if budget_exhausted():
             results.append(
                 {
                     "job_id": str(job.get("job_id", "")),
                     "route_config": str(job.get("route_config", "")),
                     "run_dir": None,
-                    "status": "SKIPPED_DEPENDENCY_FAILED",
-                    "reason": "candidate job dependencies are missing or failed: " + ", ".join(missing_dependencies),
+                    "status": "SKIPPED_MAX_JOBS",
+                    "reason": "--max-execute-jobs limit reached before this prediction-producing job.",
                     "command_returncode": None,
                     "audit_gate": gate,
                     "audit_returncode": None,
@@ -654,14 +669,14 @@ def execute_protocol_jobs(
                 }
             )
             continue
-        if budget_exhausted():
+        if dependency_failed or missing_dependencies:
             results.append(
                 {
                     "job_id": str(job.get("job_id", "")),
                     "route_config": str(job.get("route_config", "")),
                     "run_dir": None,
-                    "status": "SKIPPED_MAX_JOBS",
-                    "reason": "--max-execute-jobs limit reached before this prediction-producing job.",
+                    "status": "SKIPPED_DEPENDENCY_FAILED",
+                    "reason": "protocol job dependencies are missing or failed: " + ", ".join(missing_dependencies),
                     "command_returncode": None,
                     "audit_gate": gate,
                     "audit_returncode": None,

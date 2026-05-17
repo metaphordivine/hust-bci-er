@@ -41,10 +41,12 @@ changes:
 
 Then classify the request with `scripts/agent_intake.py`, select a context pack
 with `scripts/agent_context.py`, and read only that pack's listed files.
-Deterministic intake is the default; use `--deepseek` or
-`AGENT_INTAKE_ENGINE=deepseek` only when external API refinement is explicitly
-allowed. Full protocol docs are read only when the selected pack requires them,
-a validation failure points there, or the task explicitly edits that protocol.
+Deterministic intake is the default; use `--deepseek` or configure
+`AGENT_INTAKE_ENGINE=deepseek` in the process, Windows User, or Windows Machine
+environment when external API refinement is explicitly allowed. Review digest
+parsing follows the same rule for `AGENT_REVIEW_DIGEST_ENGINE=deepseek`. Full
+protocol docs are read only when the selected pack requires them, a validation
+failure points there, or the task explicitly edits that protocol.
 
 ## Skill Rules
 

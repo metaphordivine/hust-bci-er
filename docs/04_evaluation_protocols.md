@@ -6,7 +6,7 @@
 当前实现状态：
 
 ```text
-已实现：协议配置、协议 plan/dry-run、runner manifest、审计口径说明、component trainer、真实 HUST EEG `.mat` loader、`torch_classifier` candidate job adapter、P2/P3 checkpoint/selection artifact 执行与复用。
+已实现：协议配置、协议 plan/dry-run、runner manifest、审计口径说明、component trainer、真实 HUST EEG `.mat` loader、`torch_classifier` candidate job adapter、P2 checkpoint reuse、P3 selected-param/checkpoint artifact 执行与复用。
 未实现：已提交绑定 summary 的真实 candidate 结果。
 原则：先生成计划和证据边界，再显式启动重训练；不能用 runner manifest 伪装 candidate 结果。
 ```
@@ -107,7 +107,7 @@ python scripts/run_evaluation_protocol.py \
 
 `--execute` 只调用已支持的 route job adapter。toy route 用于端到端平台 smoke；真实 HUST EEG P1 route 在传入 `--data-root` 后可用于受控 diagnostic/smoke 执行，例如 `--execute-gate smoke --execute-epochs-override 1 --device cuda`。这种运行用于证明真实数据、split、device、manifest、prediction 和 score matrix 链路可跑通；正式 candidate 证据必须使用 route 原始 epochs，不能带 epoch override，并且需要按审计要求补齐 route summary 与 candidate gate。
 
-P2/P3 现在可以生成 plan、runner manifest 和 split contract，也可以执行 artifact-only 训练/选择 job。P2 的 `train_holdout_model` 会写出可复用 `torch.save` checkpoint，后续 holdout crop-policy eval job 会在 artifact 存在时复用同一个 checkpoint；P3 的 `inner_select` 会写出 checkpoint 和 `selection_metrics.json`，outer final job 会等待这些 selection artifacts。`--execute-gate candidate` 不允许 epoch override，也不允许用 `--max-execute-jobs` 跳过未完成 job。
+P2/P3 现在可以生成 plan、runner manifest 和 split contract，也可以执行 artifact-only 训练/选择 job。P2 的 `train_holdout_model` 会写出可复用 `torch.save` checkpoint，后续 holdout crop-policy eval job 会在 artifact 存在时复用同一个 checkpoint；P3 的 `inner_select` 会写出 checkpoint 和 `selection_metrics.json`，outer final job 会读取这些 selection artifacts，按 primary metric 的 inner mean 选择 best `param_index`，复用对应 selected checkpoint，并把 `protocol_selected_artifact` 写进 final manifest。`--execute-gate candidate` 不允许 epoch override，也不允许用 `--max-execute-jobs` 跳过未完成 job。
 
 ## P2：pseudo-public holdout
 
@@ -165,8 +165,8 @@ worst   -> label-aware stress test，选择使 metric 最低的 assignment；tie
 ```text
 outer fold 只负责最终 test
 inner fold 只负责选择参数
-选好参数后，在 outer train 上重训
-最后只在 outer test 上评估
+选好参数 / checkpoint 后，outer final 只在 outer test 上评估 selected artifact
+selected artifact 会写进 final manifest
 ```
 
 什么时候用：

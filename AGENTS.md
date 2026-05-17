@@ -17,8 +17,10 @@ For every task:
 
 Minimal context is the default. Humans do not need to say "use minimal context".
 `scripts/agent_intake.py` uses deterministic intake by default. Use `--deepseek`
-or `AGENT_INTAKE_ENGINE=deepseek` only when external API refinement is
-explicitly allowed.
+or configure `AGENT_INTAKE_ENGINE=deepseek` in the process, Windows User, or
+Windows Machine environment when external API refinement is explicitly allowed.
+Review digest parsing follows the same rule for
+`AGENT_REVIEW_DIGEST_ENGINE=deepseek`.
 
 `plan-driven` mode is used only when intake detects a clear plan, long AI/human
 review, S0/S1/S2 list, or multi-phase operation plan. Direct tasks do not

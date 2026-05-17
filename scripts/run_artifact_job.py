@@ -191,6 +191,9 @@ def _patch_checkpoint_metadata(checkpoint_path: Path, *, job: dict, run_dir: Pat
     payload["stage"] = str(job.get("stage", ""))
     payload["protocol"] = str(job.get("protocol", ""))
     payload["run_dir"] = str(run_dir)
+    for key in ("outer_fold", "inner_fold", "param_index"):
+        if job.get(key) is not None:
+            payload[key] = job.get(key)
     torch.save(payload, checkpoint_path)
 
 
