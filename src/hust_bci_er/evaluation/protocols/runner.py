@@ -563,6 +563,43 @@ def _execute_artifact_job(
     }
 
 
+def _missing_expected_artifacts(job: Mapping[str, Any], run_dir: Path) -> list[str]:
+    expected = [artifact for artifact in job.get("expected_artifacts", []) or [] if isinstance(artifact, str) and artifact]
+    if not expected:
+        return ["expected_artifacts"]
+    missing: list[str] = []
+    for artifact in expected:
+        if not (run_dir / artifact).exists():
+            missing.append(artifact)
+    return missing
+
+
+def _audit_existing_prediction_job(
+    *,
+    root: Path,
+    route_config: str,
+    run_dir: Path,
+    gate: str,
+) -> tuple[int, str, str]:
+    audit = subprocess.run(
+        [
+            sys.executable,
+            "scripts/repo_doctor.py",
+            "experiment",
+            "--route",
+            route_config,
+            "--run",
+            str(run_dir),
+            "--gate",
+            gate,
+        ],
+        cwd=root,
+        text=True,
+        capture_output=True,
+    )
+    return audit.returncode, audit.stdout, audit.stderr
+
+
 def _missing_dependency_artifacts(job: Mapping[str, Any], *, run_manifest: Path) -> list[str]:
     protocol_root = run_manifest.parent
     missing: list[str] = []
@@ -640,10 +677,29 @@ def execute_protocol_jobs(
         return execution_budget is not None and executed_count >= execution_budget
 
     for job in artifact_only:
+        job_id = str(job.get("job_id", ""))
+        existing_run_dir = run_manifest.parent / "job_runs" / job_id
         if execute_artifact_jobs:
+            if not _missing_expected_artifacts(job, existing_run_dir):
+                results.append(
+                    {
+                        "job_id": job_id,
+                        "route_config": str(job.get("route_config", "")),
+                        "run_dir": str(existing_run_dir),
+                        "status": "SKIPPED_EXISTING_ARTIFACT",
+                        "reason": "expected artifact-only outputs already exist.",
+                        "command_returncode": 0,
+                        "audit_gate": None,
+                        "audit_returncode": None,
+                        "stdout_tail": "",
+                        "stderr_tail": "",
+                        "requested_device": effective_device,
+                    }
+                )
+                continue
             if budget_exhausted():
                 result = {
-                    "job_id": str(job.get("job_id", "")),
+                    "job_id": job_id,
                     "route_config": str(job.get("route_config", "")),
                     "run_dir": None,
                     "status": "SKIPPED_MAX_JOBS",
@@ -660,7 +716,7 @@ def execute_protocol_jobs(
                 executed_count += 1
         else:
             result = {
-                "job_id": str(job.get("job_id", "")),
+                "job_id": job_id,
                 "route_config": str(job.get("route_config", "")),
                 "run_dir": None,
                 "status": "SKIPPED_ARTIFACT_ONLY",
@@ -675,11 +731,38 @@ def execute_protocol_jobs(
         results.append(result)
     dependency_failed = any(item.get("status") in {"FAILED_ARTIFACT", "SKIPPED_MAX_JOBS"} for item in results)
     for job in runnable:
+        job_id = str(job.get("job_id", ""))
+        route_config = str(job["route_config"])
+        run_dir = protocol_run_manifest_path.resolve().parent / "job_runs" / job_id
+        if not _missing_expected_artifacts(job, run_dir):
+            audit_code, audit_stdout, audit_stderr = _audit_existing_prediction_job(
+                root=root,
+                route_config=route_config,
+                run_dir=run_dir,
+                gate=gate,
+            )
+            if audit_code == 0:
+                results.append(
+                    {
+                        "job_id": job_id,
+                        "route_config": route_config,
+                        "run_dir": str(run_dir),
+                        "status": "SKIPPED_EXISTING",
+                        "reason": "expected prediction outputs already exist and pass the requested audit gate.",
+                        "command_returncode": 0,
+                        "audit_gate": gate,
+                        "audit_returncode": audit_code,
+                        "requested_device": effective_device,
+                        "stdout_tail": audit_stdout[-4000:] if audit_stdout else "",
+                        "stderr_tail": audit_stderr[-4000:] if audit_stderr else "",
+                    }
+                )
+                continue
         missing_dependencies = _missing_dependency_artifacts(job, run_manifest=run_manifest)
         if budget_exhausted():
             results.append(
                 {
-                    "job_id": str(job.get("job_id", "")),
+                    "job_id": job_id,
                     "route_config": str(job.get("route_config", "")),
                     "run_dir": None,
                     "status": "SKIPPED_MAX_JOBS",
@@ -696,7 +779,7 @@ def execute_protocol_jobs(
         if dependency_failed or missing_dependencies:
             results.append(
                 {
-                    "job_id": str(job.get("job_id", "")),
+                    "job_id": job_id,
                     "route_config": str(job.get("route_config", "")),
                     "run_dir": None,
                     "status": "SKIPPED_DEPENDENCY_FAILED",
@@ -722,7 +805,7 @@ def execute_protocol_jobs(
             "--protocol-run",
             str(protocol_run_manifest_path),
             "--job-id",
-            str(job["job_id"]),
+            job_id,
             "--mode",
             _mode_for_job(gate, job),
             "--device",
@@ -733,8 +816,6 @@ def execute_protocol_jobs(
             command.extend(["--data-root", str(resolved_data_root)])
         if epochs_override is not None:
             command.extend(["--epochs-override", str(int(epochs_override))])
-        route_config = str(job["route_config"])
-        run_dir = protocol_run_manifest_path.resolve().parent / "job_runs" / str(job["job_id"])
         proc = subprocess.run(command, cwd=root, text=True, capture_output=True)
         audit_code: int | None = None
         if proc.returncode == 0:

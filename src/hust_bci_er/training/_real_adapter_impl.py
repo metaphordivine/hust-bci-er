@@ -949,10 +949,12 @@ def run_real_classifier_route(
     from hust_bci_er.training.classifier import (
         ClassifierTrainConfig,
         EarlyStoppingConfig,
+        EpochMetrics,
         OptimizerConfig,
         TrainResult,
         fit_classifier,
     )
+    from hust_bci_er.training.monitor import TrainingMonitor
 
     route_config_path = route_config_path.resolve()
     route_data = yaml.safe_load(route_config_path.read_text(encoding="utf-8")) or {}
@@ -966,6 +968,17 @@ def run_real_classifier_route(
 
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    monitor = TrainingMonitor(run_dir, route_id=route_id, run_id=run_dir.name)
+    monitor.log(
+        "start",
+        {
+            "run_mode": run_mode,
+            "split_id": active_split_id,
+            "seed": active_seed,
+            "device": device,
+            "resume_checkpoint": "training_checkpoint.pt",
+        },
+    )
 
     # Load and subset data
     data_root = _resolve_data_root(data_root)
@@ -1217,7 +1230,29 @@ def run_real_classifier_route(
         val_dataset = _WindowDataset(val_windows)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
-        result = fit_classifier(model, train_loader, val_loader=val_loader, config=train_config)
+        def _log_epoch(metrics: EpochMetrics) -> None:
+            monitor.epoch(
+                metrics.epoch,
+                {
+                    "train_loss": metrics.train_loss,
+                    "train_accuracy": metrics.train_accuracy,
+                    "n_train": metrics.n_train,
+                    "val_loss": metrics.val_loss,
+                    "val_accuracy": metrics.val_accuracy,
+                    "n_val": metrics.n_val,
+                },
+            )
+
+        training_resume_checkpoint_path = run_dir / "training_checkpoint.pt"
+        result = fit_classifier(
+            model,
+            train_loader,
+            val_loader=val_loader,
+            config=train_config,
+            checkpoint_path=training_resume_checkpoint_path,
+            resume=True,
+            epoch_callback=_log_epoch,
+        )
         if save_checkpoint_path is not None:
             save_checkpoint_path = Path(save_checkpoint_path).resolve()
             save_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1361,6 +1396,8 @@ def run_real_classifier_route(
             "crop_policy": active_crop_policy,
             "protocol_job_split_manifest": str(Path(split_manifest_path).resolve()) if split_manifest_path is not None else None,
             "checkpoint_reuse": checkpoint_reuse,
+            "training_resumed_from_checkpoint": bool(result.resumed_from_checkpoint) if result is not None else False,
+            "training_resume_checkpoint": str(run_dir / "training_checkpoint.pt") if checkpoint_payload is None else None,
             "augmentation_transforms": train_transform_configs,
             "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
         }, indent=2, ensure_ascii=False) + "\n",
@@ -1405,6 +1442,8 @@ def run_real_classifier_route(
     manifest["requested_device"] = device
     manifest["resolved_device"] = device_str
     manifest["score_matrix_evidence"] = score_matrix_evidence
+    manifest["training_resumed_from_checkpoint"] = bool(result.resumed_from_checkpoint) if result is not None else False
+    manifest["training_resume_checkpoint"] = str(run_dir / "training_checkpoint.pt") if checkpoint_payload is None else None
     if checkpoint_reuse is not None:
         manifest["checkpoint_reuse"] = checkpoint_reuse
     manifest["augmentation_transforms"] = train_transform_configs
@@ -1423,6 +1462,7 @@ def run_real_classifier_route(
         manifest["raw_data_sources"] = ds.get("raw_data_sources") or []
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
+    monitor.finish("completed")
     return RealRunArtifacts(
         run_dir=run_dir,
         dataset_manifest=dataset_path,

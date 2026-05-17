@@ -155,6 +155,20 @@ def _check_artifacts(job_runs: Path) -> dict[str, bool]:
     return artifacts
 
 
+def _load_existing_results(summary_path: Path) -> dict[str, dict[str, Any]]:
+    if not summary_path.exists():
+        return {}
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for result in summary.get("results", []):
+        if isinstance(result, dict) and result.get("route_id"):
+            out[str(result["route_id"])] = result
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Batch P1 diagnostic runner for all torch_classifier routes.")
     parser.add_argument("--data-root", type=Path, help="HUST EEG .mat data root directory.")
@@ -163,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--n-folds", type=int, default=DEFAULT_N_FOLDS)
     parser.add_argument("--output-dir", type=Path, help="Override default output directory.")
     parser.add_argument("--route-filter", help="Substring filter for route_id (optional).")
+    parser.add_argument("--no-resume", action="store_true", help="Do not skip routes already marked passed in batch_summary.json.")
     parser.add_argument("--dry-run", action="store_true", help="Print routes that would be executed and exit.")
     args = parser.parse_args(argv)
 
@@ -192,14 +207,25 @@ def main(argv: list[str] | None = None) -> int:
     output_base = args.output_dir or ROOT / "outputs" / "batch_diagnostic"
     summary_path = output_base / "batch_summary.json"
     output_base.mkdir(parents=True, exist_ok=True)
+    existing_results = _load_existing_results(summary_path) if not args.no_resume else {}
 
     results: list[dict[str, Any]] = []
     passed = 0
     failed = 0
+    skipped_existing = 0
 
     for idx, route_path in enumerate(routes, 1):
         route_id = route_id_from_path(route_path)
         print(f"[{idx}/{len(routes)}] {route_id} ... ", end="", flush=True)
+        existing = existing_results.get(route_id)
+        if existing and existing.get("passed"):
+            result = dict(existing)
+            result["resume_status"] = "SKIPPED_EXISTING_PASS"
+            results.append(result)
+            passed += 1
+            skipped_existing += 1
+            print("SKIP existing PASS")
+            continue
         result = run_route_diagnostic(
             route_path,
             data_root=data_root,
@@ -220,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         "total": len(routes),
         "passed": passed,
         "failed": failed,
+        "skipped_existing": skipped_existing,
         "seed": args.seed,
         "n_folds": args.n_folds,
         "device": args.device,

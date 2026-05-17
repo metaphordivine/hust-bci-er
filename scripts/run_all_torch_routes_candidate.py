@@ -116,6 +116,20 @@ def run_route_candidate(
     return result
 
 
+def _load_existing_results(summary_path: Path) -> dict[str, dict[str, Any]]:
+    if not summary_path.exists():
+        return {}
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for result in summary.get("results", []):
+        if isinstance(result, dict) and result.get("route_id"):
+            out[str(result["route_id"])] = result
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Batch P1 candidate runner for torch_classifier routes.")
     parser.add_argument("--from-diagnostic", type=Path, help="Path to batch_summary.json from diagnostic run.")
@@ -125,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seeds", type=lambda s: tuple(int(x) for x in s.split(",")), default=DEFAULT_SEEDS)
     parser.add_argument("--n-folds", type=int, default=DEFAULT_N_FOLDS)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs" / "batch_candidate")
+    parser.add_argument("--no-resume", action="store_true", help="Do not skip routes already marked passed in candidate_summary.json.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
@@ -161,13 +176,24 @@ def main(argv: list[str] | None = None) -> int:
     output_base = args.output_dir
     summary_path = output_base / "candidate_summary.json"
     output_base.mkdir(parents=True, exist_ok=True)
+    existing_results = _load_existing_results(summary_path) if not args.no_resume else {}
 
     results: list[dict[str, Any]] = []
     passed = 0
     failed = 0
+    skipped_existing = 0
 
     for idx, (route_id, route_path) in enumerate(route_paths, 1):
         print(f"[{idx}/{len(route_paths)}] {route_id} ... ", end="", flush=True)
+        existing = existing_results.get(route_id)
+        if existing and existing.get("passed"):
+            result = dict(existing)
+            result["resume_status"] = "SKIPPED_EXISTING_PASS"
+            results.append(result)
+            passed += 1
+            skipped_existing += 1
+            print("SKIP existing PASS")
+            continue
         result = run_route_candidate(
             route_path,
             data_root=args.data_root,
@@ -188,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         "total": len(route_paths),
         "passed": passed,
         "failed": failed,
+        "skipped_existing": skipped_existing,
         "seeds": list(args.seeds),
         "n_folds": args.n_folds,
         "device": args.device,

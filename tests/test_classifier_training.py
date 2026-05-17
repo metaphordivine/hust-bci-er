@@ -9,12 +9,16 @@ import hust_bci_er.training.reproducibility as reproducibility_module
 from hust_bci_er.training.classifier import (
     ClassifierTrainConfig,
     EarlyStoppingConfig,
+    EpochMetrics,
     OptimizerConfig,
     build_optimizer,
+    clone_state_dict,
     classifier_train_config_from_route,
     evaluate_classifier,
     fit_classifier,
     logits_from_output,
+    save_training_checkpoint,
+    train_one_epoch,
 )
 
 
@@ -109,6 +113,59 @@ def test_fit_classifier_seed_resets_prebuilt_model_parameters():
 
     for left, right in zip(model_a.parameters(), model_b.parameters()):
         assert torch.allclose(left, right)
+
+
+def test_fit_classifier_resumes_from_epoch_checkpoint(tmp_path):
+    loader = make_easy_loader()
+    config = ClassifierTrainConfig(
+        epochs=3,
+        seed=0,
+        optimizer=OptimizerConfig(name="sgd", lr=0.05, momentum=0.0),
+        early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=20),
+    )
+    checkpoint_path = tmp_path / "training_checkpoint.pt"
+    model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+    torch.manual_seed(0)
+    optimizer = build_optimizer(model.parameters(), config.optimizer)
+    criterion = nn.CrossEntropyLoss()
+    first_epoch = train_one_epoch(
+        model,
+        loader,
+        optimizer=optimizer,
+        criterion=criterion,
+        device=config.device,
+        grad_clip_norm=config.grad_clip_norm,
+    )
+    first_metrics = EpochMetrics(
+        epoch=1,
+        train_loss=float(first_epoch["loss"]),
+        train_accuracy=float(first_epoch["accuracy"]),
+        n_train=int(first_epoch["n"]),
+    )
+    best_state = clone_state_dict(model)
+    save_training_checkpoint(
+        checkpoint_path,
+        model=model,
+        optimizer=optimizer,
+        config=config,
+        epoch=1,
+        history=[first_metrics],
+        best_epoch=1,
+        best_metric=first_metrics.train_loss,
+        best_state_dict=best_state,
+        stale_epochs=0,
+        stopped_early=False,
+        status="running",
+    )
+
+    resumed_model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+    result = fit_classifier(resumed_model, loader, config=config, checkpoint_path=checkpoint_path)
+
+    assert result.resumed_from_checkpoint is True
+    assert [item.epoch for item in result.history] == [1, 2, 3]
+    assert result.checkpoint_epoch == 3
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert payload["status"] == "completed"
 
 
 def test_fit_classifier_rejects_val_monitor_without_val_loader():

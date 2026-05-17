@@ -144,6 +144,63 @@ def test_protocol_execute_candidate_runs_artifact_adapter_before_dependent_eval(
     assert all(item["status"] == "SKIPPED_DEPENDENCY_FAILED" for item in results[1:])
 
 
+def test_protocol_execute_skips_existing_artifact_outputs(tmp_path):
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+    train_job = next(job for job in manifest["jobs"] if job["stage"] == "train_holdout_model")
+    job_dir = run_dir / "job_runs" / train_job["job_id"]
+    job_dir.mkdir(parents=True)
+    for artifact in train_job["expected_artifacts"]:
+        (job_dir / artifact).write_text("ok", encoding="utf-8")
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        allow_artifact_only=True,
+        max_jobs=0,
+    )
+
+    assert results[0]["status"] == "SKIPPED_EXISTING_ARTIFACT"
+    assert results[0]["command_returncode"] == 0
+
+
+def test_protocol_execute_skips_existing_prediction_outputs_after_audit(tmp_path, monkeypatch):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p1_run"
+    manifest = materialize_protocol_run("p1", [ROUTE], run_dir=run_dir, seeds=[42], n_folds=2)
+    job = manifest["jobs"][0]
+    job_dir = run_dir / "job_runs" / job["job_id"]
+    job_dir.mkdir(parents=True)
+    for artifact in job["expected_artifacts"]:
+        (job_dir / artifact).write_text("ok", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+        stdout = "audit ok"
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append([str(item) for item in cmd])
+        return Completed()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        gate="smoke",
+        max_jobs=0,
+    )
+
+    assert results[0]["status"] == "SKIPPED_EXISTING"
+    assert results[0]["audit_returncode"] == 0
+    assert len(commands) == 1
+    assert "scripts/repo_doctor.py" in commands[0]
+    assert "scripts/run_route_job.py" not in commands[0]
+
+
 def test_protocol_runner_counts_p1_and_p3_jobs():
     _, p1_jobs = build_protocol_jobs("p1", [ROUTE], seeds=[1, 2], n_folds=3)
     assert len(p1_jobs) == 6
