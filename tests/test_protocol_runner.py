@@ -116,6 +116,20 @@ def test_protocol_execute_candidate_rejects_artifact_only_skips(tmp_path):
         )
 
 
+def test_protocol_execute_candidate_rejects_diagnostic_artifact_adapter(tmp_path):
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+
+    with pytest.raises(ValueError, match="cannot use the diagnostic artifact-only adapter"):
+        execute_protocol_jobs(
+            manifest,
+            protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+            gate="candidate",
+            allow_artifact_only=True,
+            max_jobs=1,
+        )
+
+
 def test_protocol_runner_counts_p1_and_p3_jobs():
     _, p1_jobs = build_protocol_jobs("p1", [ROUTE], seeds=[1, 2], n_folds=3)
     assert len(p1_jobs) == 6
@@ -190,6 +204,149 @@ def test_protocol_runner_materializes_formal_p1_splits_from_hust_data_root(tmp_p
     assert {row["split"] for row in split_payload["trial_rows"]} == {"train", "val", "test"}
 
 
+def test_protocol_runner_materializes_formal_p2_splits_from_hust_data_root(tmp_path):
+    data_root = write_hust_data_root(tmp_path / "data", subjects_per_cohort=8)
+
+    manifest = materialize_protocol_run(
+        "p2",
+        [ROUTE],
+        run_dir=tmp_path / "p2_formal",
+        data_root=data_root,
+        n_holdout_subjects=4,
+    )
+    split_payload = yaml.safe_load((tmp_path / "p2_formal" / manifest["jobs"][0]["split_manifest_path"]).read_text(encoding="utf-8"))
+
+    assert manifest["split_contract_evidence"] == "formal_subject_trial_rows"
+    assert split_payload["status"] == "ready"
+    assert len(split_payload["test_subjects"]) == 4
+    assert sum(subject.startswith("DEP") for subject in split_payload["test_subjects"]) == 2
+    assert sum(subject.startswith("HC") for subject in split_payload["test_subjects"]) == 2
+    assert split_payload["train_subjects"]
+    assert split_payload["val_subjects"]
+    assert any(subject.startswith("DEP") for subject in split_payload["val_subjects"])
+    assert any(subject.startswith("HC") for subject in split_payload["val_subjects"])
+    assert set(split_payload["train_subjects"]).isdisjoint(split_payload["test_subjects"])
+    assert {row["split"] for row in split_payload["trial_rows"]} == {"train", "val", "test"}
+
+
+def test_protocol_runner_materializes_formal_p3_inner_and_final_splits_from_hust_data_root(tmp_path):
+    data_root = write_hust_data_root(tmp_path / "data", subjects_per_cohort=8)
+
+    manifest = materialize_protocol_run(
+        "p3",
+        [ROUTE],
+        run_dir=tmp_path / "p3_formal",
+        data_root=data_root,
+        outer_folds=2,
+        inner_folds=2,
+        grid_sizes={"ea_deformer": 1},
+    )
+    inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
+    final_job = next(job for job in manifest["jobs"] if job["stage"] == "outer_train_eval")
+    inner_split = yaml.safe_load((tmp_path / "p3_formal" / inner_job["split_manifest_path"]).read_text(encoding="utf-8"))
+    final_split = yaml.safe_load((tmp_path / "p3_formal" / final_job["split_manifest_path"]).read_text(encoding="utf-8"))
+
+    assert inner_split["status"] == "ready"
+    assert final_split["status"] == "ready"
+    assert inner_split["train_subjects"] and inner_split["val_subjects"] and inner_split["test_subjects"]
+    assert final_split["train_subjects"] and final_split["val_subjects"] and final_split["test_subjects"]
+    assert set(final_split["train_subjects"]).isdisjoint(final_split["test_subjects"])
+
+
+def test_protocol_execute_skips_p2_train_artifact_when_eval_jobs_run(tmp_path, monkeypatch):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: Completed())
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        allow_artifact_only=True,
+        max_jobs=1,
+    )
+
+    assert results[0]["status"] == "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT"
+    assert results[1]["status"] == "EXECUTED"
+    assert all(item["status"] == "SKIPPED_MAX_JOBS" for item in results[2:])
+
+
+def test_p2_smoke_executes_holdout_eval_in_test_scope(tmp_path, monkeypatch):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p2_run"
+    manifest = materialize_protocol_run("p2", [ROUTE], run_dir=run_dir)
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append([str(item) for item in cmd])
+        return Completed()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        gate="smoke",
+        allow_artifact_only=True,
+        max_jobs=2,
+    )
+
+    assert results[0]["status"] == "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT"
+    assert results[1]["status"] == "EXECUTED"
+    route_command = next(cmd for cmd in commands if "scripts/run_route_job.py" in cmd)
+    assert route_command[route_command.index("--mode") + 1] == "candidate"
+
+
+def test_p3_smoke_executes_outer_final_eval_in_test_scope(tmp_path, monkeypatch):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p3_run"
+    manifest = materialize_protocol_run(
+        "p3",
+        [ROUTE],
+        run_dir=run_dir,
+        outer_folds=2,
+        inner_folds=2,
+        grid_sizes={"ea_deformer": 1},
+    )
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append([str(item) for item in cmd])
+        return Completed()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    results = execute_protocol_jobs(
+        manifest,
+        protocol_run_manifest_path=run_dir / "protocol_run_manifest.json",
+        gate="smoke",
+        max_jobs=1,
+    )
+
+    assert any(item["status"] == "EXECUTED" and item["job_id"].endswith("__final") for item in results)
+    route_command = next(cmd for cmd in commands if "scripts/run_route_job.py" in cmd)
+    assert route_command[route_command.index("--mode") + 1] == "candidate"
+
+
 def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path, monkeypatch):
     from scripts import run_route_job
     import hust_bci_er.training.real_adapter as real_adapter
@@ -229,6 +386,7 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
                 "split_manifest_path": "splits/job_split.yaml",
                 "seed": 123,
                 "expected_artifacts": ["predictions.csv"],
+                "crop_policy": {"name": "crop3", "selection": "fixed_index", "crop_index": 2},
             }
         ]
     }
@@ -270,6 +428,7 @@ def test_run_route_job_dispatches_torch_classifier_with_protocol_split(tmp_path,
     assert captured["seed"] == 123
     assert captured["device"] == "cpu"
     assert captured["smoke_epochs"] == 1
+    assert captured["crop_policy"]["name"] == "crop3"
 
 
 def test_run_route_job_uses_protocol_default_device_and_data_root(tmp_path, monkeypatch):
@@ -386,6 +545,50 @@ def test_protocol_summary_writes_fold_aggregate_outputs(tmp_path):
     assert "route_a" in board
     assert "0.75" in board
     assert (run_dir / "protocol1_subject_ba.csv").exists()
+
+
+def test_protocol_summary_marks_missing_artifact_only_jobs_incomplete(tmp_path):
+    run_dir = tmp_path / "p2_incomplete"
+    (run_dir / "job_runs" / "p2__route__eval_crop1").mkdir(parents=True)
+    (run_dir / "protocol_run_manifest.json").write_text(
+        json.dumps(
+            {
+                "protocol": "p2_pseudo_public_holdout",
+                "jobs": [
+                    {
+                        "job_id": "p2__route__train_seed42",
+                        "route_id": "route_a",
+                        "seed": 42,
+                        "stage": "train_holdout_model",
+                        "split_id": "split_a",
+                        "expected_artifacts": ["checkpoint.local", "train_manifest.json"],
+                    },
+                    {
+                        "job_id": "p2__route__eval_crop1",
+                        "route_id": "route_a",
+                        "seed": 42,
+                        "stage": "evaluate_holdout_crop_policy",
+                        "split_id": "split_a",
+                        "expected_artifacts": ["predictions.csv", "manifest.json"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    eval_run = run_dir / "job_runs" / "p2__route__eval_crop1"
+    (eval_run / "manifest.json").write_text(
+        json.dumps({"primary_metric": "exact_single_crop_expected_BA", "metrics": {"exact_single_crop_expected_BA": 0.5}}),
+        encoding="utf-8",
+    )
+    (eval_run / "audit_report.json").write_text(json.dumps({"overall": "PASS"}), encoding="utf-8")
+
+    audit = write_protocol_summary(run_dir)
+
+    assert audit["status"] == "INCOMPLETE"
+    assert audit["n_artifact_only_jobs"] == 1
+    assert "p2__route__train_seed42: checkpoint.local" in audit["missing_artifacts"]
+    assert (run_dir / "protocol2_audit.json").exists()
 
 
 def test_write_run_manifest_locks_artifact_hashes(monkeypatch, tmp_path):

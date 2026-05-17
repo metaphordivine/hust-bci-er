@@ -24,7 +24,13 @@ from hust_bci_er.evaluation.protocols.plans import (
     build_protocol2_plan,
     build_protocol3_plan,
 )
-from hust_bci_er.evaluation.protocols.subject_splits import assign_trial_rows_to_split, p1_subject_split
+from hust_bci_er.evaluation.protocols.subject_splits import (
+    assign_trial_rows_to_split,
+    p1_subject_split,
+    p2_subject_split,
+    p3_outer_inner_split,
+    p3_outer_subject_split,
+)
 from hust_bci_er.training.reproducibility import ReproducibilityConfig, reproducibility_manifest
 
 
@@ -53,6 +59,12 @@ class ProtocolJob:
     outer_fold: int | None = None
     inner_fold: int | None = None
     param_index: int | None = None
+    holdout_seed: int | None = None
+    n_holdout_subjects: int | None = None
+    outer_seed: int | None = None
+    inner_seed: int | None = None
+    outer_folds: int | None = None
+    inner_folds: int | None = None
     crop_policy: Mapping[str, Any] | None = None
     determinism: Mapping[str, Any] | None = None
     checkpoint_selection: Mapping[str, Any] | None = None
@@ -149,6 +161,8 @@ def build_protocol_jobs(
                     job_id=f"p2__{route_id}__train_seed{int(train_seed)}",
                     stage="train_holdout_model",
                     expected_artifacts=("config_snapshot.yaml", "checkpoint.local", "train_manifest.json"),
+                    holdout_seed=int(holdout_seed),
+                    n_holdout_subjects=int(n_holdout_subjects),
                     **route_job_base(path, data, seed=int(train_seed), split_id=split_id),
                 )
             )
@@ -160,6 +174,8 @@ def build_protocol_jobs(
                         stage="evaluate_holdout_crop_policy",
                         expected_artifacts=("predictions.csv", "score_matrix.csv", "manifest.json", "audit_report.json"),
                         crop_policy=crop_policy_manifest(str(policy), seed=int(train_seed)),
+                        holdout_seed=int(holdout_seed),
+                        n_holdout_subjects=int(n_holdout_subjects),
                         **route_job_base(path, data, seed=int(train_seed), split_id=split_id),
                     )
                 )
@@ -184,6 +200,10 @@ def build_protocol_jobs(
                                 inner_fold=inner,
                                 param_index=param_index,
                                 expected_artifacts=("config_snapshot.yaml", "selection_metrics.json", "manifest.json"),
+                                outer_seed=int(outer_seed),
+                                inner_seed=int(inner_seed),
+                                outer_folds=int(outer_folds),
+                                inner_folds=int(inner_folds),
                                 **route_job_base(path, data, seed=seed, split_id=split_id),
                             )
                         )
@@ -197,6 +217,10 @@ def build_protocol_jobs(
                         outer_fold=outer,
                         expected_artifacts=("config_snapshot.yaml", "predictions.csv", "score_matrix.csv", "manifest.json", "audit_report.json"),
                         crop_policy=route_crop_policy_manifest(data, seed=seed),
+                        outer_seed=int(outer_seed),
+                        inner_seed=int(inner_seed),
+                        outer_folds=int(outer_folds),
+                        inner_folds=int(inner_folds),
                         **route_job_base(path, data, seed=seed, split_id=split_id),
                     )
                 )
@@ -275,30 +299,93 @@ def split_contract_payload(
     if crop_policies:
         payload["crop_policies"] = crop_policies
     if trial_rows is not None:
-        if job.protocol != "p1_repeated_group_kfold" or job.fold is None or job.n_folds is None:
-            raise ValueError("formal data-root split materialization is currently supported for P1 jobs only")
-        train_subjects, val_subjects, test_subjects = p1_subject_split(
-            trial_rows,
-            seed=int(job.seed),
-            fold=int(job.fold),
-            n_folds=int(job.n_folds),
-            val_fraction=float(job.val_fraction if job.val_fraction is not None else 0.2),
-        )
-        payload.update(
-            {
-                "status": "ready",
-                "description": "Formal P1 subject-group split contract generated from the indexed HUST EEG data root.",
-                "train_subjects": train_subjects,
-                "val_subjects": val_subjects,
-                "test_subjects": test_subjects,
-                "trial_rows": assign_trial_rows_to_split(
+        protocol = str(job.protocol)
+        if protocol == "p1_repeated_group_kfold":
+            if job.fold is None or job.n_folds is None or job.seed is None:
+                raise ValueError("P1 formal split requires fold, n_folds, and seed")
+            train_subjects, val_subjects, test_subjects = p1_subject_split(
+                trial_rows,
+                seed=int(job.seed),
+                fold=int(job.fold),
+                n_folds=int(job.n_folds),
+                val_fraction=float(job.val_fraction if job.val_fraction is not None else 0.2),
+            )
+            payload.update(
+                {
+                    "status": "ready",
+                    "description": "Formal P1 subject-group split contract generated from the indexed HUST EEG data root.",
+                    "train_subjects": train_subjects,
+                    "val_subjects": val_subjects,
+                    "test_subjects": test_subjects,
+                    "trial_rows": assign_trial_rows_to_split(
+                        trial_rows,
+                        train_subjects=train_subjects,
+                        val_subjects=val_subjects,
+                        test_subjects=test_subjects,
+                    ),
+                }
+            )
+        elif protocol == "p2_pseudo_public_holdout":
+            train_subjects, val_subjects, test_subjects = p2_subject_split(
+                trial_rows,
+                holdout_seed=int(job.holdout_seed) if job.holdout_seed is not None else 999,
+                train_seed=int(job.seed),
+                n_holdout_subjects=int(job.n_holdout_subjects) if job.n_holdout_subjects is not None else 12,
+                val_fraction=float(job.val_fraction if job.val_fraction is not None else 0.2),
+            )
+            payload.update(
+                {
+                    "status": "ready",
+                    "description": "Formal P2 holdout split contract from the indexed HUST EEG data root.",
+                    "train_subjects": train_subjects,
+                    "val_subjects": val_subjects,
+                    "test_subjects": test_subjects,
+                    "trial_rows": assign_trial_rows_to_split(
+                        trial_rows,
+                        train_subjects=train_subjects,
+                        val_subjects=val_subjects,
+                        test_subjects=test_subjects,
+                    ),
+                }
+            )
+        elif protocol == "p3_nested_selection":
+            if job.outer_fold is None:
+                raise ValueError("P3 formal split requires outer_fold")
+            if job.inner_fold is None:
+                train_subjects, val_subjects, test_subjects = p3_outer_subject_split(
                     trial_rows,
-                    train_subjects=train_subjects,
-                    val_subjects=val_subjects,
-                    test_subjects=test_subjects,
-                ),
-            }
-        )
+                    outer_seed=int(job.outer_seed) if job.outer_seed is not None else 42,
+                    outer_fold=int(job.outer_fold),
+                    outer_folds=int(job.outer_folds) if job.outer_folds is not None else 5,
+                    val_fraction=float(job.val_fraction if job.val_fraction is not None else 0.2),
+                )
+            else:
+                train_subjects, val_subjects, test_subjects = p3_outer_inner_split(
+                    trial_rows,
+                    outer_seed=int(job.outer_seed) if job.outer_seed is not None else 42,
+                    inner_seed=int(job.inner_seed) if job.inner_seed is not None else 123,
+                    outer_fold=int(job.outer_fold),
+                    inner_fold=int(job.inner_fold),
+                    outer_folds=int(job.outer_folds) if job.outer_folds is not None else 5,
+                    inner_folds=int(job.inner_folds) if job.inner_folds is not None else 3,
+                )
+            payload.update(
+                {
+                    "status": "ready",
+                    "description": "Formal P3 nested selection split contract from the indexed HUST EEG data root.",
+                    "train_subjects": train_subjects,
+                    "val_subjects": val_subjects,
+                    "test_subjects": test_subjects,
+                    "trial_rows": assign_trial_rows_to_split(
+                        trial_rows,
+                        train_subjects=train_subjects,
+                        val_subjects=val_subjects,
+                        test_subjects=test_subjects,
+                    ),
+                }
+            )
+        else:
+            raise ValueError(f"formal data-root split materialization is not supported for protocol: {protocol}")
     return payload
 
 
@@ -373,6 +460,71 @@ def materialize_protocol_run(
     return manifest
 
 
+def _mode_for_job(gate: str, job: Mapping[str, Any]) -> str:
+    """Derive the route-job run_mode from the execution gate and stage.
+
+    Smoke gate uses ``full_subjects`` mode to avoid candidate-only
+    constraints (test-only prediction scope, epoch override rejection).
+    P2 holdout and P3 final evaluation are the exceptions: even smoke
+    diagnostics must evaluate the materialized holdout/test split rather
+    than validation subjects, while still auditing with the smoke gate.
+    Candidate gate always uses ``candidate`` mode.
+    """
+    if gate == "smoke":
+        if str(job.get("stage", "")) in {"evaluate_holdout_crop_policy", "outer_train_eval"}:
+            return "candidate"
+        return "full_subjects"
+    return "candidate"
+
+
+def _execute_artifact_job(
+    job: Mapping[str, Any],
+    *,
+    root: Path,
+    run_manifest: Path,
+    effective_device: str,
+    data_root: Path | None,
+    epochs_override: int | None,
+) -> dict[str, Any]:
+    """Execute an artifact-only protocol job through the artifact-job adapter."""
+    job_id = str(job.get("job_id", ""))
+    run_dir = run_manifest.parent / "job_runs" / job_id
+
+    command = [
+        sys.executable,
+        "scripts/launch_reproducible.py",
+        "--seed",
+        str(job["seed"]),
+        "--",
+        sys.executable,
+        "scripts/run_artifact_job.py",
+        "--protocol-run",
+        str(run_manifest),
+        "--job-id",
+        job_id,
+        "--device",
+        effective_device,
+    ]
+    if data_root:
+        command.extend(["--data-root", str(data_root)])
+    if epochs_override is not None:
+        command.extend(["--epochs-override", str(int(epochs_override))])
+
+    proc = subprocess.run(command, cwd=root, text=True, capture_output=True)
+    return {
+        "job_id": job_id,
+        "route_config": str(job.get("route_config", "")),
+        "run_dir": str(run_dir),
+        "status": "EXECUTED_ARTIFACT" if proc.returncode == 0 else "FAILED_ARTIFACT",
+        "command_returncode": proc.returncode,
+        "audit_gate": None,
+        "audit_returncode": None,
+        "requested_device": effective_device,
+        "stdout_tail": proc.stdout[-4000:] if proc.stdout else "",
+        "stderr_tail": proc.stderr[-4000:] if proc.stderr else "",
+    }
+
+
 def execute_protocol_jobs(
     manifest: Mapping[str, Any],
     *,
@@ -382,8 +534,15 @@ def execute_protocol_jobs(
     data_root: Path | None = None,
     device: str = "auto",
     epochs_override: int | None = None,
+    allow_artifact_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """Execute prediction-producing jobs through the stable route-job adapter."""
+    """Execute prediction-producing jobs through the stable route-job adapter.
+
+    When *allow_artifact_only* is True, P2/P3 artifact-only jobs
+    (train_holdout_model, inner_select) are executed through the
+    artifact-job adapter.  Candidate-grade P2/P3 evidence still needs
+    formal adapter review before promotion.
+    """
     if gate == "candidate" and epochs_override is not None:
         raise ValueError("epochs_override cannot be used with candidate gate")
     effective_device = str(device if str(device) != "auto" else manifest.get("default_execute_device") or "auto")
@@ -404,32 +563,107 @@ def execute_protocol_jobs(
     jobs = [job for job in manifest.get("jobs", []) if isinstance(job, Mapping)]
     runnable = [job for job in jobs if "predictions.csv" in job.get("expected_artifacts", [])]
     artifact_only = [job for job in jobs if "predictions.csv" not in job.get("expected_artifacts", [])]
+    diagnostic_independent_p2_train_jobs = {
+        str(job.get("job_id", ""))
+        for job in artifact_only
+        if gate == "smoke"
+        and allow_artifact_only
+        and str(job.get("protocol", "")) == "p2_pseudo_public_holdout"
+        and str(job.get("stage", "")) == "train_holdout_model"
+        and any(str(item.get("stage", "")) == "evaluate_holdout_crop_policy" for item in runnable)
+    }
+    if gate == "candidate" and artifact_only and allow_artifact_only:
+        attempted = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
+        raise ValueError(
+            "candidate protocol execution cannot use the diagnostic artifact-only adapter; "
+            "P2/P3 candidate evidence needs a formal checkpoint/selection adapter first: "
+            f"{attempted}"
+        )
     if gate == "candidate" and artifact_only:
         skipped = ", ".join(str(job.get("job_id", "")) for job in artifact_only)
         raise ValueError(
             "candidate protocol execution cannot skip artifact-only training/selection jobs; "
-            "P2/P3 candidate execution needs a formal adapter for these protocol stages first: "
+            "P2/P3 candidate execution needs a formal adapter for these protocol stages first "
+            "(or use --allow-artifact-only for diagnostic execution): "
             f"{skipped}"
         )
-    if max_jobs is not None:
-        runnable = runnable[: int(max_jobs)]
-    results: list[dict[str, Any]] = [
-        {
-            "job_id": str(job.get("job_id", "")),
-            "route_config": str(job.get("route_config", "")),
-            "run_dir": None,
-            "status": "SKIPPED_ARTIFACT_ONLY",
-            "reason": "--execute currently runs prediction-producing jobs only; this artifact-only job must be produced by the formal training/selection adapter.",
-            "command_returncode": None,
-            "audit_gate": gate,
-            "audit_returncode": None,
-            "stdout_tail": "",
-            "stderr_tail": "",
-            "requested_device": effective_device,
-        }
-        for job in artifact_only
-    ]
+    results: list[dict[str, Any]] = []
+    execution_budget = None if max_jobs is None else max(0, int(max_jobs))
+    executed_count = 0
+
+    def budget_exhausted() -> bool:
+        return execution_budget is not None and executed_count >= execution_budget
+
+    for job in artifact_only:
+        if str(job.get("job_id", "")) in diagnostic_independent_p2_train_jobs:
+            result = {
+                "job_id": str(job.get("job_id", "")),
+                "route_config": str(job.get("route_config", "")),
+                "run_dir": None,
+                "status": "SKIPPED_DIAGNOSTIC_TRAIN_ARTIFACT",
+                "reason": (
+                    "P2 smoke eval jobs train independently through run_route_job; "
+                    "the diagnostic train_holdout checkpoint shim is not generated "
+                    "because it is not reused by those eval jobs."
+                ),
+                "command_returncode": None,
+                "audit_gate": gate,
+                "audit_returncode": None,
+                "stdout_tail": "",
+                "stderr_tail": "",
+                "requested_device": effective_device,
+            }
+        elif allow_artifact_only:
+            if budget_exhausted():
+                result = {
+                    "job_id": str(job.get("job_id", "")),
+                    "route_config": str(job.get("route_config", "")),
+                    "run_dir": None,
+                    "status": "SKIPPED_MAX_JOBS",
+                    "reason": "--max-execute-jobs limit reached before this artifact-only job.",
+                    "command_returncode": None,
+                    "audit_gate": gate,
+                    "audit_returncode": None,
+                    "stdout_tail": "",
+                    "stderr_tail": "",
+                    "requested_device": effective_device,
+                }
+            else:
+                result = _execute_artifact_job(job, root=root, run_manifest=run_manifest, effective_device=effective_device, data_root=data_root, epochs_override=epochs_override)
+                executed_count += 1
+        else:
+            result = {
+                "job_id": str(job.get("job_id", "")),
+                "route_config": str(job.get("route_config", "")),
+                "run_dir": None,
+                "status": "SKIPPED_ARTIFACT_ONLY",
+                "reason": "--execute currently runs prediction-producing jobs only; this artifact-only job must be produced by the formal training/selection adapter.",
+                "command_returncode": None,
+                "audit_gate": gate,
+                "audit_returncode": None,
+                "stdout_tail": "",
+                "stderr_tail": "",
+                "requested_device": effective_device,
+            }
+        results.append(result)
     for job in runnable:
+        if budget_exhausted():
+            results.append(
+                {
+                    "job_id": str(job.get("job_id", "")),
+                    "route_config": str(job.get("route_config", "")),
+                    "run_dir": None,
+                    "status": "SKIPPED_MAX_JOBS",
+                    "reason": "--max-execute-jobs limit reached before this prediction-producing job.",
+                    "command_returncode": None,
+                    "audit_gate": gate,
+                    "audit_returncode": None,
+                    "stdout_tail": "",
+                    "stderr_tail": "",
+                    "requested_device": effective_device,
+                }
+            )
+            continue
         seed = int(job["seed"])
         command = [
             sys.executable,
@@ -444,7 +678,7 @@ def execute_protocol_jobs(
             "--job-id",
             str(job["job_id"]),
             "--mode",
-            "candidate",
+            _mode_for_job(gate, job),
             "--device",
             effective_device,
         ]
@@ -494,6 +728,7 @@ def execute_protocol_jobs(
                 "stderr_tail": proc_stderr[-4000:],
             }
         )
+        executed_count += 1
     results_path = protocol_run_manifest_path.resolve().parent / "protocol_execution_results.json"
     results_path.write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return results

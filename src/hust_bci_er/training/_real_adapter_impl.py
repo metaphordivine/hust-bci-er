@@ -24,6 +24,8 @@ from hust_bci_er.config.schema import validate_route_config
 from hust_bci_er.contracts.records import PredictionRecord
 from hust_bci_er.data.augmentations import apply_transforms_to_windows, transform_configs_from_route
 from hust_bci_er.data.windowing import fixed_crop_slices, fixed_crop_spec_from_config
+from hust_bci_er.evaluation.crop_policy import FIXED_CROP_POLICIES
+from hust_bci_er.evaluation.exact_single_crop import assignment_grid, top4_predictions
 from hust_bci_er.evaluation.prediction_writer import write_predictions
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report
 # build_model and classifier imports are lazy (inside run_real_classifier_route / _predict_scores)
@@ -501,7 +503,7 @@ def _predict_scores(
 def _build_score_matrix(
     prediction_rows: list[dict[str, Any]],
     *,
-    crop_policy: str,
+    crop_policy: str | Mapping[str, Any],
     seed: int,
 ) -> tuple[list[dict[str, Any]], str]:
     """Build score_matrix rows with exactly 5 crops per trial.
@@ -564,7 +566,92 @@ def _build_score_matrix(
             for i in range(5):
                 row[f"crop_{i}"] = f"{base + float(rng.normal(0, 1e-6)):.8f}"
             rows.append(row)
+    policy_name = str(crop_policy.get("name") if isinstance(crop_policy, Mapping) else crop_policy)
+    if policy_name in {*FIXED_CROP_POLICIES, "random", "worst"}:
+        return _apply_single_crop_policy_to_score_matrix(rows, crop_policy=crop_policy, seed=seed), "synthetic"
     return rows, "genuine" if all_genuine else "synthetic"
+
+
+def _apply_single_crop_policy_to_score_matrix(
+    rows: list[dict[str, Any]],
+    *,
+    crop_policy: str | Mapping[str, Any],
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Collapse five-crop matrices to a declared P2 single-crop policy.
+
+    The output intentionally remains a 5-column score matrix by repeating the
+    selected crop.  That lets existing exact-metric code evaluate the selected
+    single-crop policy without pretending the repeated columns are genuine
+    five-crop evidence.
+    """
+    policy_name = str(crop_policy.get("name") if isinstance(crop_policy, Mapping) else crop_policy)
+    rng_seed = int(crop_policy.get("random_seed", seed)) if isinstance(crop_policy, Mapping) else int(seed)
+    rng = np.random.default_rng(rng_seed)
+    selected_by_key: dict[tuple[str, str], int] = {}
+    if policy_name == "worst":
+        by_subject: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            by_subject.setdefault(str(row["subject_id"]), []).append(row)
+        for subject_rows in by_subject.values():
+            subject_rows = sorted(subject_rows, key=lambda row: str(row["trial_id"]))
+            if len(subject_rows) != 8:
+                for row in subject_rows:
+                    crop_values = [float(row[f"crop_{idx}"]) for idx in range(5)]
+                    selected_by_key[(str(row["subject_id"]), str(row["trial_id"]))] = int(np.argmin(crop_values))
+                continue
+            mat = np.array([[float(row[f"crop_{idx}"]) for idx in range(5)] for row in subject_rows], dtype=np.float64)
+            y_true = np.array([int(float(row["y_true"])) for row in subject_rows], dtype=np.int8)
+            grid = assignment_grid(mat.shape[0], mat.shape[1])
+            selected = mat[np.arange(mat.shape[0]), grid]
+            pred = top4_predictions(selected)
+            values = (pred == y_true[None, :]).mean(axis=1)
+            assignment = grid[int(np.argmin(values))]
+            for row, crop_idx in zip(subject_rows, assignment):
+                selected_by_key[(str(row["subject_id"]), str(row["trial_id"]))] = int(crop_idx)
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if policy_name in FIXED_CROP_POLICIES:
+            selected_idx = int(FIXED_CROP_POLICIES[policy_name])
+        elif policy_name == "random":
+            selected_idx = int(rng.integers(0, 5))
+        elif policy_name == "worst":
+            selected_idx = selected_by_key[(str(row["subject_id"]), str(row["trial_id"]))]
+        else:
+            selected_idx = 0
+        selected_score = row[f"crop_{selected_idx}"]
+        selected_source_crop = row.get(f"crop_{selected_idx}_source_crop_id", selected_idx)
+        selected_start = row.get(f"crop_{selected_idx}_window_start_sec", float(selected_idx))
+        item = dict(row)
+        for idx in range(5):
+            item[f"crop_{idx}"] = selected_score
+            item[f"crop_{idx}_source_crop_id"] = selected_source_crop
+            item[f"crop_{idx}_window_start_sec"] = selected_start
+        out.append(item)
+    return out
+
+
+def _is_protocol_single_crop_policy(policy: str | Mapping[str, Any]) -> bool:
+    name = str(policy.get("name") if isinstance(policy, Mapping) else policy)
+    return name in {*FIXED_CROP_POLICIES, "random", "worst"}
+
+
+def _trial_rows_from_score_matrix(score_matrix_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in score_matrix_rows:
+        scores = [float(row[f"crop_{idx}"]) for idx in range(5)]
+        score = float(sum(scores) / len(scores))
+        rows.append(
+            {
+                "subject_id": row["subject_id"],
+                "trial_id": row["trial_id"],
+                "y_true": int(float(row["y_true"])),
+                "y_score": score,
+                "y_pred": int(score >= 0.5),
+            }
+        )
+    return rows
 
 
 def _write_evidence_manifests(
@@ -753,6 +840,7 @@ def run_real_classifier_route(
     smoke_n_hc: int = 8,
     smoke_epochs: int | None = None,
     device: str = "auto",
+    crop_policy: Mapping[str, Any] | None = None,
 ) -> RealRunArtifacts:
     """Run a real EEG classifier route end-to-end.
 
@@ -770,6 +858,7 @@ def run_real_classifier_route(
         smoke_n_hc: Number of HC subjects to use (smoke mode).
         smoke_epochs: Override epoch count (smoke mode).
         device: Torch device.
+        crop_policy: Optional protocol job crop-policy override, used by P2 diagnostics.
     """
     if run_mode not in VALID_RUN_MODES:
         raise ValueError(f"unknown run_mode: {run_mode}; valid: {', '.join(sorted(VALID_RUN_MODES))}")
@@ -853,7 +942,8 @@ def run_real_classifier_route(
     has_fixed_crop_aug = aug_name == "split_first_fixed_crops"
     has_aug = has_sliding_aug or has_fixed_crop_aug
     inference = route_data.get("inference") if isinstance(route_data, dict) else None
-    crop_policy = str(inference.get("crop_policy", "single")) if isinstance(inference, dict) else "single"
+    route_crop_policy = str(inference.get("crop_policy", "single")) if isinstance(inference, dict) else "single"
+    active_crop_policy: Mapping[str, Any] | str = dict(crop_policy) if isinstance(crop_policy, Mapping) else route_crop_policy
     input_window_sec = float(route_data.get("input_window_sec", 10))
     preproc = list(route_data.get("preprocessing", []) or [])
     _validate_adapter_preprocessing(preproc)
@@ -1029,9 +1119,12 @@ def run_real_classifier_route(
     eval_trial_rows = _aggregate_to_trials(eval_window_rows, method=method, tie_break=tie_break)
 
     # Build score matrix (5 crops per trial) from window rows
-    score_matrix_rows, score_matrix_evidence = _build_score_matrix(eval_window_rows, crop_policy=crop_policy, seed=active_seed)
+    score_matrix_rows, score_matrix_evidence = _build_score_matrix(eval_window_rows, crop_policy=active_crop_policy, seed=active_seed)
     score_matrix_path = run_dir / "score_matrix.csv"
     _write_score_matrix(score_matrix_path, score_matrix_rows)
+
+    if _is_protocol_single_crop_policy(active_crop_policy):
+        eval_trial_rows = _trial_rows_from_score_matrix(score_matrix_rows)
 
     # Build prediction records from trial-level rows
     prediction_records = [
@@ -1094,6 +1187,7 @@ def run_real_classifier_route(
             "prediction_scope": prediction_scope,
             "evaluation_split": eval_split,
             "score_matrix_evidence": score_matrix_evidence,
+            "crop_policy": active_crop_policy,
             "protocol_job_split_manifest": str(Path(split_manifest_path).resolve()) if split_manifest_path is not None else None,
             "augmentation_transforms": train_transform_configs,
             "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
@@ -1113,12 +1207,14 @@ def run_real_classifier_route(
         seed=active_seed,
         source_seed=int(route_data["seed"]),
     )
-    manifest = build_run_manifest_payload(
-        context,
-        metrics=metric_report["metrics"],
-        command=command,
-        score_matrix_csv=score_matrix_path,
-    )
+    manifest_kwargs: dict[str, Any] = {
+        "metrics": metric_report["metrics"],
+        "command": command,
+        "score_matrix_csv": score_matrix_path,
+    }
+    if isinstance(active_crop_policy, Mapping):
+        manifest_kwargs["crop_policy"] = active_crop_policy
+    manifest = build_run_manifest_payload(context, **manifest_kwargs)
     manifest["run_mode"] = run_mode
     manifest["model_name"] = model_name
     manifest["model_kwargs"] = model_kwargs

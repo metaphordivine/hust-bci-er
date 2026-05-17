@@ -28,6 +28,7 @@ from hust_bci_er.training.real_adapter import (
     _make_fixed_crops,
     _read_mat,
     _split_subjects,
+    _trial_rows_from_score_matrix,
     _validate_fixed_crop_coverage,
     _write_evidence_manifests,
     run_real_classifier_route,
@@ -160,6 +161,39 @@ def test_build_score_matrix_five_fixed_crops_are_genuine():
     assert len(result) == 1
     for i in range(5):
         assert result[0][f"crop_{i}"] == f"{0.55 + i * 0.01:.8f}"
+
+
+def test_build_score_matrix_applies_p2_fixed_crop_policy():
+    rows = _make_window_rows("t1", n_windows=5, base_score=0.55)
+    result, evidence = _build_score_matrix(
+        rows,
+        crop_policy={"name": "crop3", "selection": "fixed_index", "crop_index": 2},
+        seed=42,
+    )
+    assert evidence == "synthetic"
+    assert len(result) == 1
+    assert {result[0][f"crop_{idx}"] for idx in range(5)} == {"0.57000000"}
+    assert {result[0][f"crop_{idx}_source_crop_id"] for idx in range(5)} == {"2"}
+
+
+def test_trial_rows_from_policy_score_matrix_match_selected_crop():
+    rows = _make_window_rows("t1", n_windows=5, base_score=0.45)
+    matrix_rows, _ = _build_score_matrix(
+        rows,
+        crop_policy={"name": "crop5", "selection": "fixed_index", "crop_index": 4},
+        seed=42,
+    )
+    trial_rows = _trial_rows_from_score_matrix(matrix_rows)
+
+    assert trial_rows == [
+        {
+            "subject_id": "S01",
+            "trial_id": "t1",
+            "y_true": 1,
+            "y_score": pytest.approx(0.49),
+            "y_pred": 0,
+        }
+    ]
 
 
 def test_build_score_matrix_preserves_y_true():

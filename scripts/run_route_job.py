@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--protocol-run", type=Path, required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--output-root", type=Path)
-    parser.add_argument("--mode", choices=["candidate"], default="candidate")
+    parser.add_argument("--mode", choices=["smoke", "full_subjects", "candidate"], default="candidate")
     parser.add_argument("--device")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--epochs-override", type=int, help="Diagnostic-only epoch override for protocol job smoke execution.")
@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             data_root=effective_data_root,
             smoke_epochs=args.epochs_override,
             device=effective_device,
+            crop_policy=job.get("crop_policy") if isinstance(job.get("crop_policy"), dict) else None,
         )
     print(json.dumps({"job_id": args.job_id, "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json)}, ensure_ascii=False))
     return 0
