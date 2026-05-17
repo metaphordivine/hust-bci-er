@@ -130,6 +130,15 @@ def _load_existing_results(summary_path: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _display_path(path: Path) -> str:
+    resolved_root = ROOT.resolve()
+    resolved_path = path.resolve()
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Batch P1 candidate runner for torch_classifier routes.")
     parser.add_argument("--from-diagnostic", type=Path, help="Path to batch_summary.json from diagnostic run.")
@@ -149,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         for r in summary.get("results", []):
             if r.get("passed"):
                 route_ids.append(str(r["route_id"]))
-        print(f"Loaded {len(route_ids)} passed routes from {args.from_diagnostic.relative_to(ROOT)}")
+        print(f"Loaded {len(route_ids)} passed routes from {_display_path(args.from_diagnostic)}")
     elif args.route_ids:
         route_ids = [s.strip() for s in args.route_ids.split(",") if s.strip()]
     else:
@@ -225,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
             failed += 1
             print(f"FAIL (rc={result['returncode']})")
         write_summary()
-    print(f"\nCandidate summary: {passed} passed, {failed} failed  →  {summary_path.relative_to(ROOT)}")
+    print(f"\nCandidate summary: {passed} passed, {failed} failed  →  {_display_path(summary_path)}")
     return 0 if failed == 0 else 1
 
 

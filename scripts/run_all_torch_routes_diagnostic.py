@@ -169,6 +169,15 @@ def _load_existing_results(summary_path: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _display_path(path: Path) -> str:
+    resolved_root = ROOT.resolve()
+    resolved_path = path.resolve()
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Batch P1 diagnostic runner for all torch_classifier routes.")
     parser.add_argument("--data-root", type=Path, help="HUST EEG .mat data root directory.")
@@ -257,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
             failed += 1
             print(f"FAIL (rc={result['returncode']})")
         write_summary()
-    print(f"\nSummary: {passed} passed, {failed} failed  ->  {summary_path.relative_to(ROOT)}")
+    print(f"\nSummary: {passed} passed, {failed} failed  ->  {_display_path(summary_path)}")
     return 0 if failed == 0 else 1
 
 
