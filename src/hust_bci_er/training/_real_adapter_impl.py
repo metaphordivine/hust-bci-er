@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -40,6 +41,93 @@ SOURCE_TRIALS_PER_CLASS = 4
 FIXED_CANDIDATE_CROPS = 5
 DATA_ROOT_ENV = "HUST_BCI_ER_DATA_ROOT"
 DATA_ROOT_DEFAULT = Path(__file__).resolve().parents[3] / "scratch" / "local_data" / "hust_bci_er_train" / "训练集"
+TORCH_NUM_THREADS_ENV = "HUST_TORCH_NUM_THREADS"
+TORCH_INTEROP_THREADS_ENV = "HUST_TORCH_INTEROP_THREADS"
+DATALOADER_NUM_WORKERS_ENV = "HUST_DATALOADER_NUM_WORKERS"
+DATALOADER_PIN_MEMORY_ENV = "HUST_DATALOADER_PIN_MEMORY"
+DATALOADER_PERSISTENT_WORKERS_ENV = "HUST_DATALOADER_PERSISTENT_WORKERS"
+DATALOADER_PREFETCH_FACTOR_ENV = "HUST_DATALOADER_PREFETCH_FACTOR"
+
+_TORCH_INTEROP_THREADS_CONFIGURED: int | None = None
+
+
+def _env_int(name: str, *, minimum: int) -> int | None:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+    if parsed < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {parsed}")
+    return parsed
+
+
+def _env_bool(name: str) -> bool | None:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of 1/0/true/false/yes/no/on/off, got {value!r}")
+
+
+def _configure_torch_runtime(torch_module) -> dict[str, Any]:
+    """Apply opt-in torch runtime caps for shared training hosts."""
+    global _TORCH_INTEROP_THREADS_CONFIGURED
+
+    applied: dict[str, Any] = {
+        "num_threads_env": None,
+        "interop_threads_env": None,
+        "num_threads_applied": None,
+        "interop_threads_applied": None,
+    }
+    num_threads = _env_int(TORCH_NUM_THREADS_ENV, minimum=1)
+    if num_threads is not None:
+        torch_module.set_num_threads(num_threads)
+        applied["num_threads_env"] = TORCH_NUM_THREADS_ENV
+        applied["num_threads_applied"] = num_threads
+
+    interop_threads = _env_int(TORCH_INTEROP_THREADS_ENV, minimum=1)
+    if interop_threads is not None:
+        applied["interop_threads_env"] = TORCH_INTEROP_THREADS_ENV
+        if _TORCH_INTEROP_THREADS_CONFIGURED is None:
+            torch_module.set_num_interop_threads(interop_threads)
+            _TORCH_INTEROP_THREADS_CONFIGURED = interop_threads
+        elif _TORCH_INTEROP_THREADS_CONFIGURED != interop_threads:
+            raise ValueError(
+                f"{TORCH_INTEROP_THREADS_ENV} changed from "
+                f"{_TORCH_INTEROP_THREADS_CONFIGURED} to {interop_threads} in one process"
+            )
+        applied["interop_threads_applied"] = _TORCH_INTEROP_THREADS_CONFIGURED
+    return applied
+
+
+def _dataloader_kwargs(*, device: str) -> dict[str, Any]:
+    """Build DataLoader kwargs while preserving serial defaults unless env opts in."""
+    num_workers = _env_int(DATALOADER_NUM_WORKERS_ENV, minimum=0)
+    if num_workers is None:
+        num_workers = 0
+
+    pin_memory = _env_bool(DATALOADER_PIN_MEMORY_ENV)
+    if pin_memory is None:
+        pin_memory = bool(num_workers > 0 and device.startswith("cuda"))
+
+    kwargs: dict[str, Any] = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if num_workers > 0:
+        persistent_workers = _env_bool(DATALOADER_PERSISTENT_WORKERS_ENV)
+        kwargs["persistent_workers"] = True if persistent_workers is None else persistent_workers
+        prefetch_factor = _env_int(DATALOADER_PREFETCH_FACTOR_ENV, minimum=1)
+        if prefetch_factor is not None:
+            kwargs["prefetch_factor"] = prefetch_factor
+    return kwargs
 
 
 def _resolve_data_root(data_root: Path | None) -> Path:
@@ -473,7 +561,13 @@ def _predict_scores(
     from torch.utils.data import DataLoader
     from hust_bci_er.training.classifier import logits_from_output
 
-    loader = DataLoader(_WindowDataset(windows), batch_size=batch_size, shuffle=False, num_workers=0)
+    _configure_torch_runtime(torch)
+    loader = DataLoader(
+        _WindowDataset(windows),
+        batch_size=batch_size,
+        shuffle=False,
+        **_dataloader_kwargs(device=device),
+    )
     model.eval()
     rows: list[dict[str, Any]] = []
     offset = 0
@@ -956,6 +1050,8 @@ def run_real_classifier_route(
     )
     from hust_bci_er.training.monitor import TrainingMonitor
 
+    torch_runtime_config = _configure_torch_runtime(torch)
+
     route_config_path = route_config_path.resolve()
     route_data = yaml.safe_load(route_config_path.read_text(encoding="utf-8")) or {}
     errors = validate_route_config(route_data, path=route_config_path)
@@ -1188,6 +1284,7 @@ def run_real_classifier_route(
     grad_clip = float(training_config["grad_clip_norm"]) if isinstance(training_config, dict) and "grad_clip_norm" in training_config else None
 
     device_str = _resolve_device(device)
+    dataloader_config = _dataloader_kwargs(device=device_str)
     train_config = ClassifierTrainConfig(
         epochs=epochs,
         batch_size=batch_size,
@@ -1226,9 +1323,14 @@ def run_real_classifier_route(
         result = None
     else:
         # Train
-        train_loader = DataLoader(_WindowDataset(train_windows), batch_size=batch_size, shuffle=True, num_workers=0)
+        train_loader = DataLoader(
+            _WindowDataset(train_windows),
+            batch_size=batch_size,
+            shuffle=True,
+            **dataloader_config,
+        )
         val_dataset = _WindowDataset(val_windows)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **dataloader_config)
 
         def _log_epoch(metrics: EpochMetrics) -> None:
             monitor.epoch(
@@ -1400,6 +1502,10 @@ def run_real_classifier_route(
             "training_resume_checkpoint": str(run_dir / "training_checkpoint.pt") if checkpoint_payload is None else None,
             "augmentation_transforms": train_transform_configs,
             "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
+            "runtime_performance": {
+                "torch": torch_runtime_config,
+                "dataloader": dataloader_config,
+            },
         }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
