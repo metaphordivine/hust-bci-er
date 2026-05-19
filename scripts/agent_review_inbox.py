@@ -399,9 +399,20 @@ def _json_from_text(text: str) -> dict[str, Any]:
         if match is None:
             raise
         value = json.loads(match.group(0))
+    if isinstance(value, list):
+        return {"issues": value}
     if not isinstance(value, dict):
         raise ValueError("DeepSeek digest response JSON must be an object")
     return value
+
+
+def _coerce_text_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return [cleaned] if cleaned else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
 
 
 def parse_copilot_digest_comment_with_deepseek(
@@ -485,12 +496,8 @@ def parse_copilot_digest_comment_with_deepseek(
         severity = str(item.get("severity") or infer_review_severity(title + "\n" + problem)).upper()
         if severity not in {"S0", "S1", "S2"}:
             severity = infer_review_severity(severity + "\n" + title + "\n" + problem)
-        files = item.get("files_hint", [])
-        if not isinstance(files, list):
-            files = []
-        validation = item.get("validation_hint", [])
-        if not isinstance(validation, list):
-            validation = []
+        files = _coerce_text_list(item.get("files_hint", []))
+        validation = _coerce_text_list(item.get("validation_hint", []))
         out.append(
             {
                 "id": f"PR{pr}-COPILOT-{_stable_short_id(comment_ref)}-{idx}",

@@ -1,0 +1,61 @@
+route_id: sliding_ea_cbramod_pretrained_w3p2_s1p7
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 3.2
+preprocessing: [euclidean_alignment, zscore]
+features: []
+augmentation:
+  name: split_first_sliding_window
+  split_first: true
+  source_trial_sec: 10
+  window_sec: 3.2
+  stride_sec: 1.7
+  search_space:
+    window_sec: [3.2]
+    stride_sec: [1.7]
+  apply_to_splits: [train, val, test]
+  aggregate_to_trial:
+    method: majority_vote
+    tie_break: mean_score
+model:
+  name: cbramod_pretrained
+  patch_size: 200
+  out_dim: 200
+  d_model: 200
+  n_layer: 12
+  nhead: 8
+  dim_feedforward: 800
+  classifier: all_patch_reps
+  classifier_hidden_dim: 800
+  classifier_mid_dim: 200
+  dropout: 0.1
+  load_pretrained: true
+  pretrained_checkpoint_path: scratch/model_weights/cbramod/pretrained_weights.pth
+  pretrained_sha256: "0792cb808c14e6b7a2bb2ce1dff379bc47bc54c49a779825bdfeb33bf8157178"
+  freeze_encoder: false
+adaptation: none
+training:
+  trainer: torch_classifier
+  job_adapter: torch_classifier
+  epochs: 80
+  batch_size: 8
+  optimizer:
+    name: adamw
+    lr: 0.00005
+    weight_decay: 0.005
+  loss: cross_entropy
+  grad_clip_norm: 1.0
+  reset_parameters_after_seed: false
+  early_stopping:
+    monitor: val_loss
+    mode: min
+    patience: 16
+inference:
+  top4: true
+  crop_policy: sliding_window_vote
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "Official CBraMod pretrained checkpoint finetune route. Uses 3.2 s windows so each input is four 200-point patches, matching the upstream quick-start patch count while preserving five sliding crops over 10 s."

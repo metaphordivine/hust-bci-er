@@ -73,6 +73,7 @@ TORCH_BACKBONES = {
     "srfnet",
     "shallow_conv_net",
     "cbramod",
+    "cbramod_pretrained",
     "fbcnet",
     "fbstcnet",
     "tsception",

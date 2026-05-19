@@ -1047,6 +1047,7 @@ def run_real_classifier_route(
         OptimizerConfig,
         TrainResult,
         fit_classifier,
+        set_torch_seed,
     )
     from hust_bci_er.training.monitor import TrainingMonitor
 
@@ -1253,6 +1254,7 @@ def run_real_classifier_route(
         else {}
     )
     n_times = int(round(window_sec * SFREQ))
+    set_torch_seed(active_seed)
     model = build_model(
         model_name,
         n_channels=30,
@@ -1282,6 +1284,11 @@ def run_real_classifier_route(
     ) if isinstance(early_data, dict) else None
 
     grad_clip = float(training_config["grad_clip_norm"]) if isinstance(training_config, dict) and "grad_clip_norm" in training_config else None
+    reset_parameters_after_seed = (
+        bool(training_config.get("reset_parameters_after_seed", True))
+        if isinstance(training_config, dict)
+        else True
+    )
 
     device_str = _resolve_device(device)
     dataloader_config = _dataloader_kwargs(device=device_str)
@@ -1293,6 +1300,7 @@ def run_real_classifier_route(
         optimizer=optimizer,
         early_stopping=early_stopping,
         grad_clip_norm=grad_clip,
+        reset_parameters_after_seed=reset_parameters_after_seed,
     )
 
     result: TrainResult | None

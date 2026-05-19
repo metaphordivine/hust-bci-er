@@ -7,6 +7,7 @@ def test_new_models_have_candidate_audit_implementation_paths():
         "fbcnet": "src/hust_bci_er/models/backbones/fbcnet.py",
         "dgcnn": "src/hust_bci_er/models/graph/dgcnn.py",
         "lggnet": "src/hust_bci_er/models/graph/lggnet.py",
+        "cbramod_pretrained": "src/hust_bci_er/models/backbones/cbramod_pretrained.py",
     }
     for model_name, model_path in expected.items():
         paths = route_implementation_paths(

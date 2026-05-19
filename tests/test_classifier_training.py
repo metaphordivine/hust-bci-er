@@ -31,6 +31,7 @@ def _lock_pythonhashseed(monkeypatch, request):
         "test_fit_classifier_reduces_training_loss_for_tensor_batches": "0",
         "test_fit_classifier_accepts_mapping_batches_and_dict_model_output": "1",
         "test_fit_classifier_seed_resets_prebuilt_model_parameters": "7",
+        "test_fit_classifier_can_preserve_preloaded_parameters": "11",
     }
     seed = seeds.get(request.node.name)
     if seed is not None:
@@ -45,6 +46,18 @@ class DictOutputClassifier(nn.Module):
 
     def forward(self, x):
         return {"logits": self.net(x)}
+
+
+class NoResetClassifier(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.net = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+
+    def reset_parameters(self) -> None:
+        raise AssertionError("preloaded model parameters must not be reset")
+
+    def forward(self, x):
+        return self.net(x)
 
 
 def make_easy_loader(batch_size: int = 8, as_mapping: bool = False):
@@ -85,6 +98,25 @@ def test_fit_classifier_reduces_training_loss_for_tensor_batches():
     after = evaluate_classifier(model, loader, criterion=criterion)["loss"]
     assert len(result.history) == 12
     assert after < before
+
+
+def test_fit_classifier_can_preserve_preloaded_parameters():
+    loader = make_easy_loader(batch_size=16)
+    model = NoResetClassifier()
+
+    result = fit_classifier(
+        model,
+        loader,
+        config=ClassifierTrainConfig(
+            epochs=1,
+            seed=11,
+            optimizer=OptimizerConfig(name="sgd", lr=0.01, momentum=0.0),
+            early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=1),
+            reset_parameters_after_seed=False,
+        ),
+    )
+
+    assert result.best_epoch == 1
     assert result.best_state_dict is not None
 
 

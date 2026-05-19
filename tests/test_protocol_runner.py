@@ -12,6 +12,7 @@ import hust_bci_er.training.reproducibility as reproducibility_module
 from hust_bci_er.audit.manifest import sha256_file, validate_manifest
 from hust_bci_er.audit.run_manifest import write_run_manifest
 from hust_bci_er.evaluation.crop_policy import crop_policy_manifest, select_crop_matrix, worst_crop_score
+from hust_bci_er.evaluation.protocols.params import load_param_grid
 from hust_bci_er.evaluation.protocols.runner import build_protocol_jobs, execute_protocol_jobs, materialize_protocol_run
 from hust_bci_er.evaluation.protocols.summary import write_protocol_summary
 from hust_bci_er.training.reproducibility import dataloader_worker_seed
@@ -247,6 +248,37 @@ def test_protocol_runner_records_multiple_param_indices_in_shared_p3_split(tmp_p
     assert len(final_job["selection_artifact_job_ids"]) == 6
     assert all(path.endswith("selection_metrics.json") for path in final_job["selection_artifact_paths"])
     assert "reuse_checkpoint_path" not in final_job or final_job["reuse_checkpoint_path"] is None
+
+
+def test_p3_param_grid_loads_explicit_candidate_tuples(tmp_path):
+    grid_path = tmp_path / "grid.yaml"
+    grid_path.write_text(
+        """
+candidates:
+  - input_window_sec: 4
+    augmentation.window_sec: 4
+    augmentation.stride_sec: 1.5
+  - input_window_sec: 6
+    augmentation.window_sec: 6
+    augmentation.stride_sec: 1
+""",
+        encoding="utf-8",
+    )
+
+    candidates = load_param_grid(grid_path)
+
+    assert candidates == [
+        {
+            "input_window_sec": 4,
+            "augmentation.window_sec": 4,
+            "augmentation.stride_sec": 1.5,
+        },
+        {
+            "input_window_sec": 6,
+            "augmentation.window_sec": 6,
+            "augmentation.stride_sec": 1,
+        },
+    ]
 
 
 def test_p3_materialization_rejects_abstract_multi_param_grid(tmp_path):

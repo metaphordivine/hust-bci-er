@@ -34,6 +34,7 @@
 ## Torch Backbones
 
 - `cbramod`
+- `cbramod_pretrained`
 - `conformer_lite`
 - `deformer_lite`
 - `eegnet`

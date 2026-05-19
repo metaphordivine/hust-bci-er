@@ -46,7 +46,7 @@ def _route_model_info(route_config_path: Path) -> tuple[str, dict[str, Any], int
     return model_name, model_kwargs, n_times
 
 
-def _model_filterbank_params(route_config_path: Path) -> tuple[str, dict[str, Any], dict[str, Any] | None]:
+def _model_probe_metadata(route_config_path: Path) -> tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
     model_name, model_kwargs, n_times = _route_model_info(route_config_path)
     if not model_name:
         return model_name, model_kwargs, None
@@ -60,11 +60,14 @@ def _model_filterbank_params(route_config_path: Path) -> tuple[str, dict[str, An
         **model_kwargs,
     )
     params = getattr(model, "filterbank_params", None)
-    return model_name, model_kwargs, params
+    external = getattr(model, "external_weight_provenance", None)
+    if external is not None and not isinstance(external, dict):
+        external = {"value": str(external)}
+    return model_name, model_kwargs, params, external
 
 
 def _patch_model_provenance(run_dir: Path, route_config_path: Path) -> None:
-    model_name, model_kwargs, filterbank_params = _model_filterbank_params(route_config_path)
+    model_name, model_kwargs, filterbank_params, external_weight_provenance = _model_probe_metadata(route_config_path)
 
     model_state_path = run_dir / "model_state.local.json"
     if model_state_path.exists():
@@ -72,6 +75,8 @@ def _patch_model_provenance(run_dir: Path, route_config_path: Path) -> None:
         model_state["model_kwargs"] = model_kwargs
         if filterbank_params is not None:
             model_state["filterbank_params"] = filterbank_params
+        if external_weight_provenance is not None:
+            model_state["external_weight_provenance"] = external_weight_provenance
         model_state_path.write_text(
             json.dumps(model_state, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
@@ -84,6 +89,8 @@ def _patch_model_provenance(run_dir: Path, route_config_path: Path) -> None:
         manifest["model_kwargs"] = model_kwargs
         if filterbank_params is not None:
             manifest["model_filterbank_params"] = filterbank_params
+        if external_weight_provenance is not None:
+            manifest["external_weight_provenance"] = external_weight_provenance
         manifest_path.write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
