@@ -623,6 +623,9 @@ def fit_domain_adversarial_classifier(
         else:
             stale_epochs += 1
 
+        if config.early_stopping is not None and stale_epochs > 0 and stale_epochs >= monitor.patience:
+            stopped_early = True
+
         if checkpoint_path_obj is not None:
             save_training_checkpoint(
                 checkpoint_path_obj,
@@ -640,8 +643,7 @@ def fit_domain_adversarial_classifier(
                 resume_context=resume_context,
             )
 
-        if config.early_stopping is not None and stale_epochs > 0 and stale_epochs >= monitor.patience:
-            stopped_early = True
+        if stopped_early:
             break
 
     if best_state is not None and config.restore_best:

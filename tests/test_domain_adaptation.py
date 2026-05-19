@@ -73,3 +73,28 @@ def test_fit_domain_adversarial_classifier_writes_resume_checkpoint(tmp_path):
 
     assert len(result.history) == 2
     assert checkpoint_path.exists()
+
+
+def test_domain_adversarial_checkpoint_records_early_stop_before_resume(tmp_path):
+    model = DomainAdversarialClassifier(TinyFeatureClassifier(), feature_dim=6, domain_hidden_dim=4)
+    loader = DataLoader(DomainDataset(), batch_size=6, shuffle=False)
+    checkpoint_path = tmp_path / "dann_early_stop.pt"
+
+    result = fit_domain_adversarial_classifier(
+        model,
+        loader,
+        config=ClassifierTrainConfig(
+            epochs=5,
+            seed=None,
+            optimizer=OptimizerConfig(name="sgd", lr=0.02, momentum=0.0),
+            early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=1, min_delta=1e9),
+        ),
+        domain_lambda=0.05,
+        checkpoint_path=checkpoint_path,
+        resume_context={"route_id": "tiny_dann_stop"},
+    )
+
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert result.stopped_early is True
+    assert result.checkpoint_epoch == 2
+    assert payload["stopped_early"] is True
