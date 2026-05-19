@@ -600,7 +600,44 @@ def _same_optional_int(left: Any, right: Any) -> bool:
         return False
 
 
-def _artifact_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Path) -> bool:
+def _same_optional_str(left: Any, right: Any) -> bool:
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    return str(left) == str(right)
+
+
+def _canonical_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_json_value(value[key]) for key in sorted(value, key=str)}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_json_value(item) for item in value]
+    return value
+
+
+def _same_optional_mapping(left: Any, right: Any) -> bool:
+    return _canonical_json_value(left or {}) == _canonical_json_value(right or {})
+
+
+def _artifact_job_metadata_matches(payload: Mapping[str, Any], job: Mapping[str, Any], *, gate: str) -> bool:
+    if not _same_optional_int(payload.get("seed"), job.get("seed")):
+        return False
+    if not _same_optional_str(payload.get("split_id"), job.get("split_id")):
+        return False
+    if not _same_optional_str(payload.get("split_manifest_path"), job.get("split_manifest_path")):
+        return False
+    if not _same_optional_str(payload.get("split_sha256"), job.get("split_sha256")):
+        return False
+    if gate == "candidate":
+        if payload.get("run_mode") != "full_subjects":
+            return False
+        if payload.get("training_epochs_overridden") is not False:
+            return False
+    return True
+
+
+def _artifact_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Path, *, gate: str = "smoke") -> bool:
     if _missing_expected_artifacts(job, run_dir):
         return False
     route_path = _resolve_route_path(job.get("route_config"), root)
@@ -624,7 +661,7 @@ def _artifact_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Pat
             return False
         if train_manifest.get("split_id") != job.get("split_id"):
             return False
-        if not _same_optional_int(train_manifest.get("seed"), job.get("seed")):
+        if not _artifact_job_metadata_matches(train_manifest, job, gate=gate):
             return False
         if train_manifest.get("base_route_config_sha256") not in {None, route_sha256}:
             return False
@@ -646,7 +683,9 @@ def _artifact_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Pat
             return False
         if not _same_optional_int(selection.get("inner_fold"), job.get("inner_fold")):
             return False
-        if dict(selection.get("param_overrides") or {}) != dict(job.get("param_overrides") or {}):
+        if not _artifact_job_metadata_matches(selection, job, gate=gate):
+            return False
+        if not _same_optional_mapping(selection.get("param_overrides"), job.get("param_overrides")):
             return False
         if selection.get("base_route_config_sha256") != route_sha256:
             return False
@@ -656,6 +695,90 @@ def _artifact_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Pat
         return True
 
     return False
+
+
+def _protocol_artifact_entries(job: Mapping[str, Any], *, protocol_root: Path, field: str) -> list[dict[str, str]] | None:
+    entries: list[dict[str, str]] = []
+    for value in job.get(field) or []:
+        if not isinstance(value, str) or not value:
+            return None
+        path = protocol_root / value
+        if not path.exists():
+            return None
+        entries.append({"protocol_path": value, "sha256": sha256_file(path)})
+    return entries
+
+
+def _recorded_artifact_entries_match(actual: Any, expected: list[dict[str, str]]) -> bool:
+    if not expected:
+        return True
+    if not isinstance(actual, list):
+        return False
+    actual_pairs = {
+        (str(item.get("protocol_path", "")), str(item.get("sha256", "")))
+        for item in actual
+        if isinstance(item, Mapping)
+    }
+    return all((item["protocol_path"], item["sha256"]) in actual_pairs for item in expected)
+
+
+def _reuse_checkpoint_entry_matches(manifest: Mapping[str, Any], job: Mapping[str, Any], *, protocol_root: Path) -> bool:
+    reuse_path = job.get("reuse_checkpoint_path")
+    if not isinstance(reuse_path, str) or not reuse_path:
+        return True
+    path = protocol_root / reuse_path
+    if not path.exists():
+        return False
+    actual = manifest.get("protocol_reuse_checkpoint")
+    if not isinstance(actual, Mapping):
+        return False
+    return str(actual.get("protocol_path", "")) == reuse_path and str(actual.get("sha256", "")) == sha256_file(path)
+
+
+def _prediction_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Path, *, protocol_root: Path, gate: str) -> bool:
+    if _missing_expected_artifacts(job, run_dir):
+        return False
+    manifest = _read_json_mapping(run_dir / "manifest.json")
+    if manifest is None:
+        return False
+    route_path = _resolve_route_path(job.get("route_config"), root)
+    if route_path is None or not route_path.exists():
+        return False
+    if manifest.get("protocol_job_id") != job.get("job_id"):
+        return False
+    if manifest.get("route_id") != job.get("route_id"):
+        return False
+    if manifest.get("protocol_job_stage") != job.get("stage"):
+        return False
+    if manifest.get("protocol_job_protocol") != job.get("protocol"):
+        return False
+    if not _same_optional_int(manifest.get("protocol_job_seed"), job.get("seed")):
+        return False
+    if not _same_optional_str(manifest.get("protocol_job_split_id"), job.get("split_id")):
+        return False
+    if not _same_optional_str(manifest.get("protocol_job_split_manifest_path"), job.get("split_manifest_path")):
+        return False
+    if not _same_optional_str(manifest.get("protocol_job_split_sha256"), job.get("split_sha256")):
+        return False
+    if manifest.get("protocol_job_base_route_config_sha256") != sha256_file(route_path):
+        return False
+    if isinstance(job.get("crop_policy"), Mapping) and not _same_optional_mapping(manifest.get("protocol_job_crop_policy"), job.get("crop_policy")):
+        return False
+    if gate == "candidate":
+        if manifest.get("protocol_job_mode") != "candidate":
+            return False
+        if manifest.get("protocol_job_epochs_override") is not None:
+            return False
+        if manifest.get("training_epochs_overridden") is not False:
+            return False
+    selection_entries = _protocol_artifact_entries(job, protocol_root=protocol_root, field="selection_artifact_paths")
+    if selection_entries is None:
+        return False
+    if not _recorded_artifact_entries_match(manifest.get("protocol_selection_artifacts"), selection_entries):
+        return False
+    if not _reuse_checkpoint_entry_matches(manifest, job, protocol_root=protocol_root):
+        return False
+    return True
 
 
 def _audit_existing_prediction_job(
@@ -764,7 +887,7 @@ def execute_protocol_jobs(
         job_id = str(job.get("job_id", ""))
         existing_run_dir = run_manifest.parent / "job_runs" / job_id
         if execute_artifact_jobs:
-            if _artifact_outputs_match_job(job, existing_run_dir, root):
+            if _artifact_outputs_match_job(job, existing_run_dir, root, gate=gate):
                 results.append(
                     {
                         "job_id": job_id,
@@ -818,7 +941,7 @@ def execute_protocol_jobs(
         job_id = str(job.get("job_id", ""))
         route_config = str(job["route_config"])
         run_dir = protocol_run_manifest_path.resolve().parent / "job_runs" / job_id
-        if not _missing_expected_artifacts(job, run_dir):
+        if _prediction_outputs_match_job(job, run_dir, root, protocol_root=run_manifest.parent, gate=gate):
             audit_code, audit_stdout, audit_stderr = _audit_existing_prediction_job(
                 root=root,
                 route_config=route_config,

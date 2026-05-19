@@ -161,6 +161,10 @@ def test_protocol_execute_skips_existing_artifact_outputs(tmp_path):
                 "stage": "train_holdout_model",
                 "seed": train_job["seed"],
                 "split_id": train_job["split_id"],
+                "split_manifest_path": train_job["split_manifest_path"],
+                "split_sha256": train_job["split_sha256"],
+                "run_mode": "full_subjects",
+                "training_epochs_overridden": False,
                 "checkpoint_path": "checkpoint.pt",
                 "base_route_config_sha256": sha256_file(ROUTE),
             }
@@ -194,6 +198,10 @@ def test_protocol_artifact_skip_rejects_stale_inner_select_route_hash(tmp_path):
         "job_id": inner_job["job_id"],
         "route_id": inner_job["route_id"],
         "stage": "inner_select",
+        "seed": inner_job["seed"],
+        "split_id": inner_job["split_id"],
+        "split_manifest_path": inner_job["split_manifest_path"],
+        "split_sha256": inner_job["split_sha256"],
         "param_index": inner_job["param_index"],
         "outer_fold": inner_job["outer_fold"],
         "inner_fold": inner_job["inner_fold"],
@@ -201,6 +209,8 @@ def test_protocol_artifact_skip_rejects_stale_inner_select_route_hash(tmp_path):
         "checkpoint_path": "checkpoint.pt",
         "base_route_config_sha256": "stale",
         "effective_route_config_sha256": sha256_file(job_dir / "config_snapshot.yaml"),
+        "run_mode": "full_subjects",
+        "training_epochs_overridden": False,
     }
     (job_dir / "selection_metrics.json").write_text(json.dumps(selection), encoding="utf-8")
 
@@ -209,6 +219,44 @@ def test_protocol_artifact_skip_rejects_stale_inner_select_route_hash(tmp_path):
     selection["base_route_config_sha256"] = sha256_file(ROUTE)
     (job_dir / "selection_metrics.json").write_text(json.dumps(selection), encoding="utf-8")
     assert runner._artifact_outputs_match_job(inner_job, job_dir, Path.cwd()) is True
+
+
+def test_protocol_artifact_skip_rejects_smoke_inner_select_for_candidate(tmp_path):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p3_run"
+    manifest = materialize_protocol_run("p3", [ROUTE], run_dir=run_dir, outer_folds=2, inner_folds=2)
+    inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
+    job_dir = run_dir / "job_runs" / inner_job["job_id"]
+    job_dir.mkdir(parents=True)
+    (job_dir / "config_snapshot.yaml").write_text(ROUTE.read_text(encoding="utf-8"), encoding="utf-8")
+    (job_dir / "checkpoint.pt").write_text("ok", encoding="utf-8")
+    (job_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (job_dir / "selection_metrics.json").write_text(
+        json.dumps(
+            {
+                "job_id": inner_job["job_id"],
+                "route_id": inner_job["route_id"],
+                "stage": "inner_select",
+                "seed": inner_job["seed"],
+                "split_id": inner_job["split_id"],
+                "split_manifest_path": inner_job["split_manifest_path"],
+                "split_sha256": inner_job["split_sha256"],
+                "param_index": inner_job["param_index"],
+                "outer_fold": inner_job["outer_fold"],
+                "inner_fold": inner_job["inner_fold"],
+                "param_overrides": inner_job.get("param_overrides") or {},
+                "checkpoint_path": "checkpoint.pt",
+                "base_route_config_sha256": sha256_file(ROUTE),
+                "effective_route_config_sha256": sha256_file(job_dir / "config_snapshot.yaml"),
+                "run_mode": "full_subjects",
+                "training_epochs_overridden": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert runner._artifact_outputs_match_job(inner_job, job_dir, Path.cwd(), gate="candidate") is False
 
 
 def test_protocol_execute_skips_existing_prediction_outputs_after_audit(tmp_path, monkeypatch):
@@ -220,7 +268,27 @@ def test_protocol_execute_skips_existing_prediction_outputs_after_audit(tmp_path
     job_dir = run_dir / "job_runs" / job["job_id"]
     job_dir.mkdir(parents=True)
     for artifact in job["expected_artifacts"]:
-        (job_dir / artifact).write_text("ok", encoding="utf-8")
+        if artifact == "manifest.json":
+            (job_dir / artifact).write_text(
+                json.dumps(
+                    {
+                        "route_id": job["route_id"],
+                        "protocol_job_id": job["job_id"],
+                        "protocol_job_stage": job["stage"],
+                        "protocol_job_protocol": job["protocol"],
+                        "protocol_job_seed": job["seed"],
+                        "protocol_job_split_id": job["split_id"],
+                        "protocol_job_split_manifest_path": job["split_manifest_path"],
+                        "protocol_job_split_sha256": job["split_sha256"],
+                        "protocol_job_base_route_config_sha256": sha256_file(ROUTE),
+                        "protocol_job_mode": "smoke",
+                        "protocol_job_crop_policy": job["crop_policy"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        else:
+            (job_dir / artifact).write_text("ok", encoding="utf-8")
     commands: list[list[str]] = []
 
     class Completed:
@@ -246,6 +314,40 @@ def test_protocol_execute_skips_existing_prediction_outputs_after_audit(tmp_path
     assert len(commands) == 1
     assert "scripts/repo_doctor.py" in commands[0]
     assert "scripts/run_route_job.py" not in commands[0]
+
+
+def test_protocol_prediction_skip_rejects_stale_job_metadata(tmp_path):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p1_run"
+    manifest = materialize_protocol_run("p1", [ROUTE], run_dir=run_dir, seeds=[42], n_folds=2)
+    job = manifest["jobs"][0]
+    job_dir = run_dir / "job_runs" / job["job_id"]
+    job_dir.mkdir(parents=True)
+    for artifact in job["expected_artifacts"]:
+        if artifact == "manifest.json":
+            (job_dir / artifact).write_text(
+                json.dumps(
+                    {
+                        "route_id": job["route_id"],
+                        "protocol_job_id": job["job_id"],
+                        "protocol_job_stage": job["stage"],
+                        "protocol_job_protocol": job["protocol"],
+                        "protocol_job_seed": job["seed"],
+                        "protocol_job_split_id": job["split_id"],
+                        "protocol_job_split_manifest_path": job["split_manifest_path"],
+                        "protocol_job_split_sha256": "stale",
+                        "protocol_job_base_route_config_sha256": sha256_file(ROUTE),
+                        "protocol_job_mode": "smoke",
+                        "protocol_job_crop_policy": job["crop_policy"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        else:
+            (job_dir / artifact).write_text("ok", encoding="utf-8")
+
+    assert runner._prediction_outputs_match_job(job, job_dir, Path.cwd(), protocol_root=run_dir, gate="smoke") is False
 
 
 def test_protocol_runner_counts_p1_and_p3_jobs():

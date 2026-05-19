@@ -34,6 +34,7 @@ def _lock_pythonhashseed(monkeypatch, request):
         "test_fit_classifier_can_preserve_preloaded_parameters": "11",
         "test_fit_classifier_ignores_checkpoint_when_train_config_differs": "0",
         "test_fit_classifier_ignores_checkpoint_when_resume_context_differs": "0",
+        "test_fit_classifier_checkpoint_records_early_stop_before_resume": "0",
     }
     seed = seeds.get(request.node.name)
     if seed is not None:
@@ -284,6 +285,27 @@ def test_fit_classifier_ignores_checkpoint_when_resume_context_differs(tmp_path)
 
     assert result.resumed_from_checkpoint is False
     assert [item.epoch for item in result.history] == [1, 2]
+
+
+def test_fit_classifier_checkpoint_records_early_stop_before_resume(tmp_path):
+    loader = make_easy_loader()
+    checkpoint_path = tmp_path / "training_checkpoint.pt"
+    config = ClassifierTrainConfig(
+        epochs=5,
+        seed=0,
+        optimizer=OptimizerConfig(name="sgd", lr=0.01, momentum=0.0),
+        early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=1, min_delta=1e9),
+    )
+    model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+
+    result = fit_classifier(model, loader, config=config, checkpoint_path=checkpoint_path)
+
+    assert result.stopped_early is True
+    assert result.checkpoint_epoch == 2
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert payload["stopped_early"] is True
+    assert payload["stale_epochs"] == 1
+    assert payload["status"] == "completed"
 
 
 def test_save_training_checkpoint_retries_windows_replace_lock(monkeypatch, tmp_path):
