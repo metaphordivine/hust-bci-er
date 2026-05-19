@@ -1,0 +1,9 @@
+# Concrete P3 candidates for masked feature-consistency strength.
+
+candidates:
+  - adaptation.lambda: 0.02
+    adaptation.max_mask_width_sec: 0.2
+  - adaptation.lambda: 0.05
+    adaptation.max_mask_width_sec: 0.4
+  - adaptation.lambda: 0.1
+    adaptation.max_mask_width_sec: 0.6
