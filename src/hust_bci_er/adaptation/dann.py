@@ -34,3 +34,41 @@ class DomainClassifier(nn.Module):
     def forward(self, x: torch.Tensor, lambd: float = 1.0) -> torch.Tensor:
         return self.net(grad_reverse(x, lambd))
 
+
+class DomainAdversarialClassifier(nn.Module):
+    """Wrap a feature-extractor classifier with a DANN domain head."""
+
+    def __init__(
+        self,
+        base_model: nn.Module,
+        *,
+        feature_dim: int,
+        domain_hidden_dim: int = 64,
+        n_domains: int = 2,
+        domain_dropout: float = 0.2,
+    ) -> None:
+        super().__init__()
+        if not hasattr(base_model, "extract_features") or not hasattr(base_model, "classifier"):
+            raise ValueError("DANN adaptation requires a model with extract_features() and classifier")
+        self.base_model = base_model
+        self.domain_classifier = DomainClassifier(
+            input_dim=int(feature_dim),
+            hidden_dim=int(domain_hidden_dim),
+            n_domains=int(n_domains),
+            dropout=float(domain_dropout),
+        )
+
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        features = self.base_model.extract_features(x)
+        if features.ndim != 2:
+            raise ValueError("DANN extract_features output must be shaped [batch, features]")
+        return features
+
+    def label_logits_from_features(self, features: torch.Tensor) -> torch.Tensor:
+        return self.base_model.classifier(features)
+
+    def domain_logits_from_features(self, features: torch.Tensor, lambd: float = 1.0) -> torch.Tensor:
+        return self.domain_classifier(features, lambd=lambd)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.label_logits_from_features(self.extract_features(x))

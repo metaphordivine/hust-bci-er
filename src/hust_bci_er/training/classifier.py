@@ -107,6 +107,21 @@ def batch_to_tensors(batch: Any, device: torch.device) -> tuple[torch.Tensor, to
     return torch.as_tensor(x, device=device).float(), torch.as_tensor(y, device=device).long()
 
 
+def batch_to_domain_tensors(batch: Any, device: torch.device) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if not isinstance(batch, Mapping):
+        raise TypeError("DANN batches must be mappings with features, target, and domain")
+    x = first_present(batch, ("x", "features", "inputs"))
+    y = first_present(batch, ("y", "target", "targets", "label", "labels"))
+    d = first_present(batch, ("domain", "domains", "domain_label", "domain_labels"))
+    if x is None or y is None or d is None:
+        raise KeyError("DANN mapping batch must include feature, target, and domain tensors")
+    return (
+        torch.as_tensor(x, device=device).float(),
+        torch.as_tensor(y, device=device).long(),
+        torch.as_tensor(d, device=device).long(),
+    )
+
+
 def first_present(batch: Mapping[str, Any], keys: tuple[str, ...]) -> Any:
     for key in keys:
         if key in batch:
@@ -201,6 +216,60 @@ def train_one_epoch(
     if total_seen == 0:
         raise ValueError("training loader produced no examples")
     return {"loss": total_loss / total_seen, "accuracy": total_correct / total_seen, "n": total_seen}
+
+
+def train_one_domain_adversarial_epoch(
+    model: nn.Module,
+    loader: Iterable[Any],
+    *,
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    domain_criterion: nn.Module,
+    device: str | torch.device = "cpu",
+    domain_lambda: float = 0.1,
+    grad_clip_norm: float | None = None,
+) -> dict[str, float | int]:
+    model.train()
+    device_obj = torch.device(device)
+    total_loss = 0.0
+    total_label_loss = 0.0
+    total_domain_loss = 0.0
+    total_correct = 0
+    total_domain_correct = 0
+    total_seen = 0
+
+    for batch in loader:
+        x, y, domains = batch_to_domain_tensors(batch, device_obj)
+        optimizer.zero_grad(set_to_none=True)
+        features = model.extract_features(x)
+        logits = model.label_logits_from_features(features)
+        domain_logits = model.domain_logits_from_features(features, lambd=float(domain_lambda))
+        label_loss = criterion(logits, y)
+        domain_loss = domain_criterion(domain_logits, domains)
+        loss = label_loss + float(domain_lambda) * domain_loss
+        loss.backward()
+        if grad_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+        optimizer.step()
+
+        n = int(y.numel())
+        total_loss += float(loss.detach().item()) * n
+        total_label_loss += float(label_loss.detach().item()) * n
+        total_domain_loss += float(domain_loss.detach().item()) * n
+        total_correct += int((logits.detach().argmax(dim=1) == y).sum().item())
+        total_domain_correct += int((domain_logits.detach().argmax(dim=1) == domains).sum().item())
+        total_seen += n
+
+    if total_seen == 0:
+        raise ValueError("DANN training loader produced no examples")
+    return {
+        "loss": total_loss / total_seen,
+        "label_loss": total_label_loss / total_seen,
+        "domain_loss": total_domain_loss / total_seen,
+        "accuracy": total_correct / total_seen,
+        "domain_accuracy": total_domain_correct / total_seen,
+        "n": total_seen,
+    }
 
 
 def evaluate_classifier(
@@ -381,6 +450,198 @@ def fit_classifier(
             )
 
         if stopped_early:
+            break
+
+    if best_state is not None and config.restore_best:
+        model.load_state_dict(best_state)
+    if best_epoch == 0:
+        best_epoch = history[-1].epoch
+        best_metric = monitored_value(history[-1], "val_loss" if val_loader is not None else "train_loss") or history[-1].train_loss
+        best_state = clone_state_dict(model)
+
+    if checkpoint_path_obj is not None:
+        save_training_checkpoint(
+            checkpoint_path_obj,
+            model=model,
+            optimizer=optimizer,
+            config=config,
+            epoch=history[-1].epoch,
+            history=history,
+            best_epoch=best_epoch,
+            best_metric=best_metric,
+            best_state_dict=best_state,
+            stale_epochs=stale_epochs,
+            stopped_early=stopped_early,
+            status="completed",
+            resume_context=resume_context,
+        )
+
+    return TrainResult(
+        tuple(history),
+        best_epoch,
+        best_metric,
+        stopped_early,
+        best_state,
+        resumed_from_checkpoint=resumed_from_checkpoint,
+        checkpoint_path=str(checkpoint_path_obj) if checkpoint_path_obj is not None else None,
+        checkpoint_epoch=history[-1].epoch,
+    )
+
+
+def fit_domain_adversarial_classifier(
+    model: nn.Module,
+    train_loader: Iterable[Any],
+    *,
+    val_loader: Iterable[Any] | None = None,
+    config: ClassifierTrainConfig | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    criterion: nn.Module | None = None,
+    domain_criterion: nn.Module | None = None,
+    domain_lambda: float = 0.1,
+    checkpoint_path: Path | str | None = None,
+    resume: bool = True,
+    resume_context: Mapping[str, Any] | None = None,
+    epoch_callback: Callable[[EpochMetrics], None] | None = None,
+) -> TrainResult:
+    config = config or ClassifierTrainConfig()
+    if config.epochs <= 0:
+        raise ValueError("epochs must be positive")
+    if domain_lambda <= 0:
+        raise ValueError("domain_lambda must be positive")
+    if config.grad_clip_norm is not None and config.grad_clip_norm <= 0:
+        raise ValueError("grad_clip_norm must be positive")
+
+    device = torch.device(config.device)
+    model.to(device)
+    criterion = criterion or nn.CrossEntropyLoss()
+    domain_criterion = domain_criterion or nn.CrossEntropyLoss()
+    optimizer = optimizer or build_optimizer(model.parameters(), config.optimizer)
+
+    history: list[EpochMetrics] = []
+    best_state: dict[str, torch.Tensor] | None = None
+    best_epoch = 0
+    best_metric = float("inf")
+    stopped_early = False
+    stale_epochs = 0
+    start_epoch = 1
+    resumed_from_checkpoint = False
+    checkpoint_path_obj = Path(checkpoint_path) if checkpoint_path is not None else None
+
+    monitor = config.early_stopping or EarlyStoppingConfig(monitor="val_loss" if val_loader is not None else "train_loss")
+    if config.early_stopping is not None and val_loader is None and monitor.monitor in {"val_loss", "val_accuracy"}:
+        raise ValueError(f"early_stopping monitor {monitor.monitor} requires val_loader")
+
+    def initialize_fresh_training() -> None:
+        set_torch_seed(config.seed)
+        if config.seed is not None and config.reset_parameters_after_seed:
+            reset_model_parameters(model)
+        model.to(device)
+
+    if resume and checkpoint_path_obj is not None and checkpoint_path_obj.exists():
+        try:
+            checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config, resume_context=resume_context)
+        except TrainingCheckpointMismatch:
+            initialize_fresh_training()
+        else:
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            move_optimizer_state_to_device(optimizer, device)
+            restore_rng_state(checkpoint)
+            history = [epoch_metrics_from_dict(row) for row in checkpoint.get("history", [])]
+            best_state = checkpoint.get("best_state_dict")
+            best_epoch = int(checkpoint.get("best_epoch", 0))
+            best_metric = float(checkpoint.get("best_metric", float("inf")))
+            stopped_early = bool(checkpoint.get("stopped_early", False))
+            stale_epochs = int(checkpoint.get("stale_epochs", 0))
+            last_epoch = int(checkpoint.get("epoch", 0))
+            start_epoch = last_epoch + 1
+            resumed_from_checkpoint = True
+            if stopped_early or last_epoch >= config.epochs:
+                if best_state is not None and config.restore_best:
+                    model.load_state_dict(best_state)
+                save_training_checkpoint(
+                    checkpoint_path_obj,
+                    model=model,
+                    optimizer=optimizer,
+                    config=config,
+                    epoch=last_epoch,
+                    history=history,
+                    best_epoch=best_epoch,
+                    best_metric=best_metric,
+                    best_state_dict=best_state,
+                    stale_epochs=stale_epochs,
+                    stopped_early=stopped_early,
+                    status="completed",
+                    resume_context=resume_context,
+                )
+                return TrainResult(
+                    tuple(history),
+                    best_epoch,
+                    best_metric,
+                    stopped_early,
+                    best_state,
+                    resumed_from_checkpoint=True,
+                    checkpoint_path=str(checkpoint_path_obj),
+                    checkpoint_epoch=last_epoch,
+                )
+    else:
+        initialize_fresh_training()
+
+    for epoch in range(start_epoch, config.epochs + 1):
+        train_metrics = train_one_domain_adversarial_epoch(
+            model,
+            train_loader,
+            optimizer=optimizer,
+            criterion=criterion,
+            domain_criterion=domain_criterion,
+            device=device,
+            domain_lambda=domain_lambda,
+            grad_clip_norm=config.grad_clip_norm,
+        )
+        val_metrics = evaluate_classifier(model, val_loader, criterion=criterion, device=device) if val_loader is not None else None
+        epoch_metrics = EpochMetrics(
+            epoch=epoch,
+            train_loss=float(train_metrics["loss"]),
+            train_accuracy=float(train_metrics["accuracy"]),
+            n_train=int(train_metrics["n"]),
+            val_loss=float(val_metrics["loss"]) if val_metrics else None,
+            val_accuracy=float(val_metrics["accuracy"]) if val_metrics else None,
+            n_val=int(val_metrics["n"]) if val_metrics else 0,
+        )
+        history.append(epoch_metrics)
+        if epoch_callback is not None:
+            epoch_callback(epoch_metrics)
+
+        metric = monitored_value(epoch_metrics, monitor.monitor)
+        if metric is None:
+            raise ValueError(f"early_stopping monitor {monitor.monitor} is unavailable for this training run")
+        if is_improvement(metric, best_metric, mode=monitor.mode, min_delta=monitor.min_delta):
+            best_metric = metric
+            best_epoch = epoch
+            best_state = clone_state_dict(model)
+            stale_epochs = 0
+        else:
+            stale_epochs += 1
+
+        if checkpoint_path_obj is not None:
+            save_training_checkpoint(
+                checkpoint_path_obj,
+                model=model,
+                optimizer=optimizer,
+                config=config,
+                epoch=epoch,
+                history=history,
+                best_epoch=best_epoch,
+                best_metric=best_metric,
+                best_state_dict=best_state,
+                stale_epochs=stale_epochs,
+                stopped_early=stopped_early,
+                status="running",
+                resume_context=resume_context,
+            )
+
+        if config.early_stopping is not None and stale_epochs > 0 and stale_epochs >= monitor.patience:
+            stopped_early = True
             break
 
     if best_state is not None and config.restore_best:
