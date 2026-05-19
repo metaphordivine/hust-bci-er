@@ -796,6 +796,10 @@ def fit_domain_coral_classifier(
     model.to(device)
     criterion = criterion or nn.CrossEntropyLoss()
     optimizer = optimizer or build_optimizer(model.parameters(), config.optimizer)
+    checkpoint_resume_context = training_objective_resume_context(
+        resume_context,
+        {"name": "coral", "alignment_lambda": float(alignment_lambda)},
+    )
 
     history: list[EpochMetrics] = []
     best_state: dict[str, torch.Tensor] | None = None
@@ -819,7 +823,7 @@ def fit_domain_coral_classifier(
 
     if resume and checkpoint_path_obj is not None and checkpoint_path_obj.exists():
         try:
-            checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config, resume_context=resume_context)
+            checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config, resume_context=checkpoint_resume_context)
         except TrainingCheckpointMismatch:
             initialize_fresh_training()
         else:
@@ -852,7 +856,7 @@ def fit_domain_coral_classifier(
                     stale_epochs=stale_epochs,
                     stopped_early=stopped_early,
                     status="completed",
-                    resume_context=resume_context,
+                    resume_context=checkpoint_resume_context,
                 )
                 return TrainResult(
                     tuple(history),
@@ -919,7 +923,7 @@ def fit_domain_coral_classifier(
                 stale_epochs=stale_epochs,
                 stopped_early=stopped_early,
                 status="running",
-                resume_context=resume_context,
+                resume_context=checkpoint_resume_context,
             )
 
         if stopped_early:
@@ -946,7 +950,7 @@ def fit_domain_coral_classifier(
             stale_epochs=stale_epochs,
             stopped_early=stopped_early,
             status="completed",
-            resume_context=resume_context,
+            resume_context=checkpoint_resume_context,
         )
 
     return TrainResult(

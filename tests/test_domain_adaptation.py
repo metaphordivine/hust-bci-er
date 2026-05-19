@@ -116,6 +116,37 @@ def test_fit_domain_adversarial_classifier_writes_resume_checkpoint(tmp_path):
     assert checkpoint_path.exists()
 
 
+def test_coral_checkpoint_rejects_alignment_lambda_change(tmp_path):
+    loader = DataLoader(DomainDataset(), batch_size=6, shuffle=False)
+    checkpoint_path = tmp_path / "coral_lambda_signature.pt"
+    config = ClassifierTrainConfig(
+        epochs=1,
+        seed=None,
+        optimizer=OptimizerConfig(name="sgd", lr=0.02, momentum=0.0),
+        early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=5),
+    )
+
+    fit_domain_coral_classifier(
+        TinyFeatureClassifier(),
+        loader,
+        config=config,
+        alignment_lambda=0.03,
+        checkpoint_path=checkpoint_path,
+    )
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert payload["resume_context_signature"]["training_objective"]["alignment_lambda"] == pytest.approx(0.03)
+
+    result = fit_domain_coral_classifier(
+        TinyFeatureClassifier(),
+        loader,
+        config=config,
+        alignment_lambda=0.3,
+        checkpoint_path=checkpoint_path,
+    )
+
+    assert result.resumed_from_checkpoint is False
+
+
 def test_domain_adversarial_checkpoint_rejects_domain_lambda_change(tmp_path):
     loader = DataLoader(DomainDataset(), batch_size=6, shuffle=False)
     checkpoint_path = tmp_path / "dann_lambda_signature.pt"
