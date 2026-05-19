@@ -112,6 +112,7 @@ ADAPTATION = {
     "adabn",
     "dann",
     "coral",
+    "masked_consistency",
 }
 
 EVALUATION_PROTOCOLS = {

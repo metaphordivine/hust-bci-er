@@ -1081,6 +1081,7 @@ def run_real_classifier_route(
         TrainResult,
         fit_domain_coral_classifier,
         fit_domain_adversarial_classifier,
+        fit_masked_consistency_classifier,
         fit_classifier,
         set_torch_seed,
     )
@@ -1304,6 +1305,8 @@ def run_real_classifier_route(
     dann_lambda = 0.1
     coral_domain_key = "cohort"
     coral_lambda = 0.05
+    masked_consistency_lambda = 0.05
+    masked_consistency_width_samples = max(1, int(round(0.4 * SFREQ)))
     if adaptation_name == "dann":
         from hust_bci_er.adaptation.dann import DomainAdversarialClassifier
 
@@ -1345,6 +1348,33 @@ def run_real_classifier_route(
             features = model.extract_features(dummy)
         if features.ndim != 2:
             raise ValueError("CORAL base model extract_features must return [batch, features]")
+    elif adaptation_name == "masked_consistency":
+        if not isinstance(adaptation_config, Mapping):
+            adaptation_config = {"name": "masked_consistency"}
+        masked_consistency_lambda = float(
+            adaptation_config.get("lambda", adaptation_config.get("consistency_lambda", 0.05))
+        )
+        if "max_mask_width_sec" in adaptation_config:
+            max_width_sec = float(adaptation_config["max_mask_width_sec"])
+            if max_width_sec <= 0:
+                raise ValueError("masked_consistency.max_mask_width_sec must be positive")
+            masked_consistency_width_samples = max(1, int(round(max_width_sec * SFREQ)))
+        elif "mask_ratio" in adaptation_config:
+            mask_ratio = float(adaptation_config["mask_ratio"])
+            if not 0.0 < mask_ratio <= 1.0:
+                raise ValueError("masked_consistency.mask_ratio must be in (0, 1]")
+            masked_consistency_width_samples = max(1, int(round(mask_ratio * n_times)))
+        if masked_consistency_width_samples > n_times:
+            raise ValueError("masked_consistency mask width must not exceed input window length")
+        if not hasattr(model, "extract_features") or not hasattr(model, "classifier"):
+            raise ValueError("masked consistency requires a model with extract_features() and classifier")
+        model.to(device_str)
+        model.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, 30, n_times, device=device_str)
+            features = model.extract_features(dummy)
+        if features.ndim != 2:
+            raise ValueError("masked consistency base model extract_features must return [batch, features]")
     elif adaptation_name == "adabn":
         raise ValueError("AdaBN adaptation is registered but not implemented by the torch route adapter")
     elif adaptation_name != "none":
@@ -1490,6 +1520,19 @@ def run_real_classifier_route(
                 resume=True,
                 resume_context=training_resume_context,
                 alignment_lambda=coral_lambda,
+                epoch_callback=_log_epoch,
+            )
+        elif adaptation_name == "masked_consistency":
+            result = fit_masked_consistency_classifier(
+                model,
+                train_loader,
+                val_loader=val_loader,
+                config=train_config,
+                checkpoint_path=training_resume_checkpoint_path,
+                resume=True,
+                resume_context=training_resume_context,
+                consistency_lambda=masked_consistency_lambda,
+                max_mask_width_samples=masked_consistency_width_samples,
                 epoch_callback=_log_epoch,
             )
         else:

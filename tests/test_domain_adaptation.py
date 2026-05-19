@@ -15,6 +15,9 @@ from hust_bci_er.training.classifier import (
     coral_alignment_loss,
     fit_domain_coral_classifier,
     fit_domain_adversarial_classifier,
+    fit_masked_consistency_classifier,
+    masked_feature_consistency_loss,
+    masked_time_batch,
     train_one_domain_adversarial_epoch,
 )
 
@@ -230,6 +233,40 @@ def test_coral_alignment_loss_and_training_checkpoint(tmp_path):
         alignment_lambda=0.05,
         checkpoint_path=checkpoint_path,
         resume_context={"route_id": "tiny_coral"},
+    )
+
+    assert len(result.history) == 2
+    assert checkpoint_path.exists()
+
+
+def test_masked_consistency_loss_and_training_checkpoint(tmp_path):
+    x = torch.ones(3, 2, 8)
+    masked = masked_time_batch(x, max_mask_width_samples=2)
+    assert tuple(masked.shape) == tuple(x.shape)
+    assert torch.any(masked != x)
+
+    reference = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+    same = reference.clone()
+    shifted = torch.tensor([[0.0, 1.0], [1.0, 0.0]])
+    assert float(masked_feature_consistency_loss(reference, same)) == pytest.approx(0.0)
+    assert float(masked_feature_consistency_loss(reference, shifted)) > 0.0
+
+    model = TinyFeatureClassifier()
+    loader = DataLoader(DomainDataset(), batch_size=6, shuffle=False)
+    checkpoint_path = tmp_path / "masked_consistency_checkpoint.pt"
+    result = fit_masked_consistency_classifier(
+        model,
+        loader,
+        config=ClassifierTrainConfig(
+            epochs=2,
+            seed=None,
+            optimizer=OptimizerConfig(name="sgd", lr=0.02, momentum=0.0),
+            early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=5),
+        ),
+        consistency_lambda=0.05,
+        max_mask_width_samples=1,
+        checkpoint_path=checkpoint_path,
+        resume_context={"route_id": "tiny_masked_consistency"},
     )
 
     assert len(result.history) == 2
