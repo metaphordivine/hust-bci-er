@@ -114,6 +114,37 @@ def test_fit_domain_adversarial_classifier_writes_resume_checkpoint(tmp_path):
     assert checkpoint_path.exists()
 
 
+def test_domain_adversarial_checkpoint_rejects_domain_lambda_change(tmp_path):
+    loader = DataLoader(DomainDataset(), batch_size=6, shuffle=False)
+    checkpoint_path = tmp_path / "dann_lambda_signature.pt"
+    config = ClassifierTrainConfig(
+        epochs=1,
+        seed=None,
+        optimizer=OptimizerConfig(name="sgd", lr=0.02, momentum=0.0),
+        early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=5),
+    )
+
+    fit_domain_adversarial_classifier(
+        DomainAdversarialClassifier(TinyFeatureClassifier(), feature_dim=6, domain_hidden_dim=4),
+        loader,
+        config=config,
+        domain_lambda=0.05,
+        checkpoint_path=checkpoint_path,
+    )
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert payload["resume_context_signature"]["training_objective"]["domain_lambda"] == pytest.approx(0.05)
+
+    result = fit_domain_adversarial_classifier(
+        DomainAdversarialClassifier(TinyFeatureClassifier(), feature_dim=6, domain_hidden_dim=4),
+        loader,
+        config=config,
+        domain_lambda=1.0,
+        checkpoint_path=checkpoint_path,
+    )
+
+    assert result.resumed_from_checkpoint is False
+
+
 def test_domain_adversarial_checkpoint_records_early_stop_before_resume(tmp_path):
     model = DomainAdversarialClassifier(TinyFeatureClassifier(), feature_dim=6, domain_hidden_dim=4)
     loader = DataLoader(DomainDataset(), batch_size=6, shuffle=False)

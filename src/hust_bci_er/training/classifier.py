@@ -516,6 +516,14 @@ def fit_domain_adversarial_classifier(
     criterion = criterion or nn.CrossEntropyLoss()
     domain_criterion = domain_criterion or nn.CrossEntropyLoss()
     optimizer = optimizer or build_optimizer(model.parameters(), config.optimizer)
+    checkpoint_resume_context = training_objective_resume_context(
+        resume_context,
+        {
+            "name": "dann",
+            "domain_lambda": float(domain_lambda),
+            "domain_criterion": repr(domain_criterion),
+        },
+    )
 
     history: list[EpochMetrics] = []
     best_state: dict[str, torch.Tensor] | None = None
@@ -539,7 +547,7 @@ def fit_domain_adversarial_classifier(
 
     if resume and checkpoint_path_obj is not None and checkpoint_path_obj.exists():
         try:
-            checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config, resume_context=resume_context)
+            checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config, resume_context=checkpoint_resume_context)
         except TrainingCheckpointMismatch:
             initialize_fresh_training()
         else:
@@ -572,7 +580,7 @@ def fit_domain_adversarial_classifier(
                     stale_epochs=stale_epochs,
                     stopped_early=stopped_early,
                     status="completed",
-                    resume_context=resume_context,
+                    resume_context=checkpoint_resume_context,
                 )
                 return TrainResult(
                     tuple(history),
@@ -640,7 +648,7 @@ def fit_domain_adversarial_classifier(
                 stale_epochs=stale_epochs,
                 stopped_early=stopped_early,
                 status="running",
-                resume_context=resume_context,
+                resume_context=checkpoint_resume_context,
             )
 
         if stopped_early:
@@ -667,7 +675,7 @@ def fit_domain_adversarial_classifier(
             stale_epochs=stale_epochs,
             stopped_early=stopped_early,
             status="completed",
-            resume_context=resume_context,
+            resume_context=checkpoint_resume_context,
         )
 
     return TrainResult(
@@ -763,6 +771,16 @@ def resume_context_signature(context: Mapping[str, Any] | None) -> dict[str, Any
     if context is None:
         return None
     return _canonical_resume_context(context)
+
+
+def training_objective_resume_context(
+    resume_context: Mapping[str, Any] | None,
+    objective: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "resume_context": _canonical_resume_context(resume_context),
+        "training_objective": _canonical_resume_context(objective),
+    }
 
 
 def _canonical_resume_context(value: Any) -> Any:
