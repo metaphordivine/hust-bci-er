@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,17 @@ class RouteEvidence:
     protocol_means: dict[str, float] = field(default_factory=dict)
     protocol_jobs: dict[str, int] = field(default_factory=dict)
     protocol_sources: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProtocolBoardRow:
+    route_id: str
+    protocol: str
+    mean: float
+    n_jobs: int
+    path: Path
+    audit_status: str
+    audit_mtime_ns: int
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -117,25 +128,81 @@ def _protocol_from_board(path: Path) -> str:
     return "PX"
 
 
-def merge_protocol_boards(evidence: dict[str, RouteEvidence], board_paths: list[Path]) -> None:
-    for path in board_paths:
-        if not path.exists():
+def _audit_path_for_board(path: Path) -> Path:
+    return path.with_name(path.name.replace("_board.csv", "_audit.json"))
+
+
+def _board_audit(path: Path) -> tuple[str, int]:
+    audit_path = _audit_path_for_board(path)
+    if not audit_path.exists():
+        return "", 0
+    try:
+        data = json.loads(audit_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return "INVALID", audit_path.stat().st_mtime_ns
+    if not isinstance(data, dict):
+        return "INVALID", audit_path.stat().st_mtime_ns
+    return str(data.get("status") or ""), audit_path.stat().st_mtime_ns
+
+
+def _read_protocol_board_rows(path: Path, *, require_complete_audit: bool) -> list[ProtocolBoardRow]:
+    if not path.exists():
+        return []
+    status, audit_mtime_ns = _board_audit(path)
+    if require_complete_audit and status != "COMPLETE":
+        return []
+    if status and status != "COMPLETE":
+        return []
+    protocol = _protocol_from_board(path)
+    rows: list[ProtocolBoardRow] = []
+    with path.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            route_id = str(row.get("route_id") or "").strip()
+            mean = _parse_float(row.get("mean"))
+            if not route_id or mean is None:
+                continue
+            try:
+                n_jobs = int(float(row.get("n_jobs") or 0))
+            except ValueError:
+                n_jobs = 0
+            rows.append(
+                ProtocolBoardRow(
+                    route_id=route_id,
+                    protocol=protocol,
+                    mean=mean,
+                    n_jobs=n_jobs,
+                    path=path,
+                    audit_status=status,
+                    audit_mtime_ns=audit_mtime_ns or path.stat().st_mtime_ns,
+                )
+            )
+    return rows
+
+
+def _select_protocol_board_rows(rows: list[ProtocolBoardRow]) -> list[ProtocolBoardRow]:
+    selected: dict[tuple[str, str], ProtocolBoardRow] = {}
+    for row in rows:
+        key = (row.route_id, row.protocol)
+        current = selected.get(key)
+        if current is None:
+            selected[key] = row
             continue
-        protocol = _protocol_from_board(path)
-        with path.open(newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                route_id = str(row.get("route_id") or "").strip()
-                if not route_id:
-                    continue
-                item = evidence.setdefault(route_id, RouteEvidence(route_id=route_id))
-                mean = _parse_float(row.get("mean"))
-                if mean is not None:
-                    item.protocol_means[protocol] = mean
-                    item.protocol_sources[protocol] = "protocol_board"
-                try:
-                    item.protocol_jobs[protocol] = int(float(row.get("n_jobs") or 0))
-                except ValueError:
-                    pass
+        row_rank = (row.audit_mtime_ns, row.path.as_posix())
+        current_rank = (current.audit_mtime_ns, current.path.as_posix())
+        if row_rank > current_rank:
+            selected[key] = row
+    return list(selected.values())
+
+
+def merge_protocol_boards(evidence: dict[str, RouteEvidence], board_paths: list[Path], *, require_complete_audit: bool) -> None:
+    rows: list[ProtocolBoardRow] = []
+    for path in board_paths:
+        rows.extend(_read_protocol_board_rows(path, require_complete_audit=require_complete_audit))
+    for row in _select_protocol_board_rows(rows):
+        item = evidence.setdefault(row.route_id, RouteEvidence(route_id=row.route_id))
+        item.protocol_means[row.protocol] = row.mean
+        item.protocol_sources[row.protocol] = "protocol_board"
+        item.protocol_jobs[row.protocol] = row.n_jobs
 
 
 def find_protocol_boards(run_roots: list[Path]) -> list[Path]:
@@ -144,6 +211,17 @@ def find_protocol_boards(run_roots: list[Path]) -> list[Path]:
         if root.exists():
             paths.extend(sorted(root.rglob("protocol*_board.csv")))
     return paths
+
+
+def default_board_dir() -> Path:
+    return ROOT / "reports" / "model_deep_dive" / "lightweight_existing_eval_boards"
+
+
+def default_protocol_boards() -> list[Path]:
+    default_dir = default_board_dir()
+    if not default_dir.exists():
+        return []
+    return sorted(default_dir.glob("protocol*_board.csv"))
 
 
 def ranked(evidence: dict[str, RouteEvidence], protocol: str) -> list[RouteEvidence]:
@@ -183,7 +261,7 @@ def render_markdown(evidence: dict[str, RouteEvidence], *, top_k: int) -> str:
     lines = [
         "# Lightweight Existing Evidence Evaluation",
         "",
-        "This report is generated from committed route summaries and existing protocol summary CSVs. It does not read raw EEG data, train models, or promote routes.",
+        "This report is generated from committed route summaries, committed compact protocol board snapshots, and explicitly provided COMPLETE protocol boards. It does not read raw EEG data, train models, or promote routes.",
         "",
         "## Coverage",
         "",
@@ -244,10 +322,13 @@ def build_report(
     run_roots: list[Path],
     board_paths: list[Path],
     top_k: int,
+    include_default_boards: bool = True,
 ) -> str:
     evidence = load_route_metadata()
     merge_route_summaries(evidence, summary_dir)
-    merge_protocol_boards(evidence, board_paths + find_protocol_boards(run_roots))
+    committed_boards = default_protocol_boards() if include_default_boards else []
+    merge_protocol_boards(evidence, committed_boards + board_paths, require_complete_audit=False)
+    merge_protocol_boards(evidence, find_protocol_boards(run_roots), require_complete_audit=True)
     return render_markdown(evidence, top_k=top_k)
 
 
@@ -256,11 +337,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--summary-dir", type=Path, default=ROOT / "reports" / "route_summaries")
     parser.add_argument("--run-root", type=Path, action="append", default=[])
     parser.add_argument("--board", type=Path, action="append", default=[])
+    parser.add_argument("--no-default-boards", action="store_true", help="Ignore committed compact board snapshots and use only summaries/explicit inputs.")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
 
-    text = build_report(summary_dir=args.summary_dir, run_roots=args.run_root, board_paths=args.board, top_k=args.top_k)
+    text = build_report(
+        summary_dir=args.summary_dir,
+        run_roots=args.run_root,
+        board_paths=args.board,
+        top_k=args.top_k,
+        include_default_boards=not args.no_default_boards,
+    )
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text, encoding="utf-8")

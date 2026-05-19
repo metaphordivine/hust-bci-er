@@ -1,0 +1,8 @@
+route_id,n_jobs,mean,std,min,max
+sliding_ea_fbstcnet_m_conn_w8_s0p5,5,0.6578,,,
+sliding_ea_fbstcnet_m_conn_w6_s1,5,0.6518,,,
+sliding_ea_cbramod_pretrained_w3p2_s1p7,5,0.6408,,,
+sliding_ea_dgcnn_w6_s1,5,0.6369,,,
+sliding_pure_deformer_lite_w6_s1,5,0.6249,,,
+sliding_ea_fbstcnet_m_conn_w4_s1p5,5,0.6248,,,
+tuned_sliding_window_cbramod,5,0.5629,,,

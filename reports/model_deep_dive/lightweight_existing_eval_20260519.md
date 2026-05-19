@@ -1,6 +1,6 @@
 # Lightweight Existing Evidence Evaluation
 
-This report is generated from committed route summaries and existing protocol summary CSVs. It does not read raw EEG data, train models, or promote routes.
+This report is generated from committed route summaries, committed compact protocol board snapshots, and explicitly provided COMPLETE protocol boards. It does not read raw EEG data, train models, or promote routes.
 
 ## Coverage
 
