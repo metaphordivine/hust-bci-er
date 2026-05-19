@@ -40,7 +40,7 @@ training:
   trainer: torch_classifier
   job_adapter: torch_classifier
   epochs: 80
-  batch_size: 8
+  batch_size: 32
   optimizer:
     name: adamw
     lr: 0.00005
@@ -58,4 +58,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "Official CBraMod pretrained checkpoint finetune route. Uses 3.2 s windows so each input is four 200-point patches, matching the upstream quick-start patch count while preserving five sliding crops over 10 s."
+notes: "Official CBraMod pretrained checkpoint finetune route. Uses 3.2 s windows so each input is four 200-point patches, matching the upstream quick-start patch count while preserving five sliding crops over 10 s. Batch size 32 is intended for 24GB remote GPU finetuning."
