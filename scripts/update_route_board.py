@@ -16,6 +16,8 @@ from hust_bci_er.audit.promotion import parse_key_value_markdown  # noqa: E402
 BOARD_PATH = ROOT / "reports" / "route_board.md"
 REGISTRY_PATH = ROOT / "reports" / "route_registry.yaml"
 SUMMARY_REQUIRED_STATUSES = {"CANDIDATE", "PROMOTED", "REJECTED", "ARCHIVED"}
+PENDING_AUDIT_PREFIXES = ("PENDING",)
+PLACEHOLDER_TOKENS = ("placeholder", "pending remote", "pending real", "temporary")
 
 
 def route_files() -> list[Path]:
@@ -71,6 +73,17 @@ def job_adapter(training: Any) -> str:
     return ""
 
 
+def is_placeholder_summary(fields: dict[str, str]) -> bool:
+    audit_decision = str(fields.get("audit_decision", "")).upper()
+    if audit_decision.startswith(PENDING_AUDIT_PREFIXES):
+        return True
+    metric_value = str(fields.get("primary_metric_value", "")).strip().upper()
+    if metric_value in {"TBD", "PENDING"}:
+        return True
+    notes = " ".join(str(fields.get(key, "")) for key in ("risk notes", "decision", "completed_jobs")).lower()
+    return any(token in notes for token in PLACEHOLDER_TOKENS)
+
+
 def generate_board() -> str:
     registry = route_registry()
     lines = [
@@ -97,12 +110,12 @@ def generate_board() -> str:
         registry_entry = registry.get(route_id, {})
         owner = str(registry_entry.get("owner") or "")
         if summary.exists():
-            summary_state = "present"
+            summary_state = "pending_placeholder" if is_placeholder_summary(fields) else "present"
         elif status in SUMMARY_REQUIRED_STATUSES:
             summary_state = "missing_required"
         else:
             summary_state = "not_required"
-        latest_gate = fields.get("gate", "")
+        latest_gate = "" if summary_state == "pending_placeholder" else fields.get("gate", "")
         blocker = fields.get("risk notes", "") or str(registry_entry.get("blocker") or "")
         lines.append(f"| `{route_id}` | {owner} | {status} | {latest_gate} | `{metric}` | `{dataset}` | `{split}` | `{model}` | `{adapter_name}` | `{protocol}` | {summary_state} | {blocker} |")
     return "\n".join(lines) + "\n"

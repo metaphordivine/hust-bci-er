@@ -116,18 +116,31 @@ def run_route_candidate(
     return result
 
 
-def _load_existing_results(summary_path: Path) -> dict[str, dict[str, Any]]:
+def _load_existing_summary(summary_path: Path) -> dict[str, Any]:
     if not summary_path.exists():
         return {}
     try:
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_existing_results(summary_path: Path) -> dict[str, dict[str, Any]]:
+    summary = _load_existing_summary(summary_path)
     out: dict[str, dict[str, Any]] = {}
     for result in summary.get("results", []):
         if isinstance(result, dict) and result.get("route_id"):
             out[str(result["route_id"])] = result
     return out
+
+
+def _resume_metadata_mismatches(summary: dict[str, Any], expected: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        key: {"expected": value, "actual": summary.get(key)}
+        for key, value in expected.items()
+        if summary.get(key) != value
+    }
 
 
 def _display_path(path: Path) -> str:
@@ -185,7 +198,18 @@ def main(argv: list[str] | None = None) -> int:
     output_base = args.output_dir
     summary_path = output_base / "candidate_summary.json"
     output_base.mkdir(parents=True, exist_ok=True)
-    existing_results = _load_existing_results(summary_path) if not args.no_resume else {}
+    resume_metadata = {
+        "seeds": list(args.seeds),
+        "n_folds": args.n_folds,
+        "device": args.device,
+        "data_root": str(args.data_root),
+    }
+    existing_summary = _load_existing_summary(summary_path) if not args.no_resume else {}
+    resume_mismatches = _resume_metadata_mismatches(existing_summary, resume_metadata) if existing_summary else {}
+    if resume_mismatches:
+        keys = ", ".join(sorted(resume_mismatches))
+        print(f"Existing candidate summary metadata mismatch ({keys}); rerunning matching routes.")
+    existing_results = _load_existing_results(summary_path) if existing_summary and not resume_mismatches else {}
 
     results: list[dict[str, Any]] = []
     passed = 0
@@ -226,6 +250,9 @@ def main(argv: list[str] | None = None) -> int:
             n_folds=args.n_folds,
             output_dir=output_base,
         )
+        if resume_mismatches:
+            result["resume_status"] = "RERUN_METADATA_MISMATCH"
+            result["resume_mismatches"] = resume_mismatches
         results.append(result)
         if result["passed"]:
             passed += 1
