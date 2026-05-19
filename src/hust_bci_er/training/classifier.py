@@ -246,7 +246,7 @@ def train_one_domain_adversarial_epoch(
         domain_logits = model.domain_logits_from_features(features, lambd=float(domain_lambda))
         label_loss = criterion(logits, y)
         domain_loss = domain_criterion(domain_logits, domains)
-        loss = label_loss + float(domain_lambda) * domain_loss
+        loss = label_loss + domain_loss
         loss.backward()
         if grad_clip_norm is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)

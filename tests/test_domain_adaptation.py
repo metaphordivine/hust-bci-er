@@ -13,6 +13,7 @@ from hust_bci_er.training.classifier import (
     EarlyStoppingConfig,
     OptimizerConfig,
     fit_domain_adversarial_classifier,
+    train_one_domain_adversarial_epoch,
 )
 
 
@@ -43,6 +44,23 @@ class DomainDataset(torch.utils.data.Dataset):
         return {"features": self.x[idx], "target": self.y[idx], "domain": self.domain[idx]}
 
 
+class FixedDomainAdversarialModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.anchor = nn.Parameter(torch.zeros(()))
+        self.seen_lambdas: list[float] = []
+
+    def extract_features(self, x):
+        return torch.ones(x.shape[0], 2, device=x.device) + self.anchor * 0
+
+    def label_logits_from_features(self, features):
+        return torch.zeros(features.shape[0], 2, device=features.device) + self.anchor * 0
+
+    def domain_logits_from_features(self, features, lambd: float = 1.0):
+        self.seen_lambdas.append(float(lambd))
+        return torch.zeros(features.shape[0], 2, device=features.device) + self.anchor * 0
+
+
 def test_domain_adversarial_classifier_shapes():
     model = DomainAdversarialClassifier(TinyFeatureClassifier(), feature_dim=6, domain_hidden_dim=4)
     x = torch.randn(3, 2, 2)
@@ -50,6 +68,27 @@ def test_domain_adversarial_classifier_shapes():
 
     assert tuple(model(x).shape) == (3, 2)
     assert tuple(model.domain_logits_from_features(features, lambd=0.5).shape) == (3, 2)
+
+
+def test_domain_lambda_is_applied_once_through_grl():
+    model = FixedDomainAdversarialModel()
+    batch = {
+        "features": torch.zeros(2, 2, 2),
+        "target": torch.tensor([0, 1]),
+        "domain": torch.tensor([0, 1]),
+    }
+
+    metrics = train_one_domain_adversarial_epoch(
+        model,
+        [batch],
+        optimizer=torch.optim.SGD(model.parameters(), lr=0.01),
+        criterion=nn.CrossEntropyLoss(),
+        domain_criterion=nn.CrossEntropyLoss(),
+        domain_lambda=0.05,
+    )
+
+    assert model.seen_lambdas == [pytest.approx(0.05)]
+    assert metrics["loss"] == pytest.approx(metrics["label_loss"] + metrics["domain_loss"])
 
 
 def test_fit_domain_adversarial_classifier_writes_resume_checkpoint(tmp_path):
