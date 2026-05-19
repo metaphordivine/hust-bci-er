@@ -271,3 +271,49 @@ def test_masked_consistency_loss_and_training_checkpoint(tmp_path):
 
     assert len(result.history) == 2
     assert checkpoint_path.exists()
+
+
+def test_masked_time_batch_uses_random_width_up_to_max():
+    torch.manual_seed(0)
+    x = torch.ones(16, 1, 12)
+
+    masked = masked_time_batch(x, max_mask_width_samples=4)
+    widths = (masked == 0).sum(dim=-1).flatten()
+
+    assert int(widths.min().item()) >= 1
+    assert int(widths.max().item()) <= 4
+    assert len(set(int(item) for item in widths.tolist())) > 1
+
+
+def test_masked_consistency_checkpoint_rejects_objective_change(tmp_path):
+    loader = DataLoader(DomainDataset(), batch_size=6, shuffle=False)
+    checkpoint_path = tmp_path / "masked_consistency_signature.pt"
+    config = ClassifierTrainConfig(
+        epochs=1,
+        seed=None,
+        optimizer=OptimizerConfig(name="sgd", lr=0.02, momentum=0.0),
+        early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=5),
+    )
+
+    fit_masked_consistency_classifier(
+        TinyFeatureClassifier(),
+        loader,
+        config=config,
+        consistency_lambda=0.05,
+        max_mask_width_samples=2,
+        checkpoint_path=checkpoint_path,
+    )
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert payload["resume_context_signature"]["training_objective"]["consistency_lambda"] == pytest.approx(0.05)
+    assert payload["resume_context_signature"]["training_objective"]["max_mask_width_samples"] == 2
+
+    result = fit_masked_consistency_classifier(
+        TinyFeatureClassifier(),
+        loader,
+        config=config,
+        consistency_lambda=0.2,
+        max_mask_width_samples=3,
+        checkpoint_path=checkpoint_path,
+    )
+
+    assert result.resumed_from_checkpoint is False

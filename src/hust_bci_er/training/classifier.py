@@ -356,12 +356,14 @@ def masked_time_batch(x: torch.Tensor, *, max_mask_width_samples: int, mask_valu
     n_times = int(x.shape[-1])
     if max_mask_width_samples <= 0:
         raise ValueError("max_mask_width_samples must be positive")
-    width = min(int(max_mask_width_samples), max(1, n_times))
-    max_start = max(1, n_times - width + 1)
-    starts = torch.randint(0, max_start, (int(x.shape[0]),), device=x.device)
+    max_width = min(int(max_mask_width_samples), max(1, n_times))
+    widths = torch.randint(1, max_width + 1, (int(x.shape[0]),), device=x.device)
     masked = x.clone()
-    for row, start in enumerate(starts.tolist()):
-        masked[row, ..., int(start) : int(start) + width] = float(mask_value)
+    for row, width_value in enumerate(widths.tolist()):
+        width = int(width_value)
+        max_start = max(1, n_times - width + 1)
+        start = int(torch.randint(0, max_start, (1,), device=x.device).item())
+        masked[row, ..., start : start + width] = float(mask_value)
     return masked
 
 
@@ -1079,6 +1081,14 @@ def fit_masked_consistency_classifier(
     model.to(device)
     criterion = criterion or nn.CrossEntropyLoss()
     optimizer = optimizer or build_optimizer(model.parameters(), config.optimizer)
+    checkpoint_resume_context = training_objective_resume_context(
+        resume_context,
+        {
+            "name": "masked_consistency",
+            "consistency_lambda": float(consistency_lambda),
+            "max_mask_width_samples": int(max_mask_width_samples),
+        },
+    )
 
     history: list[EpochMetrics] = []
     best_state: dict[str, torch.Tensor] | None = None
@@ -1102,7 +1112,7 @@ def fit_masked_consistency_classifier(
 
     if resume and checkpoint_path_obj is not None and checkpoint_path_obj.exists():
         try:
-            checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config, resume_context=resume_context)
+            checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config, resume_context=checkpoint_resume_context)
         except TrainingCheckpointMismatch:
             initialize_fresh_training()
         else:
@@ -1135,7 +1145,7 @@ def fit_masked_consistency_classifier(
                     stale_epochs=stale_epochs,
                     stopped_early=stopped_early,
                     status="completed",
-                    resume_context=resume_context,
+                    resume_context=checkpoint_resume_context,
                 )
                 return TrainResult(
                     tuple(history),
@@ -1203,7 +1213,7 @@ def fit_masked_consistency_classifier(
                 stale_epochs=stale_epochs,
                 stopped_early=stopped_early,
                 status="running",
-                resume_context=resume_context,
+                resume_context=checkpoint_resume_context,
             )
 
         if stopped_early:
@@ -1230,7 +1240,7 @@ def fit_masked_consistency_classifier(
             stale_epochs=stale_epochs,
             stopped_early=stopped_early,
             status="completed",
-            resume_context=resume_context,
+            resume_context=checkpoint_resume_context,
         )
 
     return TrainResult(
