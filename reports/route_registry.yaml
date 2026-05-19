@@ -163,7 +163,16 @@ routes:
   - route_id: sliding_ea_dgcnn_dann_cohort_w6_s1
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: sliding_ea_dgcnn_dann_lambda010_w6_s1
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: sliding_ea_dgcnn_dann_lambda010_w8_s0p5
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: sliding_ea_dgcnn_coral_cohort_w6_s1
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: sliding_ea_dgcnn_coral_lambda005_w6_s1
     owner: metaphordivine
     blocker: missing_real_candidate_run
   - route_id: sliding_ea_dgcnn_masked_consistency_w6_s1

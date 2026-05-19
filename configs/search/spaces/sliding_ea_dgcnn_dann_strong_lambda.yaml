@@ -1,0 +1,8 @@
+# Concrete P3 candidates for stronger cohort-domain DANN.
+# The previous grid ended at 0.1, and every P3 outer fold selected 0.1.
+
+candidates:
+  - adaptation.lambda: 0.05
+  - adaptation.lambda: 0.1
+  - adaptation.lambda: 0.2
+  - adaptation.lambda: 0.3

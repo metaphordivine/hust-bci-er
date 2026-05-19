@@ -1,0 +1,7 @@
+# Concrete P3 candidates for higher cohort CORAL alignment strength.
+
+candidates:
+  - adaptation.lambda: 0.03
+  - adaptation.lambda: 0.05
+  - adaptation.lambda: 0.1
+  - adaptation.lambda: 0.2
