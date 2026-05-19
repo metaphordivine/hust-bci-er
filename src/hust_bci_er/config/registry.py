@@ -111,6 +111,7 @@ ADAPTATION = {
     "none",
     "adabn",
     "dann",
+    "coral",
 }
 
 EVALUATION_PROTOCOLS = {

@@ -12,6 +12,8 @@ from hust_bci_er.training.classifier import (
     ClassifierTrainConfig,
     EarlyStoppingConfig,
     OptimizerConfig,
+    coral_alignment_loss,
+    fit_domain_coral_classifier,
     fit_domain_adversarial_classifier,
     train_one_domain_adversarial_epoch,
 )
@@ -168,3 +170,36 @@ def test_domain_adversarial_checkpoint_records_early_stop_before_resume(tmp_path
     assert result.stopped_early is True
     assert result.checkpoint_epoch == 2
     assert payload["stopped_early"] is True
+
+
+def test_coral_alignment_loss_and_training_checkpoint(tmp_path):
+    features = torch.tensor(
+        [
+            [1.0, 0.0],
+            [1.2, 0.1],
+            [-1.0, 0.0],
+            [-1.1, -0.2],
+        ]
+    )
+    domains = torch.tensor([0, 0, 1, 1])
+    assert float(coral_alignment_loss(features, domains)) > 0.0
+
+    model = TinyFeatureClassifier()
+    loader = DataLoader(DomainDataset(), batch_size=6, shuffle=False)
+    checkpoint_path = tmp_path / "coral_training_checkpoint.pt"
+    result = fit_domain_coral_classifier(
+        model,
+        loader,
+        config=ClassifierTrainConfig(
+            epochs=2,
+            seed=None,
+            optimizer=OptimizerConfig(name="sgd", lr=0.02, momentum=0.0),
+            early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=5),
+        ),
+        alignment_lambda=0.05,
+        checkpoint_path=checkpoint_path,
+        resume_context={"route_id": "tiny_coral"},
+    )
+
+    assert len(result.history) == 2
+    assert checkpoint_path.exists()

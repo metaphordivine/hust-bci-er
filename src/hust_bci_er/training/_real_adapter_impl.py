@@ -1079,6 +1079,7 @@ def run_real_classifier_route(
         EpochMetrics,
         OptimizerConfig,
         TrainResult,
+        fit_domain_coral_classifier,
         fit_domain_adversarial_classifier,
         fit_classifier,
         set_torch_seed,
@@ -1301,6 +1302,8 @@ def run_real_classifier_route(
     adaptation_name = _adaptation_name(adaptation_config)
     dann_domain_key = "cohort"
     dann_lambda = 0.1
+    coral_domain_key = "cohort"
+    coral_lambda = 0.05
     if adaptation_name == "dann":
         from hust_bci_er.adaptation.dann import DomainAdversarialClassifier
 
@@ -1326,6 +1329,22 @@ def run_real_classifier_route(
             n_domains=2,
             domain_dropout=float(adaptation_config.get("dropout", 0.2)),
         )
+    elif adaptation_name == "coral":
+        if not isinstance(adaptation_config, Mapping):
+            adaptation_config = {"name": "coral"}
+        coral_domain_key = str(adaptation_config.get("domain", "cohort"))
+        if coral_domain_key != "cohort":
+            raise ValueError("CORAL adaptation currently supports domain: cohort")
+        coral_lambda = float(adaptation_config.get("lambda", adaptation_config.get("alignment_lambda", 0.05)))
+        if not hasattr(model, "extract_features") or not hasattr(model, "classifier"):
+            raise ValueError("CORAL adaptation requires a model with extract_features() and classifier")
+        model.to(device_str)
+        model.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, 30, n_times, device=device_str)
+            features = model.extract_features(dummy)
+        if features.ndim != 2:
+            raise ValueError("CORAL base model extract_features must return [batch, features]")
     elif adaptation_name == "adabn":
         raise ValueError("AdaBN adaptation is registered but not implemented by the torch route adapter")
     elif adaptation_name != "none":
@@ -1441,13 +1460,15 @@ def run_real_classifier_route(
             "effective_training_epochs": int(epochs),
         }
         training_resume_checkpoint_path = run_dir / "training_checkpoint.pt"
-        if adaptation_name == "dann":
+        if adaptation_name in {"dann", "coral"}:
+            domain_key = dann_domain_key if adaptation_name == "dann" else coral_domain_key
             train_loader = DataLoader(
-                _WindowDataset(train_windows, include_domain=True, domain_key=dann_domain_key),
+                _WindowDataset(train_windows, include_domain=True, domain_key=domain_key),
                 batch_size=batch_size,
                 shuffle=True,
                 **dataloader_config,
             )
+        if adaptation_name == "dann":
             result = fit_domain_adversarial_classifier(
                 model,
                 train_loader,
@@ -1457,6 +1478,18 @@ def run_real_classifier_route(
                 resume=True,
                 resume_context=training_resume_context,
                 domain_lambda=dann_lambda,
+                epoch_callback=_log_epoch,
+            )
+        elif adaptation_name == "coral":
+            result = fit_domain_coral_classifier(
+                model,
+                train_loader,
+                val_loader=val_loader,
+                config=train_config,
+                checkpoint_path=training_resume_checkpoint_path,
+                resume=True,
+                resume_context=training_resume_context,
+                alignment_lambda=coral_lambda,
                 epoch_callback=_log_epoch,
             )
         else:

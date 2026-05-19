@@ -62,6 +62,7 @@
 ## Adaptation
 
 - `adabn`
+- `coral`
 - `dann`
 - `none`
 
