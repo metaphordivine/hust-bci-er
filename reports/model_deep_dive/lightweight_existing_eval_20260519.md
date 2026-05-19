@@ -4,7 +4,7 @@ This report is generated from committed route summaries, committed compact proto
 
 ## Coverage
 
-- P1: 9 routes with any evidence (7 protocol-board, 2 route-summary-only)
+- P1: 7 routes with any evidence (7 protocol-board, 0 route-summary-only)
 - P2: 7 routes with any evidence (7 protocol-board, 0 route-summary-only)
 - P3: 7 routes with any evidence (7 protocol-board, 0 route-summary-only)
 
@@ -14,9 +14,7 @@ This report is generated from committed route summaries, committed compact proto
 
 | Route | Family | Model | Status | Mean | Jobs | Source |
 |---|---|---|---|---|---|---|
-| `fixed_crop_ea_dgcnn` | graph | dgcnn | IDEA | 0.6932 |  | route_summary |
 | `sliding_ea_fbstcnet_m_conn_w8_s0p5` | filterbank_cnn | fbstcnet | IDEA | 0.6448 | 25 | protocol_board |
-| `fixed_crop_ea_cbramod` | cbramod | cbramod | IDEA | 0.6411 |  | route_summary |
 | `sliding_ea_fbstcnet_m_conn_w4_s1p5` | filterbank_cnn | fbstcnet | IDEA | 0.6401 | 25 | protocol_board |
 | `sliding_ea_fbstcnet_m_conn_w6_s1` | filterbank_cnn | fbstcnet | IDEA | 0.6387 | 25 | protocol_board |
 | `sliding_ea_dgcnn_w6_s1` | graph | dgcnn | IDEA | 0.6345 | 25 | protocol_board |

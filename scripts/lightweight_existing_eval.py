@@ -109,6 +109,8 @@ def merge_route_summaries(evidence: dict[str, RouteEvidence], summary_dir: Path)
         item = evidence.setdefault(route_id, RouteEvidence(route_id=route_id))
         fields = _read_key_value_markdown(path)
         item.status = item.status or fields.get("route_status", "")
+        if fields.get("audit_decision", "").upper() != "PASS":
+            continue
         item.summary_metric = _parse_float(fields.get("primary_metric_value"))
         for protocol, key in (("P1", "aggregate_metric_mean"), ("P2", "p2_metric_mean"), ("P3", "p3_metric_mean")):
             value = _parse_float(fields.get(key))
@@ -142,7 +144,7 @@ def _board_audit(path: Path) -> tuple[str, int]:
         return "INVALID", audit_path.stat().st_mtime_ns
     if not isinstance(data, dict):
         return "INVALID", audit_path.stat().st_mtime_ns
-    return str(data.get("status") or ""), audit_path.stat().st_mtime_ns
+    return str(data.get("status") or "").upper(), audit_path.stat().st_mtime_ns
 
 
 def _read_protocol_board_rows(path: Path, *, require_complete_audit: bool) -> list[ProtocolBoardRow]:
@@ -327,8 +329,9 @@ def build_report(
     evidence = load_route_metadata()
     merge_route_summaries(evidence, summary_dir)
     committed_boards = default_protocol_boards() if include_default_boards else []
-    merge_protocol_boards(evidence, committed_boards + board_paths, require_complete_audit=False)
+    merge_protocol_boards(evidence, committed_boards, require_complete_audit=True)
     merge_protocol_boards(evidence, find_protocol_boards(run_roots), require_complete_audit=True)
+    merge_protocol_boards(evidence, board_paths, require_complete_audit=True)
     return render_markdown(evidence, top_k=top_k)
 
 

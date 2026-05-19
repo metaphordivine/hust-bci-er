@@ -88,6 +88,39 @@ def test_lightweight_existing_eval_uses_route_summary_protocol_means(monkeypatch
     assert "+0.0400" in report
 
 
+def test_lightweight_existing_eval_skips_non_pass_route_summary_protocol_means(monkeypatch, tmp_path):
+    monkeypatch.setattr(lightweight_existing_eval, "ROOT", tmp_path)
+    _write_route(tmp_path / "configs" / "routes" / "models" / "r_cb.yaml", "r_cb", "cbramod")
+    summary = tmp_path / "reports" / "route_summaries" / "r_cb_summary.md"
+    summary.parent.mkdir(parents=True)
+    summary.write_text(
+        "\n".join(
+            [
+                "route_id: r_cb",
+                "route_status: IDEA",
+                "audit_decision: PENDING_REAUDIT",
+                "primary_metric_value: 0.62",
+                "aggregate_metric_mean: 0.62",
+                "p3_metric_mean: 0.66",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = lightweight_existing_eval.build_report(
+        summary_dir=summary.parent,
+        run_roots=[],
+        board_paths=[],
+        top_k=5,
+    )
+
+    assert "P1: 0 routes with any evidence (0 protocol-board, 0 route-summary-only)" in report
+    assert "P3: 0 routes with any evidence (0 protocol-board, 0 route-summary-only)" in report
+    assert "0.6200" not in report
+    assert "0.6600" not in report
+
+
 def test_lightweight_existing_eval_skips_incomplete_run_root_boards(monkeypatch, tmp_path):
     monkeypatch.setattr(lightweight_existing_eval, "ROOT", tmp_path)
     _write_route(tmp_path / "configs" / "routes" / "models" / "r_graph.yaml", "r_graph", "dgcnn")
@@ -100,6 +133,24 @@ def test_lightweight_existing_eval_skips_incomplete_run_root_boards(monkeypatch,
         summary_dir=tmp_path / "reports" / "route_summaries",
         run_roots=[tmp_path / "outputs"],
         board_paths=[],
+        top_k=5,
+    )
+
+    assert "P2: 0 routes with any evidence (0 protocol-board, 0 route-summary-only)" in report
+    assert "0.9100" not in report
+
+
+def test_lightweight_existing_eval_requires_complete_audit_for_explicit_board(monkeypatch, tmp_path):
+    monkeypatch.setattr(lightweight_existing_eval, "ROOT", tmp_path)
+    _write_route(tmp_path / "configs" / "routes" / "models" / "r_graph.yaml", "r_graph", "dgcnn")
+    board = tmp_path / "manual" / "protocol2_board.csv"
+    board.parent.mkdir(parents=True)
+    board.write_text("route_id,n_jobs,mean,std,min,max\nr_graph,7,0.91,,,\n", encoding="utf-8")
+
+    report = lightweight_existing_eval.build_report(
+        summary_dir=tmp_path / "reports" / "route_summaries",
+        run_roots=[],
+        board_paths=[board],
         top_k=5,
     )
 
@@ -136,6 +187,27 @@ def test_lightweight_existing_eval_selects_latest_complete_duplicate_board(monke
 
     assert "0.7300" in report
     assert "0.5100" not in report
+
+
+def test_lightweight_existing_eval_explicit_board_overrides_default_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(lightweight_existing_eval, "ROOT", tmp_path)
+    _write_route(tmp_path / "configs" / "routes" / "models" / "r_graph.yaml", "r_graph", "dgcnn")
+    default_board = tmp_path / "reports" / "model_deep_dive" / "lightweight_existing_eval_boards" / "protocol3_board.csv"
+    explicit_board = tmp_path / "manual" / "protocol3_board.csv"
+    for board, mean in ((default_board, "0.66"), (explicit_board, "0.74")):
+        board.parent.mkdir(parents=True)
+        board.write_text(f"route_id,n_jobs,mean,std,min,max\nr_graph,5,{mean},,,\n", encoding="utf-8")
+        (board.parent / "protocol3_audit.json").write_text(json.dumps({"status": "COMPLETE"}), encoding="utf-8")
+
+    report = lightweight_existing_eval.build_report(
+        summary_dir=tmp_path / "reports" / "route_summaries",
+        run_roots=[],
+        board_paths=[explicit_board],
+        top_k=5,
+    )
+
+    assert "0.7400" in report
+    assert "0.6600" not in report
 
 
 def test_lightweight_existing_eval_default_uses_committed_board_snapshots(monkeypatch, tmp_path):
