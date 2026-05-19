@@ -1353,6 +1353,24 @@ def run_real_classifier_route(
                 },
             )
 
+        split_manifest_obj = Path(split_manifest_path).resolve() if split_manifest_path is not None else None
+        training_resume_context = {
+            "route_id": route_id,
+            "route_config_path": str(route_config_path),
+            "route_config_sha256": sha256_file(route_config_path),
+            "split_id": active_split_id,
+            "split_manifest_path": str(split_manifest_obj) if split_manifest_obj is not None else None,
+            "split_manifest_sha256": sha256_file(split_manifest_obj) if split_manifest_obj is not None else None,
+            "run_mode": run_mode,
+            "seed": active_seed,
+            "model_name": model_name,
+            "model_kwargs": model_kwargs,
+            "n_times": n_times,
+            "preprocessing": preproc,
+            "augmentation": augmentation if isinstance(augmentation, Mapping) else None,
+            "source_training_epochs": int(source_epochs),
+            "effective_training_epochs": int(epochs),
+        }
         training_resume_checkpoint_path = run_dir / "training_checkpoint.pt"
         result = fit_classifier(
             model,
@@ -1361,6 +1379,7 @@ def run_real_classifier_route(
             config=train_config,
             checkpoint_path=training_resume_checkpoint_path,
             resume=True,
+            resume_context=training_resume_context,
             epoch_callback=_log_epoch,
         )
         if save_checkpoint_path is not None:

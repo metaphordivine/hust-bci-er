@@ -574,6 +574,90 @@ def _missing_expected_artifacts(job: Mapping[str, Any], run_dir: Path) -> list[s
     return missing
 
 
+def _read_json_mapping(path: Path) -> Mapping[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, Mapping) else None
+
+
+def _resolve_route_path(route_config: Any, root: Path) -> Path | None:
+    if not isinstance(route_config, str) or not route_config:
+        return None
+    path = Path(route_config)
+    return path if path.is_absolute() else root / path
+
+
+def _same_optional_int(left: Any, right: Any) -> bool:
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    try:
+        return int(left) == int(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _artifact_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Path) -> bool:
+    if _missing_expected_artifacts(job, run_dir):
+        return False
+    route_path = _resolve_route_path(job.get("route_config"), root)
+    if route_path is None or not route_path.exists():
+        return False
+    route_sha256 = sha256_file(route_path)
+    config_snapshot = run_dir / "config_snapshot.yaml"
+    if not config_snapshot.exists():
+        return False
+
+    stage = str(job.get("stage", ""))
+    if stage == "train_holdout_model":
+        train_manifest = _read_json_mapping(run_dir / "train_manifest.json")
+        if train_manifest is None:
+            return False
+        if train_manifest.get("job_id") != job.get("job_id"):
+            return False
+        if train_manifest.get("route_id") != job.get("route_id"):
+            return False
+        if train_manifest.get("stage") != stage:
+            return False
+        if train_manifest.get("split_id") != job.get("split_id"):
+            return False
+        if not _same_optional_int(train_manifest.get("seed"), job.get("seed")):
+            return False
+        if train_manifest.get("base_route_config_sha256") not in {None, route_sha256}:
+            return False
+        return sha256_file(config_snapshot) == route_sha256
+
+    if stage == "inner_select":
+        selection = _read_json_mapping(run_dir / "selection_metrics.json")
+        if selection is None:
+            return False
+        if selection.get("job_id") != job.get("job_id"):
+            return False
+        if selection.get("route_id") != job.get("route_id"):
+            return False
+        if selection.get("stage") != stage:
+            return False
+        if not _same_optional_int(selection.get("param_index"), job.get("param_index")):
+            return False
+        if not _same_optional_int(selection.get("outer_fold"), job.get("outer_fold")):
+            return False
+        if not _same_optional_int(selection.get("inner_fold"), job.get("inner_fold")):
+            return False
+        if dict(selection.get("param_overrides") or {}) != dict(job.get("param_overrides") or {}):
+            return False
+        if selection.get("base_route_config_sha256") != route_sha256:
+            return False
+        effective_sha256 = selection.get("effective_route_config_sha256")
+        if effective_sha256 is not None and sha256_file(config_snapshot) != effective_sha256:
+            return False
+        return True
+
+    return False
+
+
 def _audit_existing_prediction_job(
     *,
     root: Path,
@@ -680,7 +764,7 @@ def execute_protocol_jobs(
         job_id = str(job.get("job_id", ""))
         existing_run_dir = run_manifest.parent / "job_runs" / job_id
         if execute_artifact_jobs:
-            if not _missing_expected_artifacts(job, existing_run_dir):
+            if _artifact_outputs_match_job(job, existing_run_dir, root):
                 results.append(
                     {
                         "job_id": job_id,

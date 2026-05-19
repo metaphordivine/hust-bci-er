@@ -104,6 +104,8 @@ def _run_train_holdout(
         "manifest_json": str(artifacts.manifest_json),
         "checkpoint_path": "checkpoint.pt",
         "checkpoint_sha256": checkpoint_sha256,
+        "base_route_config_path": route_path.as_posix(),
+        "base_route_config_sha256": sha256_file(route_path),
         "primary_metric": str(artifacts.metric_report.get("primary_metric", "")),
         "note": "checkpoint is a torch.save payload with a reusable state_dict; predictions.csv is incidental for this artifact stage",
     }

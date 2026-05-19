@@ -32,6 +32,8 @@ def _lock_pythonhashseed(monkeypatch, request):
         "test_fit_classifier_accepts_mapping_batches_and_dict_model_output": "1",
         "test_fit_classifier_seed_resets_prebuilt_model_parameters": "7",
         "test_fit_classifier_can_preserve_preloaded_parameters": "11",
+        "test_fit_classifier_ignores_checkpoint_when_train_config_differs": "0",
+        "test_fit_classifier_ignores_checkpoint_when_resume_context_differs": "0",
     }
     seed = seeds.get(request.node.name)
     if seed is not None:
@@ -201,6 +203,87 @@ def test_fit_classifier_resumes_from_epoch_checkpoint(tmp_path):
     assert result.checkpoint_epoch == 3
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     assert payload["status"] == "completed"
+
+
+def test_fit_classifier_ignores_checkpoint_when_train_config_differs(tmp_path):
+    loader = make_easy_loader()
+    checkpoint_path = tmp_path / "training_checkpoint.pt"
+    smoke_config = ClassifierTrainConfig(
+        epochs=1,
+        seed=0,
+        optimizer=OptimizerConfig(name="sgd", lr=0.05, momentum=0.0),
+        early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=20),
+    )
+    candidate_config = ClassifierTrainConfig(
+        epochs=2,
+        seed=0,
+        optimizer=OptimizerConfig(name="sgd", lr=0.05, momentum=0.0),
+        early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=20),
+    )
+    model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+    optimizer = build_optimizer(model.parameters(), smoke_config.optimizer)
+    metrics = EpochMetrics(epoch=1, train_loss=0.5, train_accuracy=0.75, n_train=64)
+    save_training_checkpoint(
+        checkpoint_path,
+        model=model,
+        optimizer=optimizer,
+        config=smoke_config,
+        epoch=1,
+        history=[metrics],
+        best_epoch=1,
+        best_metric=metrics.train_loss,
+        best_state_dict=clone_state_dict(model),
+        stale_epochs=0,
+        stopped_early=False,
+        status="running",
+    )
+
+    fresh_model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+    result = fit_classifier(fresh_model, loader, config=candidate_config, checkpoint_path=checkpoint_path)
+
+    assert result.resumed_from_checkpoint is False
+    assert [item.epoch for item in result.history] == [1, 2]
+
+
+def test_fit_classifier_ignores_checkpoint_when_resume_context_differs(tmp_path):
+    loader = make_easy_loader()
+    checkpoint_path = tmp_path / "training_checkpoint.pt"
+    config = ClassifierTrainConfig(
+        epochs=2,
+        seed=0,
+        optimizer=OptimizerConfig(name="sgd", lr=0.05, momentum=0.0),
+        early_stopping=EarlyStoppingConfig(monitor="train_loss", mode="min", patience=20),
+    )
+    model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+    optimizer = build_optimizer(model.parameters(), config.optimizer)
+    metrics = EpochMetrics(epoch=1, train_loss=0.5, train_accuracy=0.75, n_train=64)
+    save_training_checkpoint(
+        checkpoint_path,
+        model=model,
+        optimizer=optimizer,
+        config=config,
+        epoch=1,
+        history=[metrics],
+        best_epoch=1,
+        best_metric=metrics.train_loss,
+        best_state_dict=clone_state_dict(model),
+        stale_epochs=0,
+        stopped_early=False,
+        status="running",
+        resume_context={"route_id": "old", "split_id": "s1"},
+    )
+
+    fresh_model = nn.Sequential(nn.Flatten(), nn.Linear(4, 2))
+    result = fit_classifier(
+        fresh_model,
+        loader,
+        config=config,
+        checkpoint_path=checkpoint_path,
+        resume_context={"route_id": "new", "split_id": "s1"},
+    )
+
+    assert result.resumed_from_checkpoint is False
+    assert [item.epoch for item in result.history] == [1, 2]
 
 
 def test_save_training_checkpoint_retries_windows_replace_lock(monkeypatch, tmp_path):

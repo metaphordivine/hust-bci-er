@@ -151,8 +151,22 @@ def test_protocol_execute_skips_existing_artifact_outputs(tmp_path):
     train_job = next(job for job in manifest["jobs"] if job["stage"] == "train_holdout_model")
     job_dir = run_dir / "job_runs" / train_job["job_id"]
     job_dir.mkdir(parents=True)
-    for artifact in train_job["expected_artifacts"]:
-        (job_dir / artifact).write_text("ok", encoding="utf-8")
+    (job_dir / "config_snapshot.yaml").write_text(ROUTE.read_text(encoding="utf-8"), encoding="utf-8")
+    (job_dir / "checkpoint.pt").write_text("ok", encoding="utf-8")
+    (job_dir / "train_manifest.json").write_text(
+        json.dumps(
+            {
+                "job_id": train_job["job_id"],
+                "route_id": train_job["route_id"],
+                "stage": "train_holdout_model",
+                "seed": train_job["seed"],
+                "split_id": train_job["split_id"],
+                "checkpoint_path": "checkpoint.pt",
+                "base_route_config_sha256": sha256_file(ROUTE),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     results = execute_protocol_jobs(
         manifest,
@@ -163,6 +177,38 @@ def test_protocol_execute_skips_existing_artifact_outputs(tmp_path):
 
     assert results[0]["status"] == "SKIPPED_EXISTING_ARTIFACT"
     assert results[0]["command_returncode"] == 0
+
+
+def test_protocol_artifact_skip_rejects_stale_inner_select_route_hash(tmp_path):
+    import hust_bci_er.evaluation.protocols.runner as runner
+
+    run_dir = tmp_path / "p3_run"
+    manifest = materialize_protocol_run("p3", [ROUTE], run_dir=run_dir, outer_folds=2, inner_folds=2)
+    inner_job = next(job for job in manifest["jobs"] if job["stage"] == "inner_select")
+    job_dir = run_dir / "job_runs" / inner_job["job_id"]
+    job_dir.mkdir(parents=True)
+    (job_dir / "config_snapshot.yaml").write_text(ROUTE.read_text(encoding="utf-8"), encoding="utf-8")
+    (job_dir / "checkpoint.pt").write_text("ok", encoding="utf-8")
+    (job_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    selection = {
+        "job_id": inner_job["job_id"],
+        "route_id": inner_job["route_id"],
+        "stage": "inner_select",
+        "param_index": inner_job["param_index"],
+        "outer_fold": inner_job["outer_fold"],
+        "inner_fold": inner_job["inner_fold"],
+        "param_overrides": inner_job.get("param_overrides") or {},
+        "checkpoint_path": "checkpoint.pt",
+        "base_route_config_sha256": "stale",
+        "effective_route_config_sha256": sha256_file(job_dir / "config_snapshot.yaml"),
+    }
+    (job_dir / "selection_metrics.json").write_text(json.dumps(selection), encoding="utf-8")
+
+    assert runner._artifact_outputs_match_job(inner_job, job_dir, Path.cwd()) is False
+
+    selection["base_route_config_sha256"] = sha256_file(ROUTE)
+    (job_dir / "selection_metrics.json").write_text(json.dumps(selection), encoding="utf-8")
+    assert runner._artifact_outputs_match_job(inner_job, job_dir, Path.cwd()) is True
 
 
 def test_protocol_execute_skips_existing_prediction_outputs_after_audit(tmp_path, monkeypatch):

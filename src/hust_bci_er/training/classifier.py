@@ -68,6 +68,10 @@ class TrainResult:
     checkpoint_epoch: int = 0
 
 
+class TrainingCheckpointMismatch(ValueError):
+    """Raised when a resume checkpoint belongs to a different training context."""
+
+
 def set_torch_seed(seed: int | None) -> None:
     if seed is None:
         return
@@ -238,6 +242,7 @@ def fit_classifier(
     criterion: nn.Module | None = None,
     checkpoint_path: Path | str | None = None,
     resume: bool = True,
+    resume_context: Mapping[str, Any] | None = None,
     epoch_callback: Callable[[EpochMetrics], None] | None = None,
 ) -> TrainResult:
     config = config or ClassifierTrainConfig()
@@ -265,54 +270,61 @@ def fit_classifier(
     if config.early_stopping is not None and val_loader is None and monitor.monitor in {"val_loss", "val_accuracy"}:
         raise ValueError(f"early_stopping monitor {monitor.monitor} requires val_loader")
 
-    if resume and checkpoint_path_obj is not None and checkpoint_path_obj.exists():
-        checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        move_optimizer_state_to_device(optimizer, device)
-        restore_rng_state(checkpoint)
-        history = [epoch_metrics_from_dict(row) for row in checkpoint.get("history", [])]
-        best_state = checkpoint.get("best_state_dict")
-        best_epoch = int(checkpoint.get("best_epoch", 0))
-        best_metric = float(checkpoint.get("best_metric", float("inf")))
-        stopped_early = bool(checkpoint.get("stopped_early", False))
-        stale_epochs = int(checkpoint.get("stale_epochs", 0))
-        last_epoch = int(checkpoint.get("epoch", 0))
-        start_epoch = last_epoch + 1
-        resumed_from_checkpoint = True
-        if stopped_early or last_epoch >= config.epochs:
-            if best_state is not None and config.restore_best:
-                model.load_state_dict(best_state)
-            save_training_checkpoint(
-                checkpoint_path_obj,
-                model=model,
-                optimizer=optimizer,
-                config=config,
-                epoch=last_epoch,
-                history=history,
-                best_epoch=best_epoch,
-                best_metric=best_metric,
-                best_state_dict=best_state,
-                stale_epochs=stale_epochs,
-                stopped_early=stopped_early,
-                status="completed",
-            )
-            return TrainResult(
-                tuple(history),
-                best_epoch,
-                best_metric,
-                stopped_early,
-                best_state,
-                resumed_from_checkpoint=True,
-                checkpoint_path=str(checkpoint_path_obj),
-                checkpoint_epoch=last_epoch,
-            )
-    else:
+    def initialize_fresh_training() -> None:
         set_torch_seed(config.seed)
         if config.seed is not None and config.reset_parameters_after_seed:
             reset_model_parameters(model)
         model.to(device)
-        optimizer = optimizer or build_optimizer(model.parameters(), config.optimizer)
+
+    if resume and checkpoint_path_obj is not None and checkpoint_path_obj.exists():
+        try:
+            checkpoint = load_training_checkpoint(checkpoint_path_obj, config=config, resume_context=resume_context)
+        except TrainingCheckpointMismatch:
+            initialize_fresh_training()
+        else:
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            move_optimizer_state_to_device(optimizer, device)
+            restore_rng_state(checkpoint)
+            history = [epoch_metrics_from_dict(row) for row in checkpoint.get("history", [])]
+            best_state = checkpoint.get("best_state_dict")
+            best_epoch = int(checkpoint.get("best_epoch", 0))
+            best_metric = float(checkpoint.get("best_metric", float("inf")))
+            stopped_early = bool(checkpoint.get("stopped_early", False))
+            stale_epochs = int(checkpoint.get("stale_epochs", 0))
+            last_epoch = int(checkpoint.get("epoch", 0))
+            start_epoch = last_epoch + 1
+            resumed_from_checkpoint = True
+            if stopped_early or last_epoch >= config.epochs:
+                if best_state is not None and config.restore_best:
+                    model.load_state_dict(best_state)
+                save_training_checkpoint(
+                    checkpoint_path_obj,
+                    model=model,
+                    optimizer=optimizer,
+                    config=config,
+                    epoch=last_epoch,
+                    history=history,
+                    best_epoch=best_epoch,
+                    best_metric=best_metric,
+                    best_state_dict=best_state,
+                    stale_epochs=stale_epochs,
+                    stopped_early=stopped_early,
+                    status="completed",
+                    resume_context=resume_context,
+                )
+                return TrainResult(
+                    tuple(history),
+                    best_epoch,
+                    best_metric,
+                    stopped_early,
+                    best_state,
+                    resumed_from_checkpoint=True,
+                    checkpoint_path=str(checkpoint_path_obj),
+                    checkpoint_epoch=last_epoch,
+                )
+    else:
+        initialize_fresh_training()
 
     for epoch in range(start_epoch, config.epochs + 1):
         train_metrics = train_one_epoch(
@@ -362,6 +374,7 @@ def fit_classifier(
                 stale_epochs=stale_epochs,
                 stopped_early=stopped_early,
                 status="running",
+                resume_context=resume_context,
             )
 
         if config.early_stopping is not None and stale_epochs > 0 and stale_epochs >= monitor.patience:
@@ -389,6 +402,7 @@ def fit_classifier(
             stale_epochs=stale_epochs,
             stopped_early=stopped_early,
             status="completed",
+            resume_context=resume_context,
         )
 
     return TrainResult(
@@ -480,6 +494,30 @@ def train_config_signature(config: ClassifierTrainConfig) -> dict[str, Any]:
     }
 
 
+def resume_context_signature(context: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if context is None:
+        return None
+    return _canonical_resume_context(context)
+
+
+def _canonical_resume_context(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_resume_context(value[key]) for key in sorted(value, key=str)}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_resume_context(item) for item in value]
+    if isinstance(value, Path):
+        return value.as_posix()
+    if isinstance(value, torch.device):
+        return str(value)
+    if torch.is_tensor(value):
+        if value.numel() <= 16:
+            return value.detach().cpu().tolist()
+        return {"tensor_shape": list(value.shape), "tensor_dtype": str(value.dtype)}
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
 def save_training_checkpoint(
     path: Path,
     *,
@@ -494,6 +532,7 @@ def save_training_checkpoint(
     stale_epochs: int,
     stopped_early: bool,
     status: str,
+    resume_context: Mapping[str, Any] | None = None,
 ) -> None:
     payload = {
         "checkpoint_schema_version": 1,
@@ -501,6 +540,7 @@ def save_training_checkpoint(
         "status": status,
         "epoch": int(epoch),
         "config_signature": train_config_signature(config),
+        "resume_context_signature": resume_context_signature(resume_context),
         "history": [epoch_metrics_to_dict(item) for item in history],
         "model_state_dict": clone_state_dict(model),
         "optimizer_state_dict": optimizer.state_dict(),
@@ -541,7 +581,12 @@ def replace_checkpoint_file(tmp_path: Path, path: Path, *, attempts: int = 20, d
     raise last_error
 
 
-def load_training_checkpoint(path: Path, *, config: ClassifierTrainConfig) -> Mapping[str, Any]:
+def load_training_checkpoint(
+    path: Path,
+    *,
+    config: ClassifierTrainConfig,
+    resume_context: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
     # weights_only=False is required because resume checkpoints contain optimizer
     # state and RNG tensors written by this training loop. Only load local run-dir
     # checkpoints created by the repository itself.
@@ -554,7 +599,10 @@ def load_training_checkpoint(path: Path, *, config: ClassifierTrainConfig) -> Ma
     if payload.get("artifact_kind") != "torch_classifier_training_resume":
         raise ValueError(f"unsupported training checkpoint artifact_kind: {path}")
     if payload.get("config_signature") != train_config_signature(config):
-        raise ValueError("training checkpoint config does not match this run")
+        raise TrainingCheckpointMismatch("training checkpoint config does not match this run")
+    expected_context = resume_context_signature(resume_context)
+    if payload.get("resume_context_signature") != expected_context:
+        raise TrainingCheckpointMismatch("training checkpoint resume context does not match this run")
     return payload
 
 

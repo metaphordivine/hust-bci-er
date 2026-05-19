@@ -40,6 +40,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+from hust_bci_er.audit.manifest import sha256_file  # noqa: E402
+
 DEFAULT_SEEDS = (42, 123, 456, 789, 1024)
 DEFAULT_N_FOLDS = 5
 
@@ -98,6 +100,7 @@ def run_route_candidate(
     result: dict[str, Any] = {
         "route_id": route_id,
         "route_config": route_path.relative_to(ROOT).as_posix(),
+        "route_config_sha256": sha256_file(route_path),
         "run_dir": str(run_dir),
         "returncode": proc.returncode,
         "elapsed_sec": round(elapsed, 1),
@@ -141,6 +144,14 @@ def _resume_metadata_mismatches(summary: dict[str, Any], expected: dict[str, Any
         for key, value in expected.items()
         if summary.get(key) != value
     }
+
+
+def _existing_result_mismatches(existing: dict[str, Any], route_path: Path) -> dict[str, dict[str, Any]]:
+    expected_route_sha = sha256_file(route_path)
+    actual_route_sha = existing.get("route_config_sha256")
+    if actual_route_sha == expected_route_sha:
+        return {}
+    return {"route_config_sha256": {"expected": expected_route_sha, "actual": actual_route_sha}}
 
 
 def _display_path(path: Path) -> str:
@@ -234,6 +245,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{idx}/{len(route_paths)}] {route_id} ... ", end="", flush=True)
         existing = existing_results.get(route_id)
         if existing and existing.get("passed"):
+            result_mismatches = _existing_result_mismatches(existing, route_path)
+            if result_mismatches:
+                result = run_route_candidate(
+                    route_path,
+                    data_root=args.data_root,
+                    device=args.device,
+                    seeds=args.seeds,
+                    n_folds=args.n_folds,
+                    output_dir=output_base,
+                )
+                result["resume_status"] = "RERUN_ROUTE_CONFIG_MISMATCH"
+                result["resume_mismatches"] = result_mismatches
+                results.append(result)
+                if result["passed"]:
+                    passed += 1
+                    print(f"PASS route config changed ({result['elapsed_sec']}s)")
+                else:
+                    failed += 1
+                    print(f"FAIL route config changed (rc={result['returncode']})")
+                write_summary()
+                continue
             result = dict(existing)
             result["resume_status"] = "SKIPPED_EXISTING_PASS"
             results.append(result)

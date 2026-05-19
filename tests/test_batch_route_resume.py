@@ -21,6 +21,10 @@ def _write_torch_route(path, *, route_id: str) -> None:
     )
 
 
+def _route_sha(module, path) -> str:
+    return module.sha256_file(path)
+
+
 def test_diagnostic_batch_resume_skips_existing_pass(monkeypatch, tmp_path):
     monkeypatch.setattr(diagnostic_batch, "ROOT", tmp_path)
     route_path = tmp_path / "configs" / "routes" / "models" / "r1.yaml"
@@ -34,7 +38,14 @@ def test_diagnostic_batch_resume_skips_existing_pass(monkeypatch, tmp_path):
                 "n_folds": 2,
                 "device": "auto",
                 "data_root": "data",
-                "results": [{"route_id": "r1", "passed": True, "run_dir": "old"}],
+                "results": [
+                    {
+                        "route_id": "r1",
+                        "passed": True,
+                        "run_dir": "old",
+                        "route_config_sha256": _route_sha(diagnostic_batch, route_path),
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -84,6 +95,38 @@ def test_diagnostic_batch_reruns_existing_pass_when_metadata_differs(monkeypatch
     assert set(summary["results"][0]["resume_mismatches"]) == {"device", "data_root"}
 
 
+def test_diagnostic_batch_reruns_existing_pass_when_route_config_differs(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnostic_batch, "ROOT", tmp_path)
+    route_path = tmp_path / "configs" / "routes" / "models" / "r1.yaml"
+    _write_torch_route(route_path, route_id="r1")
+    output_dir = tmp_path / "outputs" / "batch_diagnostic"
+    output_dir.mkdir(parents=True)
+    (output_dir / "batch_summary.json").write_text(
+        json.dumps(
+            {
+                "seed": 42,
+                "n_folds": 2,
+                "device": "auto",
+                "data_root": "data",
+                "results": [{"route_id": "r1", "passed": True, "run_dir": "old", "route_config_sha256": "stale"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run_route_diagnostic(*args, **kwargs):
+        return {"route_id": "r1", "passed": True}
+
+    monkeypatch.setattr(diagnostic_batch, "run_route_diagnostic", fake_run_route_diagnostic)
+
+    assert diagnostic_batch.main(["--data-root", "data", "--output-dir", str(output_dir)]) == 0
+
+    summary = json.loads((output_dir / "batch_summary.json").read_text(encoding="utf-8"))
+    assert summary["skipped_existing"] == 0
+    assert summary["results"][0]["resume_status"] == "RERUN_ROUTE_CONFIG_MISMATCH"
+    assert set(summary["results"][0]["resume_mismatches"]) == {"route_config_sha256"}
+
+
 def test_diagnostic_batch_accepts_relative_output_dir(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(diagnostic_batch, "ROOT", tmp_path)
@@ -112,7 +155,14 @@ def test_candidate_batch_resume_skips_existing_pass(monkeypatch, tmp_path):
                 "n_folds": 5,
                 "device": "auto",
                 "data_root": "data",
-                "results": [{"route_id": "r1", "passed": True, "run_dir": "old"}],
+                "results": [
+                    {
+                        "route_id": "r1",
+                        "passed": True,
+                        "run_dir": "old",
+                        "route_config_sha256": _route_sha(candidate_batch, route_path),
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -160,6 +210,38 @@ def test_candidate_batch_reruns_existing_pass_when_metadata_differs(monkeypatch,
     assert summary["skipped_existing"] == 0
     assert summary["results"][0]["resume_status"] == "RERUN_METADATA_MISMATCH"
     assert set(summary["results"][0]["resume_mismatches"]) == {"seeds", "device", "data_root"}
+
+
+def test_candidate_batch_reruns_existing_pass_when_route_config_differs(monkeypatch, tmp_path):
+    monkeypatch.setattr(candidate_batch, "ROOT", tmp_path)
+    route_path = tmp_path / "configs" / "routes" / "models" / "r1.yaml"
+    _write_torch_route(route_path, route_id="r1")
+    output_dir = tmp_path / "outputs" / "batch_candidate"
+    output_dir.mkdir(parents=True)
+    (output_dir / "candidate_summary.json").write_text(
+        json.dumps(
+            {
+                "seeds": [42, 123, 456, 789, 1024],
+                "n_folds": 5,
+                "device": "auto",
+                "data_root": "data",
+                "results": [{"route_id": "r1", "passed": True, "run_dir": "old", "route_config_sha256": "stale"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run_route_candidate(*args, **kwargs):
+        return {"route_id": "r1", "passed": True, "elapsed_sec": 0.0, "returncode": 0}
+
+    monkeypatch.setattr(candidate_batch, "run_route_candidate", fake_run_route_candidate)
+
+    assert candidate_batch.main(["--route-ids", "r1", "--data-root", "data", "--output-dir", str(output_dir)]) == 0
+
+    summary = json.loads((output_dir / "candidate_summary.json").read_text(encoding="utf-8"))
+    assert summary["skipped_existing"] == 0
+    assert summary["results"][0]["resume_status"] == "RERUN_ROUTE_CONFIG_MISMATCH"
+    assert set(summary["results"][0]["resume_mismatches"]) == {"route_config_sha256"}
 
 
 def test_candidate_batch_accepts_relative_output_dir(monkeypatch, tmp_path):
