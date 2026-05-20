@@ -147,7 +147,7 @@ routes:
     blocker: missing_real_candidate_run
   - route_id: interpretable_calibrated_diverse_score_fusion
     owner: metaphordivine
-    blocker: missing_component_evidence
+    blocker: pending_p2_p3_confirmation
   - route_id: fbstcnet_srfnet_score_average
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
