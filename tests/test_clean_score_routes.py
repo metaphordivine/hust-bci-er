@@ -2,6 +2,7 @@ import yaml
 
 from pathlib import Path
 
+from hust_bci_er.config.component_map import base_route_for_component
 from hust_bci_er.inference.clean_score_routes import CLEAN_SCORE_ROUTES, score_route_by_id, score_route_by_node
 
 
@@ -16,6 +17,7 @@ def test_descriptive_score_fusion_routes_are_present():
     assert "whitening_eps1e3_with_conformer_srfnet_reference_average" in route_ids
     assert "fbstcnet_srfnet_score_average" in route_ids
     assert "fbstcnet_as_query_srfnet_context_fusion" in route_ids
+    assert "dgcnn_adaptation_fbstcnet_srfnet_conformer_score_average" in route_ids
 
 
 def test_fbstcnet_fusion_routes_record_initial_weights():
@@ -30,6 +32,21 @@ def test_fbstcnet_fusion_routes_record_initial_weights():
     whitening = score_route_by_id("fbstcnet_srfnet_whitening_eps1e3_average")
     assert whitening is not None
     assert whitening.weights == (0.40, 0.30, 0.30)
+
+
+def test_dgcnn_adaptation_fusion_route_records_components_and_weights():
+    route = score_route_by_id("dgcnn_adaptation_fbstcnet_srfnet_conformer_score_average")
+    assert route is not None
+    assert route.components == (
+        "dgcnn_dann_cohort_component",
+        "dgcnn_coral_cohort_component",
+        "fixed_crop_ea_fbstcnet_component",
+        "srfnet_long_component",
+        "conformer_component",
+    )
+    assert route.weights == (0.20, 0.20, 0.25, 0.20, 0.15)
+    assert base_route_for_component("dgcnn_dann_cohort_component") == "sliding_ea_dgcnn_dann_cohort_w6_s1"
+    assert base_route_for_component("dgcnn_coral_cohort_component") == "sliding_ea_dgcnn_coral_cohort_w6_s1"
 
 
 def test_fbstcnet_query_context_routes_are_registered():
