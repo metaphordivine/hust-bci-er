@@ -32,6 +32,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+from hust_bci_er.audit.manifest import sha256_file  # noqa: E402
+
 DEFAULT_SEED = 42
 DEFAULT_N_FOLDS = 2
 
@@ -111,6 +113,7 @@ def run_route_diagnostic(
     result: dict[str, Any] = {
         "route_id": route_id,
         "route_config": route_path.relative_to(ROOT).as_posix(),
+        "route_config_sha256": sha256_file(route_path),
         "run_dir": str(run_dir),
         "returncode": proc.returncode,
         "elapsed_sec": round(elapsed, 1),
@@ -155,6 +158,50 @@ def _check_artifacts(job_runs: Path) -> dict[str, bool]:
     return artifacts
 
 
+def _load_existing_summary(summary_path: Path) -> dict[str, Any]:
+    if not summary_path.exists():
+        return {}
+    try:
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_existing_results(summary_path: Path) -> dict[str, dict[str, Any]]:
+    summary = _load_existing_summary(summary_path)
+    out: dict[str, dict[str, Any]] = {}
+    for result in summary.get("results", []):
+        if isinstance(result, dict) and result.get("route_id"):
+            out[str(result["route_id"])] = result
+    return out
+
+
+def _resume_metadata_mismatches(summary: dict[str, Any], expected: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        key: {"expected": value, "actual": summary.get(key)}
+        for key, value in expected.items()
+        if summary.get(key) != value
+    }
+
+
+def _existing_result_mismatches(existing: dict[str, Any], route_path: Path) -> dict[str, dict[str, Any]]:
+    expected_route_sha = sha256_file(route_path)
+    actual_route_sha = existing.get("route_config_sha256")
+    if actual_route_sha == expected_route_sha:
+        return {}
+    return {"route_config_sha256": {"expected": expected_route_sha, "actual": actual_route_sha}}
+
+
+def _display_path(path: Path) -> str:
+    resolved_root = ROOT.resolve()
+    resolved_path = path.resolve()
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Batch P1 diagnostic runner for all torch_classifier routes.")
     parser.add_argument("--data-root", type=Path, help="HUST EEG .mat data root directory.")
@@ -163,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--n-folds", type=int, default=DEFAULT_N_FOLDS)
     parser.add_argument("--output-dir", type=Path, help="Override default output directory.")
     parser.add_argument("--route-filter", help="Substring filter for route_id (optional).")
+    parser.add_argument("--no-resume", action="store_true", help="Do not skip routes already marked passed in batch_summary.json.")
     parser.add_argument("--dry-run", action="store_true", help="Print routes that would be executed and exit.")
     args = parser.parse_args(argv)
 
@@ -192,14 +240,72 @@ def main(argv: list[str] | None = None) -> int:
     output_base = args.output_dir or ROOT / "outputs" / "batch_diagnostic"
     summary_path = output_base / "batch_summary.json"
     output_base.mkdir(parents=True, exist_ok=True)
+    resume_metadata = {
+        "seed": args.seed,
+        "n_folds": args.n_folds,
+        "device": args.device,
+        "data_root": str(data_root),
+    }
+    existing_summary = _load_existing_summary(summary_path) if not args.no_resume else {}
+    resume_mismatches = _resume_metadata_mismatches(existing_summary, resume_metadata) if existing_summary else {}
+    if resume_mismatches:
+        keys = ", ".join(sorted(resume_mismatches))
+        print(f"Existing diagnostic summary metadata mismatch ({keys}); rerunning matching routes.")
+    existing_results = _load_existing_results(summary_path) if existing_summary and not resume_mismatches else {}
 
     results: list[dict[str, Any]] = []
     passed = 0
     failed = 0
+    skipped_existing = 0
+
+    def write_summary() -> None:
+        summary: dict[str, Any] = {
+            "total": len(routes),
+            "passed": passed,
+            "failed": failed,
+            "skipped_existing": skipped_existing,
+            "seed": args.seed,
+            "n_folds": args.n_folds,
+            "device": args.device,
+            "data_root": str(data_root),
+            "results": results,
+        }
+        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     for idx, route_path in enumerate(routes, 1):
         route_id = route_id_from_path(route_path)
         print(f"[{idx}/{len(routes)}] {route_id} ... ", end="", flush=True)
+        existing = existing_results.get(route_id)
+        if existing and existing.get("passed"):
+            result_mismatches = _existing_result_mismatches(existing, route_path)
+            if result_mismatches:
+                result = run_route_diagnostic(
+                    route_path,
+                    data_root=data_root,
+                    device=args.device,
+                    seed=args.seed,
+                    n_folds=args.n_folds,
+                    output_dir=output_base / route_id,
+                )
+                result["resume_status"] = "RERUN_ROUTE_CONFIG_MISMATCH"
+                result["resume_mismatches"] = result_mismatches
+                results.append(result)
+                if result["passed"]:
+                    passed += 1
+                    print("PASS route config changed")
+                else:
+                    failed += 1
+                    print(f"FAIL route config changed (rc={result['returncode']})")
+                write_summary()
+                continue
+            result = dict(existing)
+            result["resume_status"] = "SKIPPED_EXISTING_PASS"
+            results.append(result)
+            passed += 1
+            skipped_existing += 1
+            print("SKIP existing PASS")
+            write_summary()
+            continue
         result = run_route_diagnostic(
             route_path,
             data_root=data_root,
@@ -208,6 +314,9 @@ def main(argv: list[str] | None = None) -> int:
             n_folds=args.n_folds,
             output_dir=output_base / route_id,
         )
+        if resume_mismatches:
+            result["resume_status"] = "RERUN_METADATA_MISMATCH"
+            result["resume_mismatches"] = resume_mismatches
         results.append(result)
         if result["passed"]:
             passed += 1
@@ -215,19 +324,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             failed += 1
             print(f"FAIL (rc={result['returncode']})")
-
-    summary: dict[str, Any] = {
-        "total": len(routes),
-        "passed": passed,
-        "failed": failed,
-        "seed": args.seed,
-        "n_folds": args.n_folds,
-        "device": args.device,
-        "data_root": str(data_root),
-        "results": results,
-    }
-    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"\nSummary: {passed} passed, {failed} failed  ->  {summary_path.relative_to(ROOT)}")
+        write_summary()
+    print(f"\nSummary: {passed} passed, {failed} failed  ->  {_display_path(summary_path)}")
     return 0 if failed == 0 else 1
 
 

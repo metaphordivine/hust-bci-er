@@ -5,6 +5,7 @@ from __future__ import annotations
 from torch import nn
 
 from .backbones.cbramod import build_cbramod
+from .backbones.cbramod_pretrained import build_cbramod_pretrained
 from .backbones.conformer_lite import build_conformer_lite
 from .backbones.deformer_lite import build_deformer_lite
 from .backbones.eegnet import build_eegnet
@@ -24,6 +25,7 @@ BUILDERS = {
     "srfnet": build_srfnet,
     "shallow_conv_net": build_shallow_conv_net,
     "cbramod": build_cbramod,
+    "cbramod_pretrained": build_cbramod_pretrained,
     "fbcnet": build_fbcnet,
     "fbstcnet": build_fbstcnet,
     "tsception": build_tsception,

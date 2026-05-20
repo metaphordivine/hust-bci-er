@@ -1,0 +1,21 @@
+# Explicit P3 candidate tuples for linked sliding-window shape parameters.
+# The exact_single_crop_expected_BA audit requires exactly five windows, so
+# input_window_sec, augmentation.window_sec, and augmentation.stride_sec must
+# move together instead of via a cross-product search.
+
+candidates:
+  - input_window_sec: 4
+    augmentation.window_sec: 4
+    augmentation.stride_sec: 1.5
+    augmentation.search_space.window_sec: [4]
+    augmentation.search_space.stride_sec: [1.5]
+  - input_window_sec: 6
+    augmentation.window_sec: 6
+    augmentation.stride_sec: 1
+    augmentation.search_space.window_sec: [6]
+    augmentation.search_space.stride_sec: [1]
+  - input_window_sec: 8
+    augmentation.window_sec: 8
+    augmentation.stride_sec: 0.5
+    augmentation.search_space.window_sec: [8]
+    augmentation.search_space.stride_sec: [0.5]

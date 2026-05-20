@@ -68,6 +68,7 @@ MODEL_IMPLEMENTATION_PATHS = {
     "srfnet": "src/hust_bci_er/models/backbones/srfnet.py",
     "shallow_conv_net": "src/hust_bci_er/models/backbones/shallow_conv_net.py",
     "cbramod": "src/hust_bci_er/models/backbones/cbramod.py",
+    "cbramod_pretrained": "src/hust_bci_er/models/backbones/cbramod_pretrained.py",
     "dgcnn": "src/hust_bci_er/models/graph/dgcnn.py",
     "fbcnet": "src/hust_bci_er/models/backbones/fbcnet.py",
     "fbstcnet": "src/hust_bci_er/models/backbones/fbstcnet.py",

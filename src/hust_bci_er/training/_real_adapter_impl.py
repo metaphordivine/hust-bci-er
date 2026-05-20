@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -40,6 +41,93 @@ SOURCE_TRIALS_PER_CLASS = 4
 FIXED_CANDIDATE_CROPS = 5
 DATA_ROOT_ENV = "HUST_BCI_ER_DATA_ROOT"
 DATA_ROOT_DEFAULT = Path(__file__).resolve().parents[3] / "scratch" / "local_data" / "hust_bci_er_train" / "训练集"
+TORCH_NUM_THREADS_ENV = "HUST_TORCH_NUM_THREADS"
+TORCH_INTEROP_THREADS_ENV = "HUST_TORCH_INTEROP_THREADS"
+DATALOADER_NUM_WORKERS_ENV = "HUST_DATALOADER_NUM_WORKERS"
+DATALOADER_PIN_MEMORY_ENV = "HUST_DATALOADER_PIN_MEMORY"
+DATALOADER_PERSISTENT_WORKERS_ENV = "HUST_DATALOADER_PERSISTENT_WORKERS"
+DATALOADER_PREFETCH_FACTOR_ENV = "HUST_DATALOADER_PREFETCH_FACTOR"
+
+_TORCH_INTEROP_THREADS_CONFIGURED: int | None = None
+
+
+def _env_int(name: str, *, minimum: int) -> int | None:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+    if parsed < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {parsed}")
+    return parsed
+
+
+def _env_bool(name: str) -> bool | None:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of 1/0/true/false/yes/no/on/off, got {value!r}")
+
+
+def _configure_torch_runtime(torch_module) -> dict[str, Any]:
+    """Apply opt-in torch runtime caps for shared training hosts."""
+    global _TORCH_INTEROP_THREADS_CONFIGURED
+
+    applied: dict[str, Any] = {
+        "num_threads_env": None,
+        "interop_threads_env": None,
+        "num_threads_applied": None,
+        "interop_threads_applied": None,
+    }
+    num_threads = _env_int(TORCH_NUM_THREADS_ENV, minimum=1)
+    if num_threads is not None:
+        torch_module.set_num_threads(num_threads)
+        applied["num_threads_env"] = TORCH_NUM_THREADS_ENV
+        applied["num_threads_applied"] = num_threads
+
+    interop_threads = _env_int(TORCH_INTEROP_THREADS_ENV, minimum=1)
+    if interop_threads is not None:
+        applied["interop_threads_env"] = TORCH_INTEROP_THREADS_ENV
+        if _TORCH_INTEROP_THREADS_CONFIGURED is None:
+            torch_module.set_num_interop_threads(interop_threads)
+            _TORCH_INTEROP_THREADS_CONFIGURED = interop_threads
+        elif _TORCH_INTEROP_THREADS_CONFIGURED != interop_threads:
+            raise ValueError(
+                f"{TORCH_INTEROP_THREADS_ENV} changed from "
+                f"{_TORCH_INTEROP_THREADS_CONFIGURED} to {interop_threads} in one process"
+            )
+        applied["interop_threads_applied"] = _TORCH_INTEROP_THREADS_CONFIGURED
+    return applied
+
+
+def _dataloader_kwargs(*, device: str) -> dict[str, Any]:
+    """Build DataLoader kwargs while preserving serial defaults unless env opts in."""
+    num_workers = _env_int(DATALOADER_NUM_WORKERS_ENV, minimum=0)
+    if num_workers is None:
+        num_workers = 0
+
+    pin_memory = _env_bool(DATALOADER_PIN_MEMORY_ENV)
+    if pin_memory is None:
+        pin_memory = bool(num_workers > 0 and device.startswith("cuda"))
+
+    kwargs: dict[str, Any] = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if num_workers > 0:
+        persistent_workers = _env_bool(DATALOADER_PERSISTENT_WORKERS_ENV)
+        kwargs["persistent_workers"] = True if persistent_workers is None else persistent_workers
+        prefetch_factor = _env_int(DATALOADER_PREFETCH_FACTOR_ENV, minimum=1)
+        if prefetch_factor is not None:
+            kwargs["prefetch_factor"] = prefetch_factor
+    return kwargs
 
 
 def _resolve_data_root(data_root: Path | None) -> Path:
@@ -473,7 +561,13 @@ def _predict_scores(
     from torch.utils.data import DataLoader
     from hust_bci_er.training.classifier import logits_from_output
 
-    loader = DataLoader(_WindowDataset(windows), batch_size=batch_size, shuffle=False, num_workers=0)
+    _configure_torch_runtime(torch)
+    loader = DataLoader(
+        _WindowDataset(windows),
+        batch_size=batch_size,
+        shuffle=False,
+        **_dataloader_kwargs(device=device),
+    )
     model.eval()
     rows: list[dict[str, Any]] = []
     offset = 0
@@ -949,10 +1043,15 @@ def run_real_classifier_route(
     from hust_bci_er.training.classifier import (
         ClassifierTrainConfig,
         EarlyStoppingConfig,
+        EpochMetrics,
         OptimizerConfig,
         TrainResult,
         fit_classifier,
+        set_torch_seed,
     )
+    from hust_bci_er.training.monitor import TrainingMonitor
+
+    torch_runtime_config = _configure_torch_runtime(torch)
 
     route_config_path = route_config_path.resolve()
     route_data = yaml.safe_load(route_config_path.read_text(encoding="utf-8")) or {}
@@ -966,6 +1065,17 @@ def run_real_classifier_route(
 
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    monitor = TrainingMonitor(run_dir, route_id=route_id, run_id=run_dir.name)
+    monitor.log(
+        "start",
+        {
+            "run_mode": run_mode,
+            "split_id": active_split_id,
+            "seed": active_seed,
+            "device": device,
+            "resume_checkpoint": "training_checkpoint.pt",
+        },
+    )
 
     # Load and subset data
     data_root = _resolve_data_root(data_root)
@@ -1144,6 +1254,7 @@ def run_real_classifier_route(
         else {}
     )
     n_times = int(round(window_sec * SFREQ))
+    set_torch_seed(active_seed)
     model = build_model(
         model_name,
         n_channels=30,
@@ -1173,8 +1284,14 @@ def run_real_classifier_route(
     ) if isinstance(early_data, dict) else None
 
     grad_clip = float(training_config["grad_clip_norm"]) if isinstance(training_config, dict) and "grad_clip_norm" in training_config else None
+    reset_parameters_after_seed = (
+        bool(training_config.get("reset_parameters_after_seed", True))
+        if isinstance(training_config, dict)
+        else True
+    )
 
     device_str = _resolve_device(device)
+    dataloader_config = _dataloader_kwargs(device=device_str)
     train_config = ClassifierTrainConfig(
         epochs=epochs,
         batch_size=batch_size,
@@ -1183,6 +1300,7 @@ def run_real_classifier_route(
         optimizer=optimizer,
         early_stopping=early_stopping,
         grad_clip_norm=grad_clip,
+        reset_parameters_after_seed=reset_parameters_after_seed,
     )
 
     result: TrainResult | None
@@ -1213,11 +1331,57 @@ def run_real_classifier_route(
         result = None
     else:
         # Train
-        train_loader = DataLoader(_WindowDataset(train_windows), batch_size=batch_size, shuffle=True, num_workers=0)
+        train_loader = DataLoader(
+            _WindowDataset(train_windows),
+            batch_size=batch_size,
+            shuffle=True,
+            **dataloader_config,
+        )
         val_dataset = _WindowDataset(val_windows)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **dataloader_config)
 
-        result = fit_classifier(model, train_loader, val_loader=val_loader, config=train_config)
+        def _log_epoch(metrics: EpochMetrics) -> None:
+            monitor.epoch(
+                metrics.epoch,
+                {
+                    "train_loss": metrics.train_loss,
+                    "train_accuracy": metrics.train_accuracy,
+                    "n_train": metrics.n_train,
+                    "val_loss": metrics.val_loss,
+                    "val_accuracy": metrics.val_accuracy,
+                    "n_val": metrics.n_val,
+                },
+            )
+
+        split_manifest_obj = Path(split_manifest_path).resolve() if split_manifest_path is not None else None
+        training_resume_context = {
+            "route_id": route_id,
+            "route_config_path": str(route_config_path),
+            "route_config_sha256": sha256_file(route_config_path),
+            "split_id": active_split_id,
+            "split_manifest_path": str(split_manifest_obj) if split_manifest_obj is not None else None,
+            "split_manifest_sha256": sha256_file(split_manifest_obj) if split_manifest_obj is not None else None,
+            "run_mode": run_mode,
+            "seed": active_seed,
+            "model_name": model_name,
+            "model_kwargs": model_kwargs,
+            "n_times": n_times,
+            "preprocessing": preproc,
+            "augmentation": augmentation if isinstance(augmentation, Mapping) else None,
+            "source_training_epochs": int(source_epochs),
+            "effective_training_epochs": int(epochs),
+        }
+        training_resume_checkpoint_path = run_dir / "training_checkpoint.pt"
+        result = fit_classifier(
+            model,
+            train_loader,
+            val_loader=val_loader,
+            config=train_config,
+            checkpoint_path=training_resume_checkpoint_path,
+            resume=True,
+            resume_context=training_resume_context,
+            epoch_callback=_log_epoch,
+        )
         if save_checkpoint_path is not None:
             save_checkpoint_path = Path(save_checkpoint_path).resolve()
             save_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1361,8 +1525,14 @@ def run_real_classifier_route(
             "crop_policy": active_crop_policy,
             "protocol_job_split_manifest": str(Path(split_manifest_path).resolve()) if split_manifest_path is not None else None,
             "checkpoint_reuse": checkpoint_reuse,
+            "training_resumed_from_checkpoint": bool(result.resumed_from_checkpoint) if result is not None else False,
+            "training_resume_checkpoint": str(run_dir / "training_checkpoint.pt") if checkpoint_payload is None else None,
             "augmentation_transforms": train_transform_configs,
             "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
+            "runtime_performance": {
+                "torch": torch_runtime_config,
+                "dataloader": dataloader_config,
+            },
         }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -1405,6 +1575,8 @@ def run_real_classifier_route(
     manifest["requested_device"] = device
     manifest["resolved_device"] = device_str
     manifest["score_matrix_evidence"] = score_matrix_evidence
+    manifest["training_resumed_from_checkpoint"] = bool(result.resumed_from_checkpoint) if result is not None else False
+    manifest["training_resume_checkpoint"] = str(run_dir / "training_checkpoint.pt") if checkpoint_payload is None else None
     if checkpoint_reuse is not None:
         manifest["checkpoint_reuse"] = checkpoint_reuse
     manifest["augmentation_transforms"] = train_transform_configs
@@ -1423,6 +1595,7 @@ def run_real_classifier_route(
         manifest["raw_data_sources"] = ds.get("raw_data_sources") or []
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
+    monitor.finish("completed")
     return RealRunArtifacts(
         run_dir=run_dir,
         dataset_manifest=dataset_path,

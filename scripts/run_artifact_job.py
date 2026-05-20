@@ -53,6 +53,26 @@ def _route_for_job(route_path: Path, job: dict, run_dir: Path) -> tuple[Path, di
     return effective_route, dict(overrides)
 
 
+def _adapter_manifest_metadata(manifest_json: Path) -> dict:
+    if not manifest_json.exists():
+        return {}
+    try:
+        payload = json.loads(manifest_json.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    keys = (
+        "run_mode",
+        "training_epochs",
+        "source_training_epochs",
+        "training_epochs_overridden",
+        "split_sha256",
+        "protocol_job_split_manifest",
+    )
+    return {key: payload.get(key) for key in keys if key in payload}
+
+
 def _run_train_holdout(
     job: dict,
     *,
@@ -100,13 +120,18 @@ def _run_train_holdout(
         "protocol": str(job.get("protocol", "")),
         "seed": int(job["seed"]),
         "split_id": str(job["split_id"]),
+        "split_manifest_path": str(job.get("split_manifest_path", "")),
+        "split_sha256": str(job.get("split_sha256", "")),
         "run_dir": str(artifacts.run_dir),
         "manifest_json": str(artifacts.manifest_json),
         "checkpoint_path": "checkpoint.pt",
         "checkpoint_sha256": checkpoint_sha256,
+        "base_route_config_path": route_path.as_posix(),
+        "base_route_config_sha256": sha256_file(route_path),
         "primary_metric": str(artifacts.metric_report.get("primary_metric", "")),
         "note": "checkpoint is a torch.save payload with a reusable state_dict; predictions.csv is incidental for this artifact stage",
     }
+    train_manifest.update(_adapter_manifest_metadata(artifacts.manifest_json))
     (run_dir / "train_manifest.json").write_text(json.dumps(train_manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     print(json.dumps(
@@ -165,6 +190,10 @@ def _run_inner_select(
         "route_id": str(job["route_id"]),
         "stage": "inner_select",
         "protocol": str(job.get("protocol", "")),
+        "seed": int(job["seed"]),
+        "split_id": str(job["split_id"]),
+        "split_manifest_path": str(job.get("split_manifest_path", "")),
+        "split_sha256": str(job.get("split_sha256", "")),
         "param_index": job.get("param_index"),
         "outer_fold": job.get("outer_fold"),
         "inner_fold": job.get("inner_fold"),
@@ -181,6 +210,7 @@ def _run_inner_select(
         "manifest_json": str(artifacts.manifest_json),
         "note": "inner selection metric produced by the same torch checkpoint adapter used for candidate-grade protocol artifacts",
     }
+    selection_metrics.update(_adapter_manifest_metadata(artifacts.manifest_json))
     (run_dir / "selection_metrics.json").write_text(json.dumps(selection_metrics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     print(json.dumps(

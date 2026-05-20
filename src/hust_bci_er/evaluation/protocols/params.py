@@ -87,7 +87,25 @@ def param_grid_from_search_space(search_space: Mapping[str, Any]) -> list[dict[s
     ``parameters.<dot.path>.values`` first, otherwise ``coarse``, otherwise
     ``fine``. This is a concrete one-stage candidate list, not the full
     coarse-to-fine search process from ``scripts/hparam_search.py``.
+
+    A search space may alternatively provide ``candidates`` as an explicit list
+    of dot-path override mappings. Use that shape when parameters must vary as
+    linked tuples, for example ``input_window_sec`` with
+    ``augmentation.window_sec`` and ``augmentation.stride_sec``.
     """
+    explicit_candidates = search_space.get("candidates")
+    if explicit_candidates is not None:
+        if not isinstance(explicit_candidates, list) or not explicit_candidates:
+            raise ValueError("parameter grid 'candidates' must be a non-empty list")
+        combos = []
+        for index, candidate in enumerate(explicit_candidates):
+            if not isinstance(candidate, Mapping) or not candidate:
+                raise ValueError(f"parameter grid candidate {index} must be a non-empty mapping")
+            combo = dict(candidate)
+            validate_param_overrides(combo)
+            combos.append(combo)
+        return combos
+
     parameters = search_space.get("parameters")
     if not isinstance(parameters, Mapping) or not parameters:
         raise ValueError("parameter grid search space must have a non-empty 'parameters' mapping")

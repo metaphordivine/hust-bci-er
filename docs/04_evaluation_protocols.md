@@ -212,7 +212,13 @@ python scripts/run_evaluation_protocol.py \
   --run-dir outputs/protocol_runs/p3_sliding_window_eegnet_<run_id>
 ```
 
-`--param-grid` 使用和 `scripts/hparam_search.py` 相近的 `parameters.<dot.path>.values` / `coarse` / `fine` 形状，但这里只展开一组具体候选列表，不执行 `hparam_search.py` 的 coarse-to-fine 两阶段搜索过程。单个参数 spec 的取值优先级是 `values`，否则 `coarse`，否则 `fine`；如果同一个 search-space 同时有 `coarse` 和 `fine`，P3 只会展开 `coarse`。需要 fine-stage 候选时，应传入只描述 fine 候选的独立 search-space 文件。每个 inner job 会把对应 `param_overrides` 写入 `selection_metrics.json`；outer final 只复用这些参数选择证据，不复用 inner checkpoint 权重。`run_evaluation_protocol.py` 会拒绝 `--grid-size > 1` 但没有 `--param-grid` 的 P3 materialization，避免生成只有抽象 `param_index`、没有真实参数值的 runnable manifest。
+`--param-grid` 使用和 `scripts/hparam_search.py` 相近的 `parameters.<dot.path>.values` / `coarse` / `fine` 形状，但这里只展开一组具体候选列表，不执行 `hparam_search.py` 的 coarse-to-fine 两阶段搜索过程。单个参数 spec 的取值优先级是 `values`，否则 `coarse`，否则 `fine`；如果同一个 search-space 同时有 `coarse` 和 `fine`，P3 只会展开 `coarse`。需要 fine-stage 候选时，应传入只描述 fine 候选的独立 search-space 文件。
+
+当参数必须成组变化时，search-space 也可以写成显式 `candidates` 列表。这个形状适合 sliding-window 这种需要同时改变 `input_window_sec`、`augmentation.window_sec` 和 `augmentation.stride_sec` 的路线，避免 cross-product 生成不满足 5-crop metric contract 的非法组合。
+
+CBraMod 路线分两类记录：`cbramod` 是本仓库的 CBraMod-style scratch backbone；`cbramod_pretrained` 才是官方 CBraMod encoder checkpoint finetune adapter。后者要求显式提供 `model.pretrained_checkpoint_path` 和 `model.pretrained_sha256`，默认用 `scripts/download_cbramod_pretrained.py` 下载到 ignored 的 `scratch/model_weights/cbramod/pretrained_weights.pth`。这类 route 必须设置 `training.reset_parameters_after_seed: false`，否则训练 loop 会在设种子后重置模型参数并冲掉预训练权重。manifest 会记录 `external_weight_provenance`，包括官方仓库、Hugging Face 权重 URL、checkpoint SHA256 和 strict state-dict 加载策略。
+
+每个 inner job 会把对应 `param_overrides` 写入 `selection_metrics.json`；outer final 只复用这些参数选择证据，不复用 inner checkpoint 权重。`run_evaluation_protocol.py` 会拒绝 `--grid-size > 1` 但没有 `--param-grid` 的 P3 materialization，避免生成只有抽象 `param_index`、没有真实参数值的 runnable manifest。
 
 ## 怎么选择协议
 

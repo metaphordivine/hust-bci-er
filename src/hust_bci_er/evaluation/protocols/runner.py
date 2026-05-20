@@ -563,6 +563,250 @@ def _execute_artifact_job(
     }
 
 
+def _missing_expected_artifacts(job: Mapping[str, Any], run_dir: Path) -> list[str]:
+    expected = [artifact for artifact in job.get("expected_artifacts", []) or [] if isinstance(artifact, str) and artifact]
+    if not expected:
+        return ["expected_artifacts"]
+    missing: list[str] = []
+    for artifact in expected:
+        if not (run_dir / artifact).exists():
+            missing.append(artifact)
+    return missing
+
+
+def _read_json_mapping(path: Path) -> Mapping[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, Mapping) else None
+
+
+def _resolve_route_path(route_config: Any, root: Path) -> Path | None:
+    if not isinstance(route_config, str) or not route_config:
+        return None
+    path = Path(route_config)
+    return path if path.is_absolute() else root / path
+
+
+def _same_optional_int(left: Any, right: Any) -> bool:
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    try:
+        return int(left) == int(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _same_optional_str(left: Any, right: Any) -> bool:
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    return str(left) == str(right)
+
+
+def _canonical_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_json_value(value[key]) for key in sorted(value, key=str)}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_json_value(item) for item in value]
+    return value
+
+
+def _same_optional_mapping(left: Any, right: Any) -> bool:
+    return _canonical_json_value(left or {}) == _canonical_json_value(right or {})
+
+
+def _artifact_job_metadata_matches(payload: Mapping[str, Any], job: Mapping[str, Any], *, gate: str) -> bool:
+    if not _same_optional_int(payload.get("seed"), job.get("seed")):
+        return False
+    if not _same_optional_str(payload.get("split_id"), job.get("split_id")):
+        return False
+    if not _same_optional_str(payload.get("split_manifest_path"), job.get("split_manifest_path")):
+        return False
+    if not _same_optional_str(payload.get("split_sha256"), job.get("split_sha256")):
+        return False
+    if gate == "candidate":
+        if payload.get("run_mode") != "full_subjects":
+            return False
+        if payload.get("training_epochs_overridden") is not False:
+            return False
+    return True
+
+
+def _artifact_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Path, *, gate: str = "smoke") -> bool:
+    if _missing_expected_artifacts(job, run_dir):
+        return False
+    route_path = _resolve_route_path(job.get("route_config"), root)
+    if route_path is None or not route_path.exists():
+        return False
+    route_sha256 = sha256_file(route_path)
+    config_snapshot = run_dir / "config_snapshot.yaml"
+    if not config_snapshot.exists():
+        return False
+
+    stage = str(job.get("stage", ""))
+    if stage == "train_holdout_model":
+        train_manifest = _read_json_mapping(run_dir / "train_manifest.json")
+        if train_manifest is None:
+            return False
+        if train_manifest.get("job_id") != job.get("job_id"):
+            return False
+        if train_manifest.get("route_id") != job.get("route_id"):
+            return False
+        if train_manifest.get("stage") != stage:
+            return False
+        if train_manifest.get("split_id") != job.get("split_id"):
+            return False
+        if not _artifact_job_metadata_matches(train_manifest, job, gate=gate):
+            return False
+        if train_manifest.get("base_route_config_sha256") not in {None, route_sha256}:
+            return False
+        return sha256_file(config_snapshot) == route_sha256
+
+    if stage == "inner_select":
+        selection = _read_json_mapping(run_dir / "selection_metrics.json")
+        if selection is None:
+            return False
+        if selection.get("job_id") != job.get("job_id"):
+            return False
+        if selection.get("route_id") != job.get("route_id"):
+            return False
+        if selection.get("stage") != stage:
+            return False
+        if not _same_optional_int(selection.get("param_index"), job.get("param_index")):
+            return False
+        if not _same_optional_int(selection.get("outer_fold"), job.get("outer_fold")):
+            return False
+        if not _same_optional_int(selection.get("inner_fold"), job.get("inner_fold")):
+            return False
+        if not _artifact_job_metadata_matches(selection, job, gate=gate):
+            return False
+        if not _same_optional_mapping(selection.get("param_overrides"), job.get("param_overrides")):
+            return False
+        if selection.get("base_route_config_sha256") != route_sha256:
+            return False
+        effective_sha256 = selection.get("effective_route_config_sha256")
+        if effective_sha256 is not None and sha256_file(config_snapshot) != effective_sha256:
+            return False
+        return True
+
+    return False
+
+
+def _protocol_artifact_entries(job: Mapping[str, Any], *, protocol_root: Path, field: str) -> list[dict[str, str]] | None:
+    entries: list[dict[str, str]] = []
+    for value in job.get(field) or []:
+        if not isinstance(value, str) or not value:
+            return None
+        path = protocol_root / value
+        if not path.exists():
+            return None
+        entries.append({"protocol_path": value, "sha256": sha256_file(path)})
+    return entries
+
+
+def _recorded_artifact_entries_match(actual: Any, expected: list[dict[str, str]]) -> bool:
+    if not expected:
+        return True
+    if not isinstance(actual, list):
+        return False
+    actual_pairs = {
+        (str(item.get("protocol_path", "")), str(item.get("sha256", "")))
+        for item in actual
+        if isinstance(item, Mapping)
+    }
+    return all((item["protocol_path"], item["sha256"]) in actual_pairs for item in expected)
+
+
+def _reuse_checkpoint_entry_matches(manifest: Mapping[str, Any], job: Mapping[str, Any], *, protocol_root: Path) -> bool:
+    reuse_path = job.get("reuse_checkpoint_path")
+    if not isinstance(reuse_path, str) or not reuse_path:
+        return True
+    path = protocol_root / reuse_path
+    if not path.exists():
+        return False
+    actual = manifest.get("protocol_reuse_checkpoint")
+    if not isinstance(actual, Mapping):
+        return False
+    return str(actual.get("protocol_path", "")) == reuse_path and str(actual.get("sha256", "")) == sha256_file(path)
+
+
+def _prediction_outputs_match_job(job: Mapping[str, Any], run_dir: Path, root: Path, *, protocol_root: Path, gate: str) -> bool:
+    if _missing_expected_artifacts(job, run_dir):
+        return False
+    manifest = _read_json_mapping(run_dir / "manifest.json")
+    if manifest is None:
+        return False
+    route_path = _resolve_route_path(job.get("route_config"), root)
+    if route_path is None or not route_path.exists():
+        return False
+    if manifest.get("protocol_job_id") != job.get("job_id"):
+        return False
+    if manifest.get("route_id") != job.get("route_id"):
+        return False
+    if manifest.get("protocol_job_stage") != job.get("stage"):
+        return False
+    if manifest.get("protocol_job_protocol") != job.get("protocol"):
+        return False
+    if not _same_optional_int(manifest.get("protocol_job_seed"), job.get("seed")):
+        return False
+    if not _same_optional_str(manifest.get("protocol_job_split_id"), job.get("split_id")):
+        return False
+    if not _same_optional_str(manifest.get("protocol_job_split_manifest_path"), job.get("split_manifest_path")):
+        return False
+    if not _same_optional_str(manifest.get("protocol_job_split_sha256"), job.get("split_sha256")):
+        return False
+    if manifest.get("protocol_job_base_route_config_sha256") != sha256_file(route_path):
+        return False
+    if isinstance(job.get("crop_policy"), Mapping) and not _same_optional_mapping(manifest.get("protocol_job_crop_policy"), job.get("crop_policy")):
+        return False
+    if gate == "candidate":
+        if manifest.get("protocol_job_mode") != "candidate":
+            return False
+        if manifest.get("protocol_job_epochs_override") is not None:
+            return False
+        if manifest.get("training_epochs_overridden") is not False:
+            return False
+    selection_entries = _protocol_artifact_entries(job, protocol_root=protocol_root, field="selection_artifact_paths")
+    if selection_entries is None:
+        return False
+    if not _recorded_artifact_entries_match(manifest.get("protocol_selection_artifacts"), selection_entries):
+        return False
+    if not _reuse_checkpoint_entry_matches(manifest, job, protocol_root=protocol_root):
+        return False
+    return True
+
+
+def _audit_existing_prediction_job(
+    *,
+    root: Path,
+    route_config: str,
+    run_dir: Path,
+    gate: str,
+) -> tuple[int, str, str]:
+    audit = subprocess.run(
+        [
+            sys.executable,
+            "scripts/repo_doctor.py",
+            "experiment",
+            "--route",
+            route_config,
+            "--run",
+            str(run_dir),
+            "--gate",
+            gate,
+        ],
+        cwd=root,
+        text=True,
+        capture_output=True,
+    )
+    return audit.returncode, audit.stdout, audit.stderr
+
+
 def _missing_dependency_artifacts(job: Mapping[str, Any], *, run_manifest: Path) -> list[str]:
     protocol_root = run_manifest.parent
     missing: list[str] = []
@@ -640,10 +884,29 @@ def execute_protocol_jobs(
         return execution_budget is not None and executed_count >= execution_budget
 
     for job in artifact_only:
+        job_id = str(job.get("job_id", ""))
+        existing_run_dir = run_manifest.parent / "job_runs" / job_id
         if execute_artifact_jobs:
+            if _artifact_outputs_match_job(job, existing_run_dir, root, gate=gate):
+                results.append(
+                    {
+                        "job_id": job_id,
+                        "route_config": str(job.get("route_config", "")),
+                        "run_dir": str(existing_run_dir),
+                        "status": "SKIPPED_EXISTING_ARTIFACT",
+                        "reason": "expected artifact-only outputs already exist.",
+                        "command_returncode": 0,
+                        "audit_gate": None,
+                        "audit_returncode": None,
+                        "stdout_tail": "",
+                        "stderr_tail": "",
+                        "requested_device": effective_device,
+                    }
+                )
+                continue
             if budget_exhausted():
                 result = {
-                    "job_id": str(job.get("job_id", "")),
+                    "job_id": job_id,
                     "route_config": str(job.get("route_config", "")),
                     "run_dir": None,
                     "status": "SKIPPED_MAX_JOBS",
@@ -660,7 +923,7 @@ def execute_protocol_jobs(
                 executed_count += 1
         else:
             result = {
-                "job_id": str(job.get("job_id", "")),
+                "job_id": job_id,
                 "route_config": str(job.get("route_config", "")),
                 "run_dir": None,
                 "status": "SKIPPED_ARTIFACT_ONLY",
@@ -675,11 +938,38 @@ def execute_protocol_jobs(
         results.append(result)
     dependency_failed = any(item.get("status") in {"FAILED_ARTIFACT", "SKIPPED_MAX_JOBS"} for item in results)
     for job in runnable:
+        job_id = str(job.get("job_id", ""))
+        route_config = str(job["route_config"])
+        run_dir = protocol_run_manifest_path.resolve().parent / "job_runs" / job_id
+        if _prediction_outputs_match_job(job, run_dir, root, protocol_root=run_manifest.parent, gate=gate):
+            audit_code, audit_stdout, audit_stderr = _audit_existing_prediction_job(
+                root=root,
+                route_config=route_config,
+                run_dir=run_dir,
+                gate=gate,
+            )
+            if audit_code == 0:
+                results.append(
+                    {
+                        "job_id": job_id,
+                        "route_config": route_config,
+                        "run_dir": str(run_dir),
+                        "status": "SKIPPED_EXISTING",
+                        "reason": "expected prediction outputs already exist and pass the requested audit gate.",
+                        "command_returncode": 0,
+                        "audit_gate": gate,
+                        "audit_returncode": audit_code,
+                        "requested_device": effective_device,
+                        "stdout_tail": audit_stdout[-4000:] if audit_stdout else "",
+                        "stderr_tail": audit_stderr[-4000:] if audit_stderr else "",
+                    }
+                )
+                continue
         missing_dependencies = _missing_dependency_artifacts(job, run_manifest=run_manifest)
         if budget_exhausted():
             results.append(
                 {
-                    "job_id": str(job.get("job_id", "")),
+                    "job_id": job_id,
                     "route_config": str(job.get("route_config", "")),
                     "run_dir": None,
                     "status": "SKIPPED_MAX_JOBS",
@@ -696,7 +986,7 @@ def execute_protocol_jobs(
         if dependency_failed or missing_dependencies:
             results.append(
                 {
-                    "job_id": str(job.get("job_id", "")),
+                    "job_id": job_id,
                     "route_config": str(job.get("route_config", "")),
                     "run_dir": None,
                     "status": "SKIPPED_DEPENDENCY_FAILED",
@@ -722,7 +1012,7 @@ def execute_protocol_jobs(
             "--protocol-run",
             str(protocol_run_manifest_path),
             "--job-id",
-            str(job["job_id"]),
+            job_id,
             "--mode",
             _mode_for_job(gate, job),
             "--device",
@@ -733,8 +1023,6 @@ def execute_protocol_jobs(
             command.extend(["--data-root", str(resolved_data_root)])
         if epochs_override is not None:
             command.extend(["--epochs-override", str(int(epochs_override))])
-        route_config = str(job["route_config"])
-        run_dir = protocol_run_manifest_path.resolve().parent / "job_runs" / str(job["job_id"])
         proc = subprocess.run(command, cwd=root, text=True, capture_output=True)
         audit_code: int | None = None
         if proc.returncode == 0:

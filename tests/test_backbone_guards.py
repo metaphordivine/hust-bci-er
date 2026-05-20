@@ -4,6 +4,10 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from hust_bci_er.models.backbones.cbramod import CBraMod
+from hust_bci_er.models.backbones.cbramod_pretrained import (
+    CBraModPretrainedClassifier,
+    OfficialCBraModEncoder,
+)
 from hust_bci_er.models.backbones.deformer_lite import EEGDeformerLite
 from hust_bci_er.models.backbones.fbcnet import FBCNet, segment_log_variance
 from hust_bci_er.models.backbones.tsception import TSception
@@ -316,6 +320,44 @@ def test_build_model_passes_cbramod_patch_embedding_width():
     model.eval()
     with torch.no_grad():
         out = model(torch.randn(2, 30, 250))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_cbramod_pretrained_requires_checkpoint_sha_when_loading(tmp_path):
+    checkpoint = tmp_path / "pretrained_weights.pth"
+    torch.save(OfficialCBraModEncoder(n_layer=1).state_dict(), checkpoint)
+
+    with pytest.raises(ValueError, match="pretrained_sha256"):
+        CBraModPretrainedClassifier(
+            n_chans=30,
+            n_outputs=2,
+            n_times=800,
+            n_layer=1,
+            load_pretrained=True,
+            pretrained_checkpoint_path=str(checkpoint),
+        )
+
+
+def test_build_model_loads_cbramod_pretrained_checkpoint_with_provenance(tmp_path):
+    from hust_bci_er.models.backbones.cbramod_pretrained import _sha256_file
+
+    checkpoint = tmp_path / "pretrained_weights.pth"
+    torch.save(OfficialCBraModEncoder(n_layer=1).state_dict(), checkpoint)
+    model = build_model(
+        "cbramod_pretrained",
+        n_channels=30,
+        n_times=800,
+        n_classes=2,
+        n_layer=1,
+        load_pretrained=True,
+        pretrained_checkpoint_path=str(checkpoint),
+        pretrained_sha256=_sha256_file(checkpoint),
+        classifier="avgpooling_patch_reps",
+    )
+    assert model.external_weight_provenance["load_policy"] == "strict_encoder_state_dict"
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 800))
     assert tuple(out.shape) == (2, 2)
 
 

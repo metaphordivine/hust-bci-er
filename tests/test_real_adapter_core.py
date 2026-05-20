@@ -17,12 +17,21 @@ import numpy as np
 import pytest
 import yaml
 
+import hust_bci_er.training._real_adapter_impl as real_adapter_impl
 import hust_bci_er.training.real_adapter as real_adapter
 from hust_bci_er.training.real_adapter import (
+    DATALOADER_NUM_WORKERS_ENV,
+    DATALOADER_PERSISTENT_WORKERS_ENV,
+    DATALOADER_PIN_MEMORY_ENV,
+    DATALOADER_PREFETCH_FACTOR_ENV,
     FIXED_CANDIDATE_CROPS,
     KNOWN_PREPROC,
+    TORCH_INTEROP_THREADS_ENV,
+    TORCH_NUM_THREADS_ENV,
     _apply_preprocessing,
     _build_score_matrix,
+    _configure_torch_runtime,
+    _dataloader_kwargs,
     _fit_ea_on_windows,
     _load_mat_trials,
     _make_fixed_crops,
@@ -33,6 +42,105 @@ from hust_bci_er.training.real_adapter import (
     _write_evidence_manifests,
     run_real_classifier_route,
 )
+
+
+PERF_ENV_NAMES = [
+    TORCH_NUM_THREADS_ENV,
+    TORCH_INTEROP_THREADS_ENV,
+    DATALOADER_NUM_WORKERS_ENV,
+    DATALOADER_PIN_MEMORY_ENV,
+    DATALOADER_PERSISTENT_WORKERS_ENV,
+    DATALOADER_PREFETCH_FACTOR_ENV,
+]
+
+
+def _clear_perf_env(monkeypatch):
+    for name in PERF_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
+# ---------------------------------------------------------------------------
+# Runtime performance knobs
+# ---------------------------------------------------------------------------
+
+class _FakeTorchRuntime:
+    def __init__(self) -> None:
+        self.num_threads: list[int] = []
+        self.interop_threads: list[int] = []
+
+    def set_num_threads(self, value: int) -> None:
+        self.num_threads.append(value)
+
+    def set_num_interop_threads(self, value: int) -> None:
+        self.interop_threads.append(value)
+
+
+def test_runtime_performance_defaults_preserve_serial_loader(monkeypatch):
+    _clear_perf_env(monkeypatch)
+    monkeypatch.setattr(real_adapter_impl, "_TORCH_INTEROP_THREADS_CONFIGURED", None)
+
+    assert _dataloader_kwargs(device="cuda") == {"num_workers": 0, "pin_memory": False}
+
+    fake_torch = _FakeTorchRuntime()
+    config = _configure_torch_runtime(fake_torch)
+    assert config["num_threads_applied"] is None
+    assert config["interop_threads_applied"] is None
+    assert fake_torch.num_threads == []
+    assert fake_torch.interop_threads == []
+
+
+def test_runtime_performance_env_enables_workers_and_thread_caps(monkeypatch):
+    _clear_perf_env(monkeypatch)
+    monkeypatch.setattr(real_adapter_impl, "_TORCH_INTEROP_THREADS_CONFIGURED", None)
+    monkeypatch.setenv(TORCH_NUM_THREADS_ENV, "4")
+    monkeypatch.setenv(TORCH_INTEROP_THREADS_ENV, "1")
+    monkeypatch.setenv(DATALOADER_NUM_WORKERS_ENV, "2")
+    monkeypatch.setenv(DATALOADER_PREFETCH_FACTOR_ENV, "3")
+
+    fake_torch = _FakeTorchRuntime()
+    config = _configure_torch_runtime(fake_torch)
+    assert config["num_threads_applied"] == 4
+    assert config["interop_threads_applied"] == 1
+    assert fake_torch.num_threads == [4]
+    assert fake_torch.interop_threads == [1]
+
+    # Inter-op threads can only be set once per torch process; repeat calls keep
+    # the existing value instead of calling torch again.
+    config = _configure_torch_runtime(fake_torch)
+    assert config["interop_threads_applied"] == 1
+    assert fake_torch.interop_threads == [1]
+
+    assert _dataloader_kwargs(device="cuda") == {
+        "num_workers": 2,
+        "pin_memory": True,
+        "persistent_workers": True,
+        "prefetch_factor": 3,
+    }
+
+
+def test_runtime_performance_env_allows_loader_overrides(monkeypatch):
+    _clear_perf_env(monkeypatch)
+    monkeypatch.setenv(DATALOADER_NUM_WORKERS_ENV, "2")
+    monkeypatch.setenv(DATALOADER_PIN_MEMORY_ENV, "0")
+    monkeypatch.setenv(DATALOADER_PERSISTENT_WORKERS_ENV, "0")
+
+    assert _dataloader_kwargs(device="cuda") == {
+        "num_workers": 2,
+        "pin_memory": False,
+        "persistent_workers": False,
+    }
+
+
+def test_runtime_performance_env_rejects_invalid_values(monkeypatch):
+    _clear_perf_env(monkeypatch)
+    monkeypatch.setenv(DATALOADER_NUM_WORKERS_ENV, "many")
+    with pytest.raises(ValueError, match=DATALOADER_NUM_WORKERS_ENV):
+        _dataloader_kwargs(device="cuda")
+
+    _clear_perf_env(monkeypatch)
+    monkeypatch.setenv(TORCH_INTEROP_THREADS_ENV, "0")
+    with pytest.raises(ValueError, match=TORCH_INTEROP_THREADS_ENV):
+        _configure_torch_runtime(_FakeTorchRuntime())
 
 
 # ---------------------------------------------------------------------------

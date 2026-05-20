@@ -60,7 +60,7 @@ def _selection_artifacts(protocol_root: Path, job: dict) -> list[dict[str, str]]
     out: list[dict[str, str]] = []
     for value in job.get("selection_artifact_paths") or []:
         path = _required_protocol_path(protocol_root, value, field="selection_artifact_paths")
-        out.append({"path": str(path), "sha256": sha256_file(path)})
+        out.append({"path": str(path), "protocol_path": path.relative_to(protocol_root).as_posix(), "sha256": sha256_file(path)})
     return out
 
 
@@ -217,8 +217,51 @@ def _route_for_selected_p3_final(route_path: Path, route_data: dict, run_dir: Pa
     return effective
 
 
-def _patch_selection_artifact_provenance(run_dir: Path, artifacts: list[dict[str, str]], selected_artifact: dict | None) -> None:
-    if not artifacts and selected_artifact is None:
+def _protocol_job_metadata(
+    *,
+    protocol_root: Path,
+    job: dict,
+    route_path: Path,
+    effective_route_path: Path,
+    mode: str,
+    epochs_override: int | None,
+    reuse_checkpoint_path: Path | None,
+) -> dict:
+    split_rel = str(job.get("split_manifest_path") or "")
+    split_path = _required_protocol_path(protocol_root, split_rel, field="split_manifest_path")
+    payload: dict[str, object] = {
+        "protocol_job_id": str(job.get("job_id", "")),
+        "protocol_job_stage": str(job.get("stage", "")),
+        "protocol_job_protocol": str(job.get("protocol", "")),
+        "protocol_job_seed": int(job["seed"]),
+        "protocol_job_split_id": str(job.get("split_id", "")),
+        "protocol_job_split_manifest_path": split_rel,
+        "protocol_job_split_sha256": sha256_file(split_path),
+        "protocol_job_base_route_config_path": route_path.as_posix(),
+        "protocol_job_base_route_config_sha256": sha256_file(route_path),
+        "protocol_job_effective_route_config_path": effective_route_path.as_posix(),
+        "protocol_job_effective_route_config_sha256": sha256_file(effective_route_path),
+        "protocol_job_mode": mode,
+        "protocol_job_epochs_override": int(epochs_override) if epochs_override is not None else None,
+    }
+    if isinstance(job.get("crop_policy"), dict):
+        payload["protocol_job_crop_policy"] = dict(job["crop_policy"])
+    if reuse_checkpoint_path is not None:
+        payload["protocol_reuse_checkpoint"] = {
+            "protocol_path": reuse_checkpoint_path.relative_to(protocol_root).as_posix(),
+            "sha256": sha256_file(reuse_checkpoint_path),
+        }
+    return payload
+
+
+def _patch_protocol_job_provenance(
+    run_dir: Path,
+    *,
+    artifacts: list[dict[str, str]],
+    selected_artifact: dict | None,
+    job_metadata: dict,
+) -> None:
+    if not artifacts and selected_artifact is None and not job_metadata:
         return
     for name in ("manifest.json", "model_state.local.json"):
         path = run_dir / name
@@ -226,6 +269,7 @@ def _patch_selection_artifact_provenance(run_dir: Path, artifacts: list[dict[str
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
+            payload.update(job_metadata)
             if artifacts:
                 payload["protocol_selection_artifacts"] = artifacts
             if selected_artifact is not None:
@@ -275,6 +319,15 @@ def main(argv: list[str] | None = None) -> int:
     if selected_artifact is not None and reuse_checkpoint_path is not None:
         raise ValueError("P3 outer final retrain must not declare reuse_checkpoint_path")
     effective_route_path = _route_for_selected_p3_final(route_path, route_data, run_dir, selected_artifact)
+    job_metadata = _protocol_job_metadata(
+        protocol_root=protocol_root,
+        job=job,
+        route_path=route_path,
+        effective_route_path=effective_route_path,
+        mode=args.mode,
+        epochs_override=args.epochs_override,
+        reuse_checkpoint_path=reuse_checkpoint_path,
+    )
     command = [
         "python",
         "scripts/run_route_job.py",
@@ -318,7 +371,12 @@ def main(argv: list[str] | None = None) -> int:
             reuse_checkpoint_path=reuse_checkpoint_path,
             reuse_checkpoint_context=None,
         )
-    _patch_selection_artifact_provenance(run_dir, selection_artifacts, selected_artifact)
+    _patch_protocol_job_provenance(
+        run_dir,
+        artifacts=selection_artifacts,
+        selected_artifact=selected_artifact,
+        job_metadata=job_metadata,
+    )
     print(json.dumps({"job_id": args.job_id, "run_dir": str(artifacts.run_dir), "manifest": str(artifacts.manifest_json), "route_config": str(effective_route_path)}, ensure_ascii=False))
     return 0
 

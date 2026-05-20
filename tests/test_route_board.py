@@ -10,3 +10,10 @@ def test_route_board_is_generated_from_route_configs():
 
 def test_route_registry_is_synchronized():
     assert check_route_registry.main() == 0
+
+
+def test_pending_placeholder_summary_is_not_counted_as_latest_gate():
+    board = generate_board()
+    row = next(line for line in board.splitlines() if line.startswith("| `tuned_sliding_window_fbstcnet` |"))
+    assert "| IDEA |  |" in row
+    assert "| pending_placeholder |" in row

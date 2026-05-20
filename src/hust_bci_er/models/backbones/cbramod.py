@@ -1,7 +1,8 @@
-"""CBraMod: Criss-Cross Brain Model for EEG decoding.
+"""CBraMod-style scratch model for EEG decoding.
 
-Patch-based EEG foundation model with criss-cross transformer that separately
-models spatial (inter-channel) and temporal (inter-patch) attention.
+This module implements a patch embedding plus criss-cross transformer backbone
+inspired by CBraMod. It does not load the original pretrained foundation-model
+checkpoint, tokenizer artifacts, or external-weight provenance.
 """
 
 from __future__ import annotations
@@ -200,7 +201,7 @@ class CrissCrossTransformerLayer(nn.Module):
 
 
 class CBraMod(nn.Module):
-    """CBraMod: Criss-Cross Brain Model for EEG decoding."""
+    """CBraMod-style scratch backbone with criss-cross attention."""
 
     def __init__(
         self,
