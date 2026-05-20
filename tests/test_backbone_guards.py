@@ -18,6 +18,7 @@ from hust_bci_er.models.backbones.fbstcnet import (
     aggregate_branch_logits,
     aggregate_crop_logits,
 )
+from hust_bci_er.models.backbones.riemannian_tangent import RiemannianTangentNet
 from hust_bci_er.models.factory import build_model
 from hust_bci_er.models.eeg_montage import HUST_30_A2_CHANNELS, HUST_30_A2_REGIONS
 from hust_bci_er.models.graph.dgcnn import DGCNN
@@ -530,6 +531,52 @@ def test_build_model_builds_fbcnet():
 
 
 # ---------------------------------------------------------------------------
+# Riemannian tangent-space guards
+# ---------------------------------------------------------------------------
+
+def test_riemannian_tangent_forward_shape_and_feature_dim():
+    model = RiemannianTangentNet(
+        n_chans=30,
+        n_outputs=2,
+        n_times=256,
+        covariance_eps=1e-3,
+        shrinkage=0.1,
+    )
+    model.eval()
+    with torch.no_grad():
+        x = torch.randn(2, 30, 256)
+        out = model(x)
+        features = model.extract_features(x)
+    assert tuple(out.shape) == (2, 2)
+    assert tuple(features.shape) == (2, 30 * 31 // 2)
+    assert torch.isfinite(features).all()
+
+
+def test_riemannian_tangent_rejects_invalid_regularization():
+    with pytest.raises(ValueError, match="covariance_eps"):
+        RiemannianTangentNet(n_chans=30, n_outputs=2, n_times=256, covariance_eps=0.0)
+    with pytest.raises(ValueError, match="shrinkage"):
+        RiemannianTangentNet(n_chans=30, n_outputs=2, n_times=256, shrinkage=1.0)
+
+
+def test_build_model_builds_riemannian_tangent():
+    model = build_model(
+        "riemannian_tangent",
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        covariance_eps=1e-3,
+        shrinkage=0.2,
+        feature_standardize=True,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+    assert model.shrinkage == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
 # DGCNN guards
 # ---------------------------------------------------------------------------
 
@@ -576,12 +623,13 @@ def test_build_model_builds_dgcnn_graph_model():
     assert tuple(out.shape) == (2, 2)
 
 
-@pytest.mark.parametrize("name", ["dgcnn", "fbcnet", "lggnet", "tsception"])
+@pytest.mark.parametrize("name", ["dgcnn", "fbcnet", "lggnet", "riemannian_tangent", "tsception"])
 def test_new_models_forward_backward_on_candidate_length(name):
     kwargs = {
         "dgcnn": {"channel_montage": "hust_30_a2", "node_features": 4, "graph_hidden_dim": 4, "k_order": 2, "temporal_kernel_size": 31, "classifier_hidden_dim": 8},
         "fbcnet": {"n_bands": 3, "spatial_filters": 2, "temporal_kernel_size": 31, "n_segments": 4, "classifier_hidden_dim": 8},
         "lggnet": {"channel_montage": "hust_30_a2", "temporal_filters": 4, "temporal_kernel_sizes": (15, 31), "graph_hidden_dim": 4, "classifier_hidden_dim": 8},
+        "riemannian_tangent": {"covariance_eps": 1e-3, "shrinkage": 0.1},
         "tsception": {"channel_montage": "hust_30_a2", "n_filters": 2, "temporal_kernel_sizes": (31, 63), "classifier_hidden_dim": 8},
     }[name]
     model = build_model(name, n_channels=30, n_times=2500, n_classes=2, **kwargs)

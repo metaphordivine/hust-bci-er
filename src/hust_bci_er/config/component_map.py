@@ -50,6 +50,11 @@ _COMPONENT_BINDINGS: tuple[ComponentRouteBinding, ...] = (
         "sliding_ea_dgcnn_coral_cohort_w6_s1",
         "Sliding-window DGCNN with cohort-domain CORAL adaptation",
     ),
+    ComponentRouteBinding(
+        "riemannian_tangent_component",
+        "fixed_crop_ea_riemannian_tangent",
+        "Fixed-crop EA log-covariance tangent-space linear component",
+    ),
     # Whitening components require SRFNet + whitening preprocessing.
     # There is no standalone route config for these yet; the
     # component-score CSV must either come from a manually materialized

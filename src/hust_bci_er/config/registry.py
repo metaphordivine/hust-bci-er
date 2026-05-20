@@ -76,6 +76,7 @@ TORCH_BACKBONES = {
     "cbramod_pretrained",
     "fbcnet",
     "fbstcnet",
+    "riemannian_tangent",
     "tsception",
 }
 

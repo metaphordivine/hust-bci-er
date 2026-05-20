@@ -68,6 +68,13 @@ def _model_config(model_name: str) -> dict:
             "classifier_hidden_dim": 8,
             "dropout": 0.1,
         },
+        "riemannian_tangent": {
+            "name": "riemannian_tangent",
+            "covariance_eps": 0.001,
+            "shrinkage": 0.1,
+            "feature_standardize": True,
+            "dropout": 0.0,
+        },
     }
     return configs[model_name]
 
@@ -111,7 +118,7 @@ def _write_route(path: Path, model_name: str) -> None:
     path.write_text(yaml.safe_dump(route, sort_keys=False), encoding="utf-8")
 
 
-@pytest.mark.parametrize("model_name", ["tsception", "fbcnet", "dgcnn", "lggnet"])
+@pytest.mark.parametrize("model_name", ["tsception", "fbcnet", "dgcnn", "lggnet", "riemannian_tangent"])
 def test_new_routes_run_one_epoch_diagnostic_smoke(tmp_path, monkeypatch, model_name):
     import hust_bci_er.training.reproducibility as reproducibility
 

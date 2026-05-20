@@ -11,6 +11,7 @@ from .backbones.deformer_lite import build_deformer_lite
 from .backbones.eegnet import build_eegnet
 from .backbones.fbcnet import build_fbcnet
 from .backbones.fbstcnet import build_fbstcnet
+from .backbones.riemannian_tangent import build_riemannian_tangent
 from .backbones.shallow_conv_net import build_shallow_conv_net
 from .backbones.srfnet import build_srfnet
 from .backbones.tsception import build_tsception
@@ -28,6 +29,7 @@ BUILDERS = {
     "cbramod_pretrained": build_cbramod_pretrained,
     "fbcnet": build_fbcnet,
     "fbstcnet": build_fbstcnet,
+    "riemannian_tangent": build_riemannian_tangent,
     "tsception": build_tsception,
 }
 

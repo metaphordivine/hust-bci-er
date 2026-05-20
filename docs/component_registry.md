@@ -40,6 +40,7 @@
 - `eegnet`
 - `fbcnet`
 - `fbstcnet`
+- `riemannian_tangent`
 - `shallow_conv_net`
 - `srfnet`
 - `tsception`
