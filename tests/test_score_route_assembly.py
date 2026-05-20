@@ -34,6 +34,34 @@ def test_calibrated_probability_average_returns_row_probabilities():
     assert fused[0, 0] > fused[0, -1]
 
 
+def test_calibrated_probability_average_normalizes_explicit_weights():
+    first = np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype=float)
+    second = np.array([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=float)
+
+    percent = calibrated_probability_average(first, second, weights=[75, 25], temperature=1.25)
+    normalized = calibrated_probability_average(first, second, weights=[0.75, 0.25], temperature=1.25)
+
+    assert np.allclose(percent, normalized)
+    assert np.allclose(percent.sum(axis=1), 1.0)
+
+
+def test_calibrated_probability_average_rejects_invalid_weights():
+    first = np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype=float)
+    second = np.array([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=float)
+
+    for weights, message in [
+        ([0.0, 0.0], "weights sum must be positive"),
+        ([1.0, -0.1], "weights must be non-negative"),
+        ([1.0, np.nan], "weights must be finite"),
+    ]:
+        try:
+            calibrated_probability_average(first, second, weights=weights)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:
+            raise AssertionError(f"invalid weights should fail: {weights}")
+
+
 def test_interpretable_calibrated_diverse_route_from_component_arrays():
     route = score_route_by_id("interpretable_calibrated_diverse_score_fusion")
     assert route is not None
