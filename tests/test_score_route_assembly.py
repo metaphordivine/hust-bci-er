@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from hust_bci_er.inference.clean_score_routes import score_route_by_id
-from hust_bci_er.inference.score_fusion import assemble_score_route, assemble_score_node
+from hust_bci_er.inference.score_fusion import assemble_score_route, assemble_score_node, calibrated_probability_average, softmax_rows
 from hust_bci_er.inference.score_route_assembly import assemble_score_route_rows, write_score_route_rows
 
 
@@ -19,6 +19,38 @@ def test_assemble_score_route_from_component_arrays():
     assert scores.shape == (1, 8)
     assert np.isfinite(scores).all()
     assert np.array_equal(scores, assemble_score_node(route.score_node, component_scores))
+
+
+def test_calibrated_probability_average_returns_row_probabilities():
+    first = np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype=float)
+    second = np.array([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=float)
+
+    probs = softmax_rows(first, temperature=1.25)
+    fused = calibrated_probability_average(first, second, weights=[0.75, 0.25], temperature=1.25)
+
+    assert probs.shape == first.shape
+    assert np.allclose(probs.sum(axis=1), 1.0)
+    assert np.allclose(fused.sum(axis=1), 1.0)
+    assert fused[0, 0] > fused[0, -1]
+
+
+def test_interpretable_calibrated_diverse_route_from_component_arrays():
+    route = score_route_by_id("interpretable_calibrated_diverse_score_fusion")
+    assert route is not None
+    component_scores = {
+        "fixed_crop_ea_fbstcnet_component": np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "srfnet_long_component": np.array([[7, 8, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "conformer_component": np.array([[8, 6, 7, 5, 4, 3, 2, 1]], dtype=float),
+        "dgcnn_dann_cohort_component": np.array([[6, 7, 8, 5, 4, 3, 2, 1]], dtype=float),
+        "dgcnn_coral_cohort_component": np.array([[7, 6, 8, 5, 4, 3, 2, 1]], dtype=float),
+        "riemannian_tangent_component": np.array([[5, 6, 7, 8, 4, 3, 2, 1]], dtype=float),
+    }
+
+    scores = assemble_score_route(route, component_scores)
+
+    assert scores.shape == (1, 8)
+    assert np.isfinite(scores).all()
+    assert np.allclose(scores.sum(axis=1), 1.0)
 
 
 def test_assemble_score_route_rows_from_component_csvs(tmp_path):

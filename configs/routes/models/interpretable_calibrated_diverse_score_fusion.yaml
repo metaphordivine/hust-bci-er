@@ -1,0 +1,26 @@
+route_id: interpretable_calibrated_diverse_score_fusion
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 10
+preprocessing: [euclidean_alignment, zscore]
+features: []
+model:
+  name: score_fusion
+  score_node: interpretable_calibrated_diverse_score_fusion
+  components:
+    - fixed_crop_ea_fbstcnet_component
+    - srfnet_long_component
+    - conformer_component
+    - dgcnn_dann_cohort_component
+    - dgcnn_coral_cohort_component
+    - riemannian_tangent_component
+adaptation: none
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "IDEA only. Temperature-smoothed probability fusion after row-wise z-score calibration. Target weights are FBSTCNet 0.24, SRFNet 0.22, Conformer 0.18, DGCNN-DANN 0.14, DGCNN-CORAL 0.14, Riemannian tangent 0.08; preprocessing describes component provenance, not a unified preprocessing pass."
