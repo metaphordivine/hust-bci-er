@@ -1,10 +1,10 @@
-route_id: fixed_crop_car_ea_shrinkage_whitening_fbstcnet
+route_id: fixed_crop_ea_car_shrinkage_whitening_fbstcnet
 status: IDEA
 dataset_version: train_v1
 split_id: p1_seed42_fold0
 seed: 42
 input_window_sec: 10
-preprocessing: [car, euclidean_alignment, shrinkage_whitening]
+preprocessing: [euclidean_alignment, car, shrinkage_whitening]
 features: []
 augmentation:
   name: split_first_fixed_crops
@@ -56,4 +56,4 @@ inference:
 evaluation:
   protocol: p1_repeated_group_kfold
   primary_metric: exact_single_crop_expected_BA
-notes: "Fixed-crop FBSTCNet-M preprocessing route: CAR, EA, then shrinkage whitening eps=1e-3 alpha=0.1; tests whether covariance shrinkage stabilizes the whitening branch without changing split or protocol."
+notes: "Fixed-crop FBSTCNet-M preprocessing route: EA first to match the fitted transform distribution, then CAR and shrinkage whitening eps=1e-3 alpha=0.1; tests whether covariance shrinkage stabilizes the whitening branch without changing split or protocol."
