@@ -8,6 +8,7 @@ FFT rectangular filterbank available via filterbank_type="fft_rectangular" for a
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -255,6 +256,93 @@ class FBSTC_ConnectivityHead(nn.Module):
         return numerator / denom.clamp_min(self.eps)
 
 
+class RiemannianBranchGate(nn.Module):
+    """Predict branch weights from log-covariance tangent features."""
+
+    def __init__(
+        self,
+        n_chans: int,
+        n_branches: int,
+        hidden_dim: int = 32,
+        covariance_eps: float = 1e-3,
+        shrinkage: float = 0.1,
+        tangent_scale: float = math.sqrt(2.0),
+        temperature: float = 1.0,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if n_chans < 2:
+            raise ValueError("RiemannianBranchGate requires at least two channels")
+        if n_branches < 2:
+            raise ValueError("RiemannianBranchGate requires at least two branches")
+        if hidden_dim <= 0:
+            raise ValueError("gate hidden_dim must be positive")
+        if covariance_eps <= 0:
+            raise ValueError("gate covariance_eps must be positive")
+        if not 0.0 <= shrinkage < 1.0:
+            raise ValueError("gate shrinkage must be in [0, 1)")
+        if tangent_scale <= 0:
+            raise ValueError("gate tangent_scale must be positive")
+        if temperature <= 0:
+            raise ValueError("gate temperature must be positive")
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError("gate dropout must be in [0, 1)")
+
+        self.n_chans = int(n_chans)
+        self.n_branches = int(n_branches)
+        self.covariance_eps = float(covariance_eps)
+        self.shrinkage = float(shrinkage)
+        self.tangent_scale = float(tangent_scale)
+        self.temperature = float(temperature)
+        self.feature_dim = self.n_chans * (self.n_chans + 1) // 2
+
+        rows, cols = torch.triu_indices(self.n_chans, self.n_chans)
+        self.register_buffer("triu_rows", rows, persistent=False)
+        self.register_buffer("triu_cols", cols, persistent=False)
+        self.register_buffer("offdiag_mask", (rows != cols), persistent=False)
+
+        self.feature_norm = nn.LayerNorm(self.feature_dim, elementwise_affine=False)
+        self.gate = nn.Sequential(
+            nn.Linear(self.feature_dim, int(hidden_dim)),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(int(hidden_dim), self.n_branches),
+        )
+
+    def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim == 4:
+            if x.shape[1] != 1:
+                raise ValueError("4D EEG input must be shaped [batch, 1, channels, times]")
+            x = x.squeeze(1)
+        if x.ndim != 3:
+            raise ValueError("EEG input must be shaped [batch, channels, times]")
+        if x.shape[1] != self.n_chans:
+            raise ValueError(f"expected {self.n_chans} channels, got {x.shape[1]}")
+        if x.shape[2] < 2:
+            raise ValueError("EEG input must contain at least two time samples")
+        return x
+
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        x = self._prepare_input(x)
+        centered = x - x.mean(dim=-1, keepdim=True)
+        denom = max(int(centered.shape[-1]) - 1, 1)
+        cov = centered @ centered.transpose(-1, -2) / float(denom)
+        eye = torch.eye(self.n_chans, dtype=cov.dtype, device=cov.device).expand(cov.shape[0], -1, -1)
+        trace_mean = cov.diagonal(dim1=-2, dim2=-1).mean(dim=-1).view(-1, 1, 1)
+        cov = (1.0 - self.shrinkage) * cov + self.shrinkage * trace_mean * eye
+        cov = cov + self.covariance_eps * eye
+        eigvals, eigvecs = torch.linalg.eigh(cov)
+        log_diag = torch.log(torch.clamp(eigvals, min=self.covariance_eps))
+        log_cov = (eigvecs * log_diag.unsqueeze(-2)) @ eigvecs.transpose(-1, -2)
+        features = log_cov[:, self.triu_rows, self.triu_cols]
+        features = torch.where(self.offdiag_mask.unsqueeze(0), features * self.tangent_scale, features)
+        return self.feature_norm(features)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logits = self.gate(self.extract_features(x)) / self.temperature
+        return torch.softmax(logits, dim=-1)
+
+
 # ---------------------------------------------------------------------------
 # Top-level FBSTCNet
 # ---------------------------------------------------------------------------
@@ -318,6 +406,13 @@ class FBSTCNet(nn.Module):
         power_drop_prob: float = 0.5,
         gamma: int = 400,
         conn_eps: float = 1e-6,
+        branch_fusion: str = "equal_probability_average",
+        gate_hidden_dim: int = 32,
+        gate_covariance_eps: float = 1e-3,
+        gate_shrinkage: float = 0.1,
+        gate_tangent_scale: float = math.sqrt(2.0),
+        gate_temperature: float = 1.0,
+        gate_dropout: float = 0.0,
         **filterbank_kwargs: Any,
     ) -> None:
         super().__init__()
@@ -326,9 +421,15 @@ class FBSTCNet(nn.Module):
             raise ValueError(f"variant must be P, C, or M, got {variant}")
         if F2 % F1 != 0:
             raise ValueError(f"F2 must be divisible by F1 for grouped spatial conv, got F1={F1}, F2={F2}")
+        if branch_fusion not in {"equal_probability_average", "riemannian_gate"}:
+            raise ValueError("branch_fusion must be equal_probability_average or riemannian_gate")
+        if branch_fusion == "riemannian_gate" and variant != "M":
+            raise ValueError("riemannian_gate branch_fusion requires mixed variant M")
         self.variant = variant
         self.sfreq = sfreq
         self.filterbank_type = filterbank_type
+        self.branch_fusion = branch_fusion
+        self.branch_names = ("power", "connectivity") if variant == "M" else (("power",) if variant == "P" else ("connectivity",))
 
         bands = _resolve_bands(bands, n_bands)
 
@@ -358,6 +459,18 @@ class FBSTCNet(nn.Module):
                 F2=F2, n_outputs=n_outputs, gamma=gamma, eps=conn_eps,
             )
 
+        if self.branch_fusion == "riemannian_gate":
+            self.branch_gate = RiemannianBranchGate(
+                n_chans=n_chans,
+                n_branches=len(self.branch_names),
+                hidden_dim=gate_hidden_dim,
+                covariance_eps=gate_covariance_eps,
+                shrinkage=gate_shrinkage,
+                tangent_scale=gate_tangent_scale,
+                temperature=gate_temperature,
+                dropout=gate_dropout,
+            )
+
     @property
     def filterbank_params(self) -> dict[str, Any]:
         if hasattr(self.filterbank, "metadata"):
@@ -373,10 +486,18 @@ class FBSTCNet(nn.Module):
             branch_crop_logits["power"] = self.power_head(self.st_p(x_fb))
         if self.variant in ("C", "M"):
             branch_crop_logits["connectivity"] = self.conn_head(self.st_c(x_fb))
-        crop_logits = torch.cat(list(branch_crop_logits.values()), dim=1)
+        crop_logits = torch.cat([branch_crop_logits[name] for name in self.branch_names], dim=1)
         if return_crop_logits:
-            return {**branch_crop_logits, "combined": crop_logits}
-        branch_logits = [aggregate_crop_logits(logits) for logits in branch_crop_logits.values()]
+            result = {**branch_crop_logits, "combined": crop_logits}
+            if self.branch_fusion == "riemannian_gate":
+                result["branch_weights"] = self.branch_gate(x)
+            return result
+        branch_logits = [aggregate_crop_logits(branch_crop_logits[name]) for name in self.branch_names]
+        if self.branch_fusion == "riemannian_gate":
+            branch_weights = self.branch_gate(x)
+            branch_probs = torch.stack([torch.softmax(logits, dim=-1) for logits in branch_logits], dim=1)
+            fused_probs = (branch_weights.unsqueeze(-1) * branch_probs).sum(dim=1)
+            return torch.log(fused_probs.clamp_min(1e-6))
         return aggregate_branch_logits(branch_logits)
 
 
@@ -405,5 +526,12 @@ def build_fbstcnet(
         power_drop_prob=float(model_kwargs.get("power_drop_prob", 0.5)),
         gamma=int(model_kwargs.get("gamma", 400)),
         conn_eps=float(model_kwargs.get("conn_eps", 1e-6)),
+        branch_fusion=str(model_kwargs.get("branch_fusion", "equal_probability_average")),
+        gate_hidden_dim=int(model_kwargs.get("gate_hidden_dim", 32)),
+        gate_covariance_eps=float(model_kwargs.get("gate_covariance_eps", 1e-3)),
+        gate_shrinkage=float(model_kwargs.get("gate_shrinkage", 0.1)),
+        gate_tangent_scale=float(model_kwargs.get("gate_tangent_scale", math.sqrt(2.0))),
+        gate_temperature=float(model_kwargs.get("gate_temperature", 1.0)),
+        gate_dropout=float(model_kwargs.get("gate_dropout", 0.0)),
         **filterbank_kwargs,
     )
