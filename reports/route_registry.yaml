@@ -136,6 +136,9 @@ routes:
   - route_id: fixed_crop_ea_whitening_eps3e4_fbstcnet
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_whitening_eps3e4_fbstcnet
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_pure_deformer_lite
     owner: metaphordivine
     blocker: missing_real_candidate_run
