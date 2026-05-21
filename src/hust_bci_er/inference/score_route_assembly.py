@@ -248,7 +248,7 @@ def assemble_score_route_rows(route_config_path: Path, component_score_paths: Ma
 
 def write_score_route_rows(rows: list[dict[str, str]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_fields = [field for field in ("seed", "fold") if any(field in row for row in rows)]
+    metadata_fields = [field for field in ("protocol_job", "seed", "fold") if any(field in row for row in rows)]
     crop_fields = ["crop_id"] if any("crop_id" in row for row in rows) else []
     provenance_fields = [field for field in ("source_crop_id", "window_start_sec") if any(field in row for row in rows)]
     truth_fields = ["y_true"] if any("y_true" in row for row in rows) else []

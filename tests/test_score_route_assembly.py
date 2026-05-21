@@ -184,10 +184,13 @@ def test_assemble_score_route_rows_uses_protocol_job_alignment_key(tmp_path):
             "srfnet_long_component": srfnet,
         },
     )
+    out = tmp_path / "predictions.csv"
+    write_score_route_rows(rows, out)
 
     assert len(rows) == 16
     assert {row["protocol_job"] for row in rows} == {"p2__eval_crop1", "p2__eval_crop2"}
     assert sum(int(row["pred_top4"]) for row in rows if row["protocol_job"] == "p2__eval_crop1") == 4
+    assert "protocol_job" in out.read_text(encoding="utf-8").splitlines()[0]
 
 
 def test_assemble_score_route_rows_preserves_consistent_y_true_and_component_id(tmp_path):
