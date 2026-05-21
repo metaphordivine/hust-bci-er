@@ -95,6 +95,7 @@ SKLEARN_MODELS = {
 
 GRAPH_MODELS = {
     "dgcnn",
+    "dual_graph_conformer",
     "lggnet",
 }
 

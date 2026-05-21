@@ -345,7 +345,7 @@ def validate_preprocessing_spec(item: dict[str, Any], errors: list[str]) -> None
 
 
 def validate_model_specific_config(name: str | None, model: dict[str, Any], errors: list[str]) -> None:
-    if name in {"dgcnn", "lggnet", "tsception"}:
+    if name in {"dgcnn", "dual_graph_conformer", "lggnet", "tsception"}:
         montage = model.get("channel_montage")
         if montage not in {"hust_30_a2"}:
             errors.append(f"model.channel_montage must be hust_30_a2 for {name} routes")

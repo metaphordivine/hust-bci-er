@@ -57,6 +57,20 @@ def _model_config(model_name: str) -> dict:
             "classifier_hidden_dim": 8,
             "dropout": 0.1,
         },
+        "dual_graph_conformer": {
+            "name": "dual_graph_conformer",
+            "channel_montage": "hust_30_a2",
+            "embedding_dim": 8,
+            "graph_hidden_dim": 4,
+            "fusion_dim": 8,
+            "k_order": 2,
+            "num_heads": 2,
+            "transformer_depth": 1,
+            "temporal_kernel_size": 3,
+            "token_count": 2,
+            "classifier_hidden_dim": 8,
+            "dropout": 0.1,
+        },
         "lggnet": {
             "name": "lggnet",
             "channel_montage": "hust_30_a2",
@@ -118,7 +132,7 @@ def _write_route(path: Path, model_name: str) -> None:
     path.write_text(yaml.safe_dump(route, sort_keys=False), encoding="utf-8")
 
 
-@pytest.mark.parametrize("model_name", ["tsception", "fbcnet", "dgcnn", "lggnet", "riemannian_tangent"])
+@pytest.mark.parametrize("model_name", ["tsception", "fbcnet", "dgcnn", "dual_graph_conformer", "lggnet", "riemannian_tangent"])
 def test_new_routes_run_one_epoch_diagnostic_smoke(tmp_path, monkeypatch, model_name):
     import hust_bci_er.training.reproducibility as reproducibility
 
