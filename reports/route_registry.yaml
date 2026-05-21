@@ -112,6 +112,9 @@ routes:
   - route_id: fixed_crop_ea_lggnet
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_riemannian_tangent
+    owner: metaphordivine
+    blocker: underperformed_reference_candidate
   - route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
