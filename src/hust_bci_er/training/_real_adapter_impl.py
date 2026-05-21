@@ -493,14 +493,25 @@ def _fit_ea_on_windows(train_windows: list[dict[str, Any]], preproc: list[str]) 
 class _WindowDataset:
     """Simple PyTorch-style dataset for EEG windows."""
 
-    def __init__(self, windows: list[dict[str, Any]]) -> None:
+    def __init__(self, windows: list[dict[str, Any]], *, include_domain: bool = False, domain_key: str = "cohort") -> None:
         self.windows = windows
+        self.include_domain = bool(include_domain)
+        self.domain_key = domain_key
 
     def __len__(self) -> int:
         return len(self.windows)
 
-    def __getitem__(self, idx: int) -> tuple[np.ndarray, int]:
+    def __getitem__(self, idx: int) -> tuple[np.ndarray, int] | dict[str, Any]:
         w = self.windows[idx]
+        if self.include_domain:
+            value = w.get(self.domain_key)
+            if value == "DEP":
+                domain = 0
+            elif value == "HC":
+                domain = 1
+            else:
+                raise ValueError(f"unknown DANN domain value for {self.domain_key}: {value}")
+            return {"features": w["x"].copy(), "target": w["y"], "domain": domain}
         return w["x"].copy(), w["y"]
 
 
@@ -897,6 +908,25 @@ def _resolve_device(device_str: str = "auto") -> str:
     return device_str
 
 
+def _adaptation_name(adaptation: Any) -> str:
+    if adaptation is None:
+        return "none"
+    if isinstance(adaptation, str):
+        return adaptation
+    if isinstance(adaptation, Mapping):
+        return str(adaptation.get("name") or "none")
+    raise ValueError("adaptation must be a string or mapping")
+
+
+def _adaptation_manifest(adaptation: Any) -> str | dict[str, Any]:
+    name = _adaptation_name(adaptation)
+    if name == "none":
+        return "none"
+    if isinstance(adaptation, Mapping):
+        return {str(key): adaptation[key] for key in sorted(adaptation, key=str)}
+    return name
+
+
 def _torch_load_checkpoint(path: Path) -> Mapping[str, Any]:
     import torch
 
@@ -930,6 +960,7 @@ def _validate_reuse_checkpoint(
     seed: int,
     model_name: str,
     model_kwargs: Mapping[str, Any],
+    adaptation: Any = None,
     n_times: int,
     preproc: Sequence[Any],
     run_mode: str,
@@ -960,6 +991,8 @@ def _validate_reuse_checkpoint(
         mismatches.append("model_name")
     if dict(payload.get("model_kwargs") or {}) != dict(model_kwargs or {}):
         mismatches.append("model_kwargs")
+    if (payload.get("adaptation") or "none") != _adaptation_manifest(adaptation):
+        mismatches.append("adaptation")
     if int(payload.get("n_times", -1)) != int(n_times):
         mismatches.append("n_times")
     if list(payload.get("preprocessing") or []) != list(preproc):
@@ -1046,6 +1079,9 @@ def run_real_classifier_route(
         EpochMetrics,
         OptimizerConfig,
         TrainResult,
+        fit_domain_coral_classifier,
+        fit_domain_adversarial_classifier,
+        fit_masked_consistency_classifier,
         fit_classifier,
         set_torch_seed,
     )
@@ -1254,6 +1290,7 @@ def run_real_classifier_route(
         else {}
     )
     n_times = int(round(window_sec * SFREQ))
+    device_str = _resolve_device(device)
     set_torch_seed(active_seed)
     model = build_model(
         model_name,
@@ -1262,6 +1299,86 @@ def run_real_classifier_route(
         n_classes=2,
         **model_kwargs,
     )
+    adaptation_config = route_data.get("adaptation")
+    adaptation_name = _adaptation_name(adaptation_config)
+    dann_domain_key = "cohort"
+    dann_lambda = 0.1
+    coral_domain_key = "cohort"
+    coral_lambda = 0.05
+    masked_consistency_lambda = 0.05
+    masked_consistency_width_samples = max(1, int(round(0.4 * SFREQ)))
+    if adaptation_name == "dann":
+        from hust_bci_er.adaptation.dann import DomainAdversarialClassifier
+
+        if not isinstance(adaptation_config, Mapping):
+            adaptation_config = {"name": "dann"}
+        dann_domain_key = str(adaptation_config.get("domain", "cohort"))
+        if dann_domain_key != "cohort":
+            raise ValueError("DANN adaptation currently supports domain: cohort")
+        dann_lambda = float(adaptation_config.get("lambda", adaptation_config.get("domain_lambda", 0.1)))
+        if not hasattr(model, "extract_features") or not hasattr(model, "classifier"):
+            raise ValueError("DANN adaptation requires a model with extract_features() and classifier")
+        model.to(device_str)
+        model.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, 30, n_times, device=device_str)
+            features = model.extract_features(dummy)
+        if features.ndim != 2:
+            raise ValueError("DANN base model extract_features must return [batch, features]")
+        model = DomainAdversarialClassifier(
+            model,
+            feature_dim=int(features.shape[1]),
+            domain_hidden_dim=int(adaptation_config.get("hidden_dim", 64)),
+            n_domains=2,
+            domain_dropout=float(adaptation_config.get("dropout", 0.2)),
+        )
+    elif adaptation_name == "coral":
+        if not isinstance(adaptation_config, Mapping):
+            adaptation_config = {"name": "coral"}
+        coral_domain_key = str(adaptation_config.get("domain", "cohort"))
+        if coral_domain_key != "cohort":
+            raise ValueError("CORAL adaptation currently supports domain: cohort")
+        coral_lambda = float(adaptation_config.get("lambda", adaptation_config.get("alignment_lambda", 0.05)))
+        if not hasattr(model, "extract_features") or not hasattr(model, "classifier"):
+            raise ValueError("CORAL adaptation requires a model with extract_features() and classifier")
+        model.to(device_str)
+        model.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, 30, n_times, device=device_str)
+            features = model.extract_features(dummy)
+        if features.ndim != 2:
+            raise ValueError("CORAL base model extract_features must return [batch, features]")
+    elif adaptation_name == "masked_consistency":
+        if not isinstance(adaptation_config, Mapping):
+            adaptation_config = {"name": "masked_consistency"}
+        masked_consistency_lambda = float(
+            adaptation_config.get("lambda", adaptation_config.get("consistency_lambda", 0.05))
+        )
+        if "max_mask_width_sec" in adaptation_config:
+            max_width_sec = float(adaptation_config["max_mask_width_sec"])
+            if max_width_sec <= 0:
+                raise ValueError("masked_consistency.max_mask_width_sec must be positive")
+            masked_consistency_width_samples = max(1, int(round(max_width_sec * SFREQ)))
+        elif "mask_ratio" in adaptation_config:
+            mask_ratio = float(adaptation_config["mask_ratio"])
+            if not 0.0 < mask_ratio <= 1.0:
+                raise ValueError("masked_consistency.mask_ratio must be in (0, 1]")
+            masked_consistency_width_samples = max(1, int(round(mask_ratio * n_times)))
+        if masked_consistency_width_samples > n_times:
+            raise ValueError("masked_consistency mask width must not exceed input window length")
+        if not hasattr(model, "extract_features") or not hasattr(model, "classifier"):
+            raise ValueError("masked consistency requires a model with extract_features() and classifier")
+        model.to(device_str)
+        model.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, 30, n_times, device=device_str)
+            features = model.extract_features(dummy)
+        if features.ndim != 2:
+            raise ValueError("masked consistency base model extract_features must return [batch, features]")
+    elif adaptation_name == "adabn":
+        raise ValueError("AdaBN adaptation is registered but not implemented by the torch route adapter")
+    elif adaptation_name != "none":
+        raise ValueError(f"unsupported adaptation component for torch route adapter: {adaptation_name}")
 
     # Build training config
     training_config = route_data.get("training")
@@ -1290,7 +1407,6 @@ def run_real_classifier_route(
         else True
     )
 
-    device_str = _resolve_device(device)
     dataloader_config = _dataloader_kwargs(device=device_str)
     train_config = ClassifierTrainConfig(
         epochs=epochs,
@@ -1312,6 +1428,7 @@ def run_real_classifier_route(
             seed=active_seed,
             model_name=model_name,
             model_kwargs=model_kwargs,
+            adaptation=adaptation_config,
             n_times=n_times,
             preproc=preproc,
             run_mode=run_mode,
@@ -1365,6 +1482,7 @@ def run_real_classifier_route(
             "seed": active_seed,
             "model_name": model_name,
             "model_kwargs": model_kwargs,
+            "adaptation": _adaptation_manifest(adaptation_config),
             "n_times": n_times,
             "preprocessing": preproc,
             "augmentation": augmentation if isinstance(augmentation, Mapping) else None,
@@ -1372,16 +1490,62 @@ def run_real_classifier_route(
             "effective_training_epochs": int(epochs),
         }
         training_resume_checkpoint_path = run_dir / "training_checkpoint.pt"
-        result = fit_classifier(
-            model,
-            train_loader,
-            val_loader=val_loader,
-            config=train_config,
-            checkpoint_path=training_resume_checkpoint_path,
-            resume=True,
-            resume_context=training_resume_context,
-            epoch_callback=_log_epoch,
-        )
+        if adaptation_name in {"dann", "coral"}:
+            domain_key = dann_domain_key if adaptation_name == "dann" else coral_domain_key
+            train_loader = DataLoader(
+                _WindowDataset(train_windows, include_domain=True, domain_key=domain_key),
+                batch_size=batch_size,
+                shuffle=True,
+                **dataloader_config,
+            )
+        if adaptation_name == "dann":
+            result = fit_domain_adversarial_classifier(
+                model,
+                train_loader,
+                val_loader=val_loader,
+                config=train_config,
+                checkpoint_path=training_resume_checkpoint_path,
+                resume=True,
+                resume_context=training_resume_context,
+                domain_lambda=dann_lambda,
+                epoch_callback=_log_epoch,
+            )
+        elif adaptation_name == "coral":
+            result = fit_domain_coral_classifier(
+                model,
+                train_loader,
+                val_loader=val_loader,
+                config=train_config,
+                checkpoint_path=training_resume_checkpoint_path,
+                resume=True,
+                resume_context=training_resume_context,
+                alignment_lambda=coral_lambda,
+                epoch_callback=_log_epoch,
+            )
+        elif adaptation_name == "masked_consistency":
+            result = fit_masked_consistency_classifier(
+                model,
+                train_loader,
+                val_loader=val_loader,
+                config=train_config,
+                checkpoint_path=training_resume_checkpoint_path,
+                resume=True,
+                resume_context=training_resume_context,
+                consistency_lambda=masked_consistency_lambda,
+                max_mask_width_samples=masked_consistency_width_samples,
+                epoch_callback=_log_epoch,
+            )
+        else:
+            result = fit_classifier(
+                model,
+                train_loader,
+                val_loader=val_loader,
+                config=train_config,
+                checkpoint_path=training_resume_checkpoint_path,
+                resume=True,
+                resume_context=training_resume_context,
+                epoch_callback=_log_epoch,
+            )
         if save_checkpoint_path is not None:
             save_checkpoint_path = Path(save_checkpoint_path).resolve()
             save_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1400,6 +1564,7 @@ def run_real_classifier_route(
                     "source_seed": int(route_data["seed"]),
                     "model_name": model_name,
                     "model_kwargs": model_kwargs,
+                    "adaptation": _adaptation_manifest(adaptation_config),
                     "n_times": n_times,
                     "window_sec": window_sec,
                     "input_window_sec": input_window_sec,
@@ -1509,6 +1674,7 @@ def run_real_classifier_route(
             "adapter": "torch_classifier",
             "model_name": model_name,
             "model_kwargs": model_kwargs,
+            "adaptation": _adaptation_manifest(adaptation_config),
             "best_epoch": best_epoch,
             "best_metric": best_metric,
             "epochs_ran": epochs_ran,
@@ -1560,6 +1726,7 @@ def run_real_classifier_route(
     manifest["run_mode"] = run_mode
     manifest["model_name"] = model_name
     manifest["model_kwargs"] = model_kwargs
+    manifest["adaptation"] = _adaptation_manifest(adaptation_config)
     manifest["prediction_scope"] = prediction_scope
     manifest["evaluation_split"] = eval_split
     manifest["evaluation_subjects"] = sorted(test_subjects if eval_split == "test" else val_subjects)

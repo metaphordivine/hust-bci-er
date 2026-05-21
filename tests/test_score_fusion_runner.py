@@ -215,6 +215,8 @@ def test_score_fusion_main_trusts_component_csvs_exported_earlier_in_same_run(tm
     _write_base_run(base_runs, "sliding_window_conformer_lite", seed=42, fold=0, base=0.0)
     _write_base_run(base_runs, "sliding_window_srfnet", seed=42, fold=0, base=1.0)
     _write_base_run(base_runs, "fixed_crop_ea_fbstcnet", seed=42, fold=0, base=2.0)
+    _write_base_run(base_runs, "sliding_ea_dgcnn_dann_cohort_w6_s1", seed=42, fold=0, base=3.0)
+    _write_base_run(base_runs, "sliding_ea_dgcnn_coral_cohort_w6_s1", seed=42, fold=0, base=4.0)
 
     audit_calls: list[list[str]] = []
 
@@ -237,9 +239,9 @@ def test_score_fusion_main_trusts_component_csvs_exported_earlier_in_same_run(tm
 
     summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
     assert rc == 0
-    assert summary["passed"] == 3
-    assert [item["status"] for item in summary["results"]] == ["PASS", "PASS", "PASS"]
-    assert sum("repo_doctor.py" in call for cmd in audit_calls for call in cmd) == 3
+    assert summary["passed"] == 4
+    assert [item["status"] for item in summary["results"]] == ["PASS", "PASS", "PASS", "PASS"]
+    assert sum("repo_doctor.py" in call for cmd in audit_calls for call in cmd) == 4
 
 
 def test_score_fusion_audit_blocks_synthetic_component_evidence(tmp_path, monkeypatch):

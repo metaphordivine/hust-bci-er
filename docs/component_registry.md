@@ -62,7 +62,9 @@
 ## Adaptation
 
 - `adabn`
+- `coral`
 - `dann`
+- `masked_consistency`
 - `none`
 
 ## Evaluation Protocols

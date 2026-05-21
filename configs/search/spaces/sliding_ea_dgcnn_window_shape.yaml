@@ -1,0 +1,20 @@
+# Explicit P3 candidate tuples for sliding-window DGCNN window shape.
+# The five-crop metric contract requires input_window_sec, window_sec, and
+# stride_sec to move together rather than through an unconstrained cross-product.
+
+candidates:
+  - input_window_sec: 4
+    augmentation.window_sec: 4
+    augmentation.stride_sec: 1.5
+    augmentation.search_space.window_sec: [4]
+    augmentation.search_space.stride_sec: [1.5]
+  - input_window_sec: 6
+    augmentation.window_sec: 6
+    augmentation.stride_sec: 1
+    augmentation.search_space.window_sec: [6]
+    augmentation.search_space.stride_sec: [1]
+  - input_window_sec: 8
+    augmentation.window_sec: 8
+    augmentation.stride_sec: 0.5
+    augmentation.search_space.window_sec: [8]
+    augmentation.search_space.stride_sec: [0.5]

@@ -1,0 +1,6 @@
+# Concrete P3 candidates for cohort-domain DANN strength.
+
+candidates:
+  - adaptation.lambda: 0.02
+  - adaptation.lambda: 0.05
+  - adaptation.lambda: 0.1

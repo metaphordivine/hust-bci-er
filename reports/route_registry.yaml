@@ -154,6 +154,9 @@ routes:
   - route_id: fbstcnet_srfnet_conformer_score_average
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
+  - route_id: dgcnn_adaptation_fbstcnet_srfnet_conformer_score_average
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fbstcnet_srfnet_score_average
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
@@ -173,6 +176,15 @@ routes:
     owner: metaphordivine
     blocker:
   - route_id: sliding_ea_dgcnn_w6_s1
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: sliding_ea_dgcnn_dann_cohort_w6_s1
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: sliding_ea_dgcnn_coral_cohort_w6_s1
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: sliding_ea_dgcnn_masked_consistency_w6_s1
     owner: metaphordivine
     blocker: missing_real_candidate_run
   - route_id: sliding_ea_fbstcnet_m_conn_w4_s1p5

@@ -40,6 +40,16 @@ _COMPONENT_BINDINGS: tuple[ComponentRouteBinding, ...] = (
         "fixed_crop_ea_fbstcnet",
         "FBSTCNet fixed-crop EA base route",
     ),
+    ComponentRouteBinding(
+        "dgcnn_dann_cohort_component",
+        "sliding_ea_dgcnn_dann_cohort_w6_s1",
+        "Sliding-window DGCNN with cohort-domain DANN adaptation",
+    ),
+    ComponentRouteBinding(
+        "dgcnn_coral_cohort_component",
+        "sliding_ea_dgcnn_coral_cohort_w6_s1",
+        "Sliding-window DGCNN with cohort-domain CORAL adaptation",
+    ),
     # Whitening components require SRFNet + whitening preprocessing.
     # There is no standalone route config for these yet; the
     # component-score CSV must either come from a manually materialized

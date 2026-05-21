@@ -1,0 +1,5 @@
+{
+  "status": "COMPLETE",
+  "source": "compact_committed_snapshot",
+  "note": "Aggregate board rows retained so scripts/lightweight_existing_eval.py is reproducible from a clean checkout without committing raw outputs."
+}

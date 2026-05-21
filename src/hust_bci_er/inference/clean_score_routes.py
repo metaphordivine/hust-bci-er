@@ -45,6 +45,20 @@ CLEAN_SCORE_ROUTES = [
         weights=(0.40, 0.40, 0.20),
     ),
     ScoreRoute(
+        "dgcnn_adaptation_fbstcnet_srfnet_conformer_score_average",
+        "dgcnn_adaptation_fbstcnet_srfnet_conformer_score_average",
+        (
+            "dgcnn_dann_cohort_component",
+            "dgcnn_coral_cohort_component",
+            "fixed_crop_ea_fbstcnet_component",
+            "srfnet_long_component",
+            "conformer_component",
+        ),
+        True,
+        "weighted z-average of cohort-adapted DGCNN components with FBSTCNet, SRFNet, and Conformer scores",
+        weights=(0.20, 0.20, 0.25, 0.20, 0.15),
+    ),
+    ScoreRoute(
         "fbstcnet_srfnet_whitening_eps1e3_average",
         "fbstcnet_srfnet_whitening_eps1e3_average",
         ("fixed_crop_ea_fbstcnet_component", "srfnet_long_component", "srfnet_whitening_eps1e3_component"),
