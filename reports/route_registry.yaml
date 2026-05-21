@@ -73,6 +73,9 @@ routes:
   - route_id: fixed_crop_ea_deformer_mean_pool_control
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
+  - route_id: fixed_crop_deformer_lite_zscore_tuned
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_fbstcnet
     owner: metaphordivine
     blocker:
@@ -244,7 +247,13 @@ routes:
   - route_id: tuned_sliding_window_deformer_lite
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: tuned_sliding_window_deformer_lite_zscore_only
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: tuned_sliding_window_fbstcnet
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: tuned_sliding_window_fbstcnet_zscore_only
     owner: metaphordivine
     blocker: missing_real_candidate_run
   - route_id: tuned_sliding_window_shallow_conv_net
