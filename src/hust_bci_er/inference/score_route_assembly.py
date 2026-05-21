@@ -23,6 +23,7 @@ class ComponentScoreTable:
     keys: tuple[tuple[str, ...], ...]
     scores: np.ndarray
     y_true: Mapping[tuple[str, ...], str]
+    provenance: Mapping[tuple[str, ...], tuple[str, str]]
 
 
 def read_component_score_table(path: Path, *, component_id: str | None = None) -> ComponentScoreTable:
@@ -63,6 +64,12 @@ def read_component_score_table(path: Path, *, component_id: str | None = None) -
     seen_keys: set[tuple[str, ...]] = set()
     scores: list[float] = []
     y_true: dict[tuple[str, ...], str] = {}
+    provenance: dict[tuple[str, ...], tuple[str, str]] = {}
+    has_source_provenance_col = "source_crop_id" in rows[0]
+    has_window_provenance_col = "window_start_sec" in rows[0]
+    if has_source_provenance_col != has_window_provenance_col:
+        raise ValueError(f"component score table has partial crop provenance columns: {path}")
+    has_provenance = has_source_provenance_col and has_window_provenance_col
     for row in rows:
         key = tuple(str(row[col]) for col in key_sources)
         if key in seen_keys:
@@ -84,7 +91,13 @@ def read_component_score_table(path: Path, *, component_id: str | None = None) -
             if truth not in {0, 1}:
                 raise ValueError(f"component score y_true is not binary in {path}: {key}")
             y_true[key] = str(truth)
-    return ComponentScoreTable(key_columns, tuple(keys), np.asarray(scores, dtype=np.float64), y_true)
+        if has_provenance:
+            source_crop_id = row.get("source_crop_id")
+            window_start_sec = row.get("window_start_sec")
+            if source_crop_id in {None, ""} or window_start_sec in {None, ""}:
+                raise ValueError(f"component score table has partial crop provenance values: {path}")
+            provenance[key] = (str(source_crop_id), str(window_start_sec))
+    return ComponentScoreTable(key_columns, tuple(keys), np.asarray(scores, dtype=np.float64), y_true, provenance)
 
 
 def alignment_key(key_columns: tuple[str, ...], group_columns: tuple[str, ...], group: tuple[str, ...], trial: str) -> tuple[str, ...]:
@@ -96,7 +109,14 @@ def alignment_key(key_columns: tuple[str, ...], group_columns: tuple[str, ...], 
 def matrices_from_component_tables(
     tables: Mapping[str, ComponentScoreTable],
     required_components: tuple[str, ...],
-) -> tuple[tuple[str, ...], list[tuple[str, ...]], list[list[str]], dict[str, np.ndarray], dict[tuple[str, ...], str]]:
+) -> tuple[
+    tuple[str, ...],
+    list[tuple[str, ...]],
+    list[list[str]],
+    dict[str, np.ndarray],
+    dict[tuple[str, ...], str],
+    dict[tuple[str, ...], tuple[str, str]],
+]:
     first = tables[required_components[0]]
     first_keys = list(first.keys)
     if "trial_id" not in first.key_columns or "subject_id" not in first.key_columns:
@@ -121,6 +141,8 @@ def matrices_from_component_tables(
 
     component_matrices: dict[str, np.ndarray] = {}
     truth_by_key: dict[tuple[str, ...], str] = {}
+    provenance_by_key: dict[tuple[str, ...], tuple[str, str]] = {}
+    has_provenance = any(bool(table.provenance) for table in tables.values())
     has_truth = any(bool(table.y_true) for table in tables.values())
     first_key_set = set(first_keys)
     for name in required_components:
@@ -143,8 +165,19 @@ def matrices_from_component_tables(
                 if existing is not None and existing != truth:
                     raise ValueError(f"component score y_true mismatch for alignment key: {key}")
                 truth_by_key[key] = truth
+        if has_provenance:
+            if not table.provenance:
+                raise ValueError(f"component score table is missing crop provenance while another component provides it: {name}")
+            for key in first_keys:
+                provenance = table.provenance.get(key)
+                if provenance is None:
+                    raise ValueError(f"component score table is missing crop provenance for alignment key: {name} {key}")
+                existing = provenance_by_key.get(key)
+                if existing is not None and existing != provenance:
+                    raise ValueError(f"component score crop provenance mismatch for alignment key: {key}")
+                provenance_by_key[key] = provenance
 
-    return group_columns, groups, [trials_by_group[group] for group in groups], component_matrices, truth_by_key
+    return group_columns, groups, [trials_by_group[group] for group in groups], component_matrices, truth_by_key, provenance_by_key
 
 
 def assemble_score_route_rows(route_config_path: Path, component_score_paths: Mapping[str, Path]) -> list[dict[str, str]]:
@@ -159,7 +192,7 @@ def assemble_score_route_rows(route_config_path: Path, component_score_paths: Ma
         raise ValueError(f"missing component score tables: {missing}")
 
     tables = {name: read_component_score_table(Path(component_score_paths[name]), component_id=name) for name in route.components}
-    group_columns, groups, trials_by_group, component_matrices, truth_by_key = matrices_from_component_tables(tables, route.components)
+    group_columns, groups, trials_by_group, component_matrices, truth_by_key, provenance_by_key = matrices_from_component_tables(tables, route.components)
     route_scores = assemble_score_route(route, component_matrices)
 
     rows: list[dict[str, str]] = []
@@ -181,7 +214,14 @@ def assemble_score_route_rows(route_config_path: Path, component_score_paths: Ma
                 }
             )
             if truth_by_key:
-                item["y_true"] = truth_by_key[alignment_key(tables[route.components[0]].key_columns, group_columns, group, trial)]
+                key = alignment_key(tables[route.components[0]].key_columns, group_columns, group, trial)
+                item["y_true"] = truth_by_key[key]
+            if provenance_by_key:
+                key = alignment_key(tables[route.components[0]].key_columns, group_columns, group, trial)
+                provenance = provenance_by_key.get(key)
+                if provenance is not None:
+                    item["source_crop_id"] = provenance[0]
+                    item["window_start_sec"] = provenance[1]
             rows.append(item)
     return rows
 
@@ -190,8 +230,9 @@ def write_score_route_rows(rows: list[dict[str, str]], output_path: Path) -> Non
     output_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_fields = [field for field in ("seed", "fold") if any(field in row for row in rows)]
     crop_fields = ["crop_id"] if any("crop_id" in row for row in rows) else []
+    provenance_fields = [field for field in ("source_crop_id", "window_start_sec") if any(field in row for row in rows)]
     truth_fields = ["y_true"] if any("y_true" in row for row in rows) else []
-    fieldnames = ["route_id", *metadata_fields, "subject_id", "trial_id", *crop_fields, "score", "pred_top4", *truth_fields]
+    fieldnames = ["route_id", *metadata_fields, "subject_id", "trial_id", *crop_fields, *provenance_fields, "score", "pred_top4", *truth_fields]
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

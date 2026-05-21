@@ -93,7 +93,19 @@ def export_component_scores_from_score_matrix(
         if col in rows[0] and any(row.get(col) not in {None, ""} for row in rows):
             optional_keys.append(col)
 
-    fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", "crop_id", "score", "y_true"]
+    provenance_columns = [
+        col
+        for crop_col in crop_cols
+        for col in (f"{crop_col}_source_crop_id", f"{crop_col}_window_start_sec")
+    ]
+    present_provenance_columns = [col for col in provenance_columns if col in fields]
+    has_crop_provenance = bool(present_provenance_columns)
+    if has_crop_provenance and len(present_provenance_columns) != len(provenance_columns):
+        print(f"score matrix has partial crop provenance columns: {score_matrix_path}", file=sys.stderr)
+        return 1
+    provenance_fields = ["source_crop_id", "window_start_sec"] if has_crop_provenance else []
+
+    fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", "crop_id", *provenance_fields, "score", "y_true"]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -110,6 +122,14 @@ def export_component_scores_from_score_matrix(
                 }
                 for col in optional_keys:
                     item[col] = str(row.get(col, ""))
+                if has_crop_provenance:
+                    source_crop_id = row.get(f"{crop_col}_source_crop_id")
+                    window_start_sec = row.get(f"{crop_col}_window_start_sec")
+                    if source_crop_id in {None, ""} or window_start_sec in {None, ""}:
+                        print(f"score matrix row has partial crop provenance values: {score_matrix_path}", file=sys.stderr)
+                        return 1
+                    item["source_crop_id"] = str(source_crop_id)
+                    item["window_start_sec"] = str(window_start_sec)
                 writer.writerow(item)
     return 0
 
@@ -152,8 +172,22 @@ def export_component_scores(
 
     truth_col = schema.get("y_true")
     has_truth = truth_col is not None
+    provenance_keys = ("source_crop_id", "window_start_sec")
+    has_provenance = any(row.get(col) not in {None, ""} for row in rows for col in provenance_keys)
+    provenance_cols: list[str] = []
+    if has_provenance:
+        missing_columns = [col for col in provenance_keys if col not in rows[0]]
+        if missing_columns:
+            print(f"predictions file has partial crop provenance columns {missing_columns}: {predictions_path}", file=sys.stderr)
+            return 1
+        for idx, row in enumerate(rows):
+            missing_values = [col for col in provenance_keys if row.get(col) in {None, ""}]
+            if missing_values:
+                print(f"predictions row {idx} has partial crop provenance values {missing_values}: {predictions_path}", file=sys.stderr)
+                return 1
+        provenance_cols = list(provenance_keys)
 
-    fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", "score"]
+    fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", *provenance_cols, "score"]
     if has_truth:
         fieldnames.append("y_true")
 
@@ -168,6 +202,8 @@ def export_component_scores(
                 "score": str(row[score_col]),
             }
             for col in optional_keys:
+                item[col] = str(row.get(col, ""))
+            for col in provenance_cols:
                 item[col] = str(row.get(col, ""))
             if has_truth:
                 item["y_true"] = str(row[truth_col])

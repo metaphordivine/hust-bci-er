@@ -18,6 +18,7 @@ def test_descriptive_score_fusion_routes_are_present():
     assert "fbstcnet_srfnet_score_average" in route_ids
     assert "fbstcnet_as_query_srfnet_context_fusion" in route_ids
     assert "dgcnn_adaptation_fbstcnet_srfnet_conformer_score_average" in route_ids
+    assert "interpretable_calibrated_diverse_score_fusion" in route_ids
 
 
 def test_fbstcnet_fusion_routes_record_initial_weights():
@@ -47,6 +48,23 @@ def test_dgcnn_adaptation_fusion_route_records_components_and_weights():
     assert route.weights == (0.20, 0.20, 0.25, 0.20, 0.15)
     assert base_route_for_component("dgcnn_dann_cohort_component") == "sliding_ea_dgcnn_dann_cohort_w6_s1"
     assert base_route_for_component("dgcnn_coral_cohort_component") == "sliding_ea_dgcnn_coral_cohort_w6_s1"
+
+
+def test_interpretable_calibrated_diverse_route_records_components_and_weights():
+    route = score_route_by_id("interpretable_calibrated_diverse_score_fusion")
+    assert route is not None
+    assert route.method == "calibrated_probability_average"
+    assert route.components == (
+        "fixed_crop_ea_fbstcnet_component",
+        "srfnet_long_component",
+        "conformer_component",
+        "dgcnn_dann_cohort_component",
+        "dgcnn_coral_cohort_component",
+        "riemannian_tangent_component",
+    )
+    assert route.weights == (0.24, 0.22, 0.18, 0.14, 0.14, 0.08)
+    assert route.temperature == 1.25
+    assert base_route_for_component("riemannian_tangent_component") == "fixed_crop_ea_riemannian_tangent"
 
 
 def test_fbstcnet_query_context_routes_are_registered():

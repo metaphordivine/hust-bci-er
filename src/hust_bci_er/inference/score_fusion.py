@@ -30,6 +30,36 @@ def z_average(*arrays: np.ndarray, weights: list[float] | None = None) -> np.nda
     return out
 
 
+def softmax_rows(x: np.ndarray, *, temperature: float = 1.0) -> np.ndarray:
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    z = zscore_rows(x) / float(temperature)
+    z = z - z.max(axis=1, keepdims=True)
+    probs = np.exp(z)
+    return probs / probs.sum(axis=1, keepdims=True)
+
+
+def calibrated_probability_average(*arrays: np.ndarray, weights: list[float] | None = None, temperature: float = 1.0) -> np.ndarray:
+    if not arrays:
+        raise ValueError("at least one score array is required")
+    raw_weights = weights or [1.0 / len(arrays)] * len(arrays)
+    if len(raw_weights) != len(arrays):
+        raise ValueError("weights length must match arrays")
+    normalized_weights = np.asarray(raw_weights, dtype=np.float64)
+    if not np.isfinite(normalized_weights).all():
+        raise ValueError("weights must be finite")
+    if np.any(normalized_weights < 0):
+        raise ValueError("weights must be non-negative")
+    weight_sum = float(normalized_weights.sum())
+    if weight_sum <= 0:
+        raise ValueError("weights sum must be positive")
+    normalized_weights = normalized_weights / weight_sum
+    out = np.zeros_like(np.asarray(arrays[0], dtype=np.float64))
+    for weight, arr in zip(normalized_weights, arrays):
+        out += float(weight) * softmax_rows(arr, temperature=temperature)
+    return out
+
+
 def component_matrix(name: str, component_scores: Mapping[str, np.ndarray], expected_shape: tuple[int, int] | None = None) -> np.ndarray:
     if name not in component_scores:
         raise KeyError(f"missing component score: {name}")
@@ -50,6 +80,10 @@ def assemble_score_route(route: ScoreRoute, component_scores: Mapping[str, np.nd
     if route.method == "z_average":
         weights = list(route.weights) if route.weights is not None else None
         return z_average(*arrays, weights=weights)
+    if route.method == "calibrated_probability_average":
+        weights = list(route.weights) if route.weights is not None else None
+        temperature = 1.0 if route.temperature is None else float(route.temperature)
+        return calibrated_probability_average(*arrays, weights=weights, temperature=temperature)
     if route.method == "query_context":
         if route.query_component is None or not route.context_components:
             raise ValueError(f"query_context route is missing query/context components: {route.route_id}")
