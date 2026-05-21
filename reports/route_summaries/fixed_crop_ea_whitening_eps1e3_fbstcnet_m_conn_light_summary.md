@@ -3,7 +3,7 @@
 route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet_m_conn_light
 route_status: IDEA
 audit_decision: NOT_RUN
-gate: pending_candidate
+gate:
 primary_metric: exact_single_crop_expected_BA
 decision: pending_real_evidence
 reproduce: python scripts/repo_doctor.py experiment --route configs/routes/models/fixed_crop_ea_whitening_eps1e3_fbstcnet_m_conn_light.yaml --gate smoke
