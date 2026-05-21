@@ -56,10 +56,6 @@ _COMPONENT_BINDINGS: tuple[ComponentRouteBinding, ...] = (
         "Fixed-crop EA log-covariance tangent-space linear component",
     ),
     # Whitening components require SRFNet + whitening preprocessing.
-    # There is no standalone route config for these yet; the
-    # component-score CSV must either come from a manually materialized
-    # run with overridden preprocessing, or a dedicated whitening route
-    # config must be added under configs/routes/models/.
     ComponentRouteBinding(
         "srfnet_whitening_eps1e3_component",
         None,
@@ -67,8 +63,8 @@ _COMPONENT_BINDINGS: tuple[ComponentRouteBinding, ...] = (
     ),
     ComponentRouteBinding(
         "srfnet_whitening_eps3e4_component",
-        None,
-        "SRFNet with whitening_eps3e4 preprocessing; needs a dedicated route config or manually materialized run",
+        "sliding_window_srfnet_whitening_eps3e4",
+        "SRFNet sliding-window route with whitening_eps3e4 preprocessing",
     ),
     # Handcrafted features are produced by feature extraction, not model training.
     ComponentRouteBinding(

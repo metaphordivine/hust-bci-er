@@ -91,6 +91,13 @@ def test_score_route_lookup_by_id_and_node():
     assert score_route_by_node(route.score_node) == route
 
 
+def test_whitening_eps3e4_component_has_current_style_base_route():
+    route = score_route_by_id("conformer_srfnet_whitening_eps3e4_average")
+    assert route is not None
+    assert route.components == ("conformer_component", "srfnet_whitening_eps3e4_component")
+    assert base_route_for_component("srfnet_whitening_eps3e4_component") == "sliding_window_srfnet_whitening_eps3e4"
+
+
 def test_score_route_configs_match_clean_registry():
     for path in Path("configs/routes/models").glob("*.yaml"):
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

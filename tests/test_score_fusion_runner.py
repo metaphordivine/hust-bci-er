@@ -118,7 +118,7 @@ def test_score_fusion_runner_rejects_partial_score_matrix_provenance_columns(tmp
     source = run_score_fusion_routes.SourceArtifact(matrix, "score_matrix")
 
     try:
-        run_score_fusion_routes._component_rows_from_score_matrix(source, "conformer_component")
+        run_score_fusion_routes._component_rows_from_score_matrix(source, "conformer_component", "sliding_window_conformer_lite")
     except ValueError as exc:
         assert "partial crop provenance columns" in str(exc)
     else:
@@ -480,6 +480,144 @@ def test_score_fusion_main_trusts_component_csvs_exported_earlier_in_same_run(tm
     assert summary["passed"] == 4
     assert [item["status"] for item in summary["results"]] == ["PASS", "PASS", "PASS", "PASS"]
     assert sum("repo_doctor.py" in call for cmd in audit_calls for call in cmd) == 4
+
+
+def _write_protocol_job_base_run(root: Path, route_id: str, *, suffixes: list[str], base: float) -> None:
+    run_dir = root / route_id
+    jobs = []
+    for offset, suffix in enumerate(suffixes):
+        job_id = f"p2__{route_id}__{suffix}"
+        job_dir = run_dir / "job_runs" / job_id
+        _write_source_manifest(job_dir, seed=42, fold=0)
+        _write_score_matrix(job_dir / "score_matrix.csv", base=base + offset)
+        jobs.append({"job_id": job_id, "seed": 42, "fold": 0})
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "protocol_run_manifest.json").write_text(json.dumps({"jobs": jobs}), encoding="utf-8")
+
+
+def _write_p2_crop_policy_base_run(root: Path, route_id: str, *, base: float, worst_source_crop: int) -> None:
+    run_dir = root / route_id
+    jobs = []
+    suffixes = [f"eval_crop{idx}" for idx in range(1, 6)] + ["eval_worst"]
+    for offset, suffix in enumerate(suffixes):
+        job_id = f"p2__{route_id}__{suffix}"
+        job_dir = run_dir / "job_runs" / job_id
+        _write_source_manifest(job_dir, seed=42, fold=0)
+        repeated_source_crop = int(suffix[-1]) - 1 if suffix.startswith("eval_crop") else worst_source_crop
+        _write_score_matrix(job_dir / "score_matrix.csv", base=base + offset, repeated_source_crop=repeated_source_crop)
+        jobs.append({"job_id": job_id, "seed": 42, "fold": 0})
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "protocol_run_manifest.json").write_text(json.dumps({"jobs": jobs}), encoding="utf-8")
+
+
+def test_score_fusion_main_keeps_protocol_jobs_distinct(tmp_path):
+    base_runs = tmp_path / "base_runs"
+    suffixes = ["eval_crop1", "eval_crop2"]
+    _write_protocol_job_base_run(base_runs, "sliding_window_conformer_lite", suffixes=suffixes, base=0.0)
+    _write_protocol_job_base_run(base_runs, "sliding_window_srfnet", suffixes=suffixes, base=1.0)
+
+    output_dir = tmp_path / "score_fusion"
+    rc = run_score_fusion_routes.main(
+        [
+            "--route-filter", "conformer_srfnet_score_average",
+            "--base-runs-dir", str(base_runs),
+            "--export-missing",
+            "--output-dir", str(output_dir),
+        ]
+    )
+
+    summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
+    prediction_rows = list(csv.DictReader((output_dir / "conformer_srfnet_score_average" / "predictions.csv").open(encoding="utf-8", newline="")))
+    assert rc == 0
+    assert summary["passed"] == 1
+    assert len(prediction_rows) == 16
+    assert {row["protocol_job"] for row in prediction_rows} == {"p2__eval_crop1", "p2__eval_crop2"}
+
+
+def test_score_fusion_synthesizes_p2_worst_after_fusion(tmp_path):
+    base_runs = tmp_path / "base_runs"
+    _write_p2_crop_policy_base_run(base_runs, "sliding_window_conformer_lite", base=0.0, worst_source_crop=3)
+    _write_p2_crop_policy_base_run(base_runs, "sliding_window_srfnet", base=1.0, worst_source_crop=4)
+
+    output_dir = tmp_path / "score_fusion"
+    rc = run_score_fusion_routes.main(
+        [
+            "--route-filter", "conformer_srfnet_score_average",
+            "--base-runs-dir", str(base_runs),
+            "--export-missing",
+            "--output-dir", str(output_dir),
+        ]
+    )
+
+    summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
+    component_rows = list(
+        csv.DictReader((output_dir / "component_scores" / "conformer_component.csv").open(encoding="utf-8", newline=""))
+    )
+    prediction_rows = list(
+        csv.DictReader(
+            (output_dir / "conformer_srfnet_score_average" / "predictions.csv").open(encoding="utf-8", newline="")
+        )
+    )
+    assert rc == 0
+    assert summary["passed"] == 1
+    assert "p2__eval_worst" not in {row["protocol_job"] for row in component_rows}
+    assert "p2__eval_worst" in {row["protocol_job"] for row in prediction_rows}
+    assert sum(row["protocol_job"] == "p2__eval_worst" for row in prediction_rows) == 8
+
+
+def test_score_fusion_synthesizes_p2_worst_without_truth_labels():
+    rows = []
+    for trial_idx in range(8):
+        for crop_idx in range(5):
+            rows.append(
+                {
+                    "route_id": "conformer_srfnet_score_average",
+                    "protocol_job": f"p2__eval_crop{crop_idx + 1}",
+                    "subject_id": "s1",
+                    "trial_id": f"t{trial_idx}",
+                    "crop_id": "0",
+                    "score": str(float(5 - crop_idx + trial_idx)),
+                    "pred_top4": "0",
+                }
+            )
+
+    worst_rows = run_score_fusion_routes._synthesize_p2_worst_rows(rows)
+
+    assert len(worst_rows) == 40
+    assert {row["protocol_job"] for row in worst_rows} == {"p2__eval_worst"}
+    assert {row["score"] for row in worst_rows if row["trial_id"] == "t0"} == {"1.0"}
+
+
+def test_export_component_score_rejects_only_route_dependent_p2_worst(tmp_path, capsys):
+    matrix = tmp_path / "score_matrix.csv"
+    output = tmp_path / "component.csv"
+    _write_score_matrix(matrix, base=0.0, repeated_source_crop=3)
+    source = run_score_fusion_routes.SourceArtifact(
+        matrix,
+        "score_matrix",
+        job_id="p2__sliding_window_conformer_lite__eval_worst",
+    )
+
+    rc = run_score_fusion_routes.export_component_score(
+        "conformer_component",
+        "sliding_window_conformer_lite",
+        [source],
+        output,
+    )
+
+    assert rc == 1
+    assert "no component score rows after filtering" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_source_protocol_job_key_strips_exact_base_route_id():
+    source = run_score_fusion_routes.SourceArtifact(
+        Path("score_matrix.csv"),
+        "score_matrix",
+        job_id="p2__route__with__parts__eval_crop1",
+    )
+
+    assert run_score_fusion_routes._source_protocol_job_key(source, "route__with__parts") == "p2__eval_crop1"
 
 
 def test_score_fusion_audit_blocks_synthetic_component_evidence(tmp_path, monkeypatch):
