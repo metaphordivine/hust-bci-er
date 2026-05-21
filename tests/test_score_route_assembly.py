@@ -4,7 +4,7 @@ import numpy as np
 
 from hust_bci_er.inference.clean_score_routes import score_route_by_id
 from hust_bci_er.inference.score_fusion import assemble_score_route, assemble_score_node, calibrated_probability_average, softmax_rows
-from hust_bci_er.inference.score_route_assembly import assemble_score_route_rows, write_score_route_rows
+from hust_bci_er.inference.score_route_assembly import assemble_score_route_rows, read_component_score_table, write_score_route_rows
 
 
 def test_assemble_score_route_from_component_arrays():
@@ -303,3 +303,78 @@ def test_assemble_score_route_rows_rejects_partial_y_true_when_any_component_pro
         assert "missing y_true" in str(exc)
     else:
         raise AssertionError("missing y_true in one component should fail when any component provides truth")
+
+
+def test_assemble_score_route_rows_rejects_missing_component_provenance(tmp_path):
+    route_config = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
+    conformer = tmp_path / "conformer.csv"
+    srfnet = tmp_path / "srfnet.csv"
+    conformer.write_text(
+        "component_id,subject_id,trial_id,score\n"
+        + "\n".join(f"conformer_component,s1,t{idx},{8 - idx}" for idx in range(8))
+        + "\n",
+        encoding="utf-8",
+    )
+    srfnet.write_text(
+        "component_id,subject_id,trial_id,source_crop_id,window_start_sec,score\n"
+        + "\n".join(f"srfnet_long_component,s1,t{idx},0,0.00000000,{7 - idx}" for idx in range(8))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        assemble_score_route_rows(
+            route_config,
+            {
+                "conformer_component": conformer,
+                "srfnet_long_component": srfnet,
+            },
+        )
+    except ValueError as exc:
+        assert "missing crop provenance while another component provides it" in str(exc)
+    else:
+        raise AssertionError("missing component provenance should fail")
+
+
+def test_read_component_score_table_rejects_single_provenance_column(tmp_path):
+    component = tmp_path / "component.csv"
+    component.write_text(
+        "component_id,subject_id,trial_id,source_crop_id,score\n"
+        "conformer_component,s1,t0,0,0.1\n",
+        encoding="utf-8",
+    )
+
+    try:
+        read_component_score_table(component, component_id="conformer_component")
+    except ValueError as exc:
+        assert "partial crop provenance columns" in str(exc)
+    else:
+        raise AssertionError("single provenance column should fail")
+
+
+def test_assemble_score_route_rows_rejects_component_provenance_mismatch(tmp_path):
+    route_config = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
+    conformer = tmp_path / "conformer.csv"
+    srfnet = tmp_path / "srfnet.csv"
+    header = "component_id,subject_id,trial_id,source_crop_id,window_start_sec,score\n"
+    conformer.write_text(
+        header + "\n".join(f"conformer_component,s1,t{idx},0,0.00000000,{8 - idx}" for idx in range(8)) + "\n",
+        encoding="utf-8",
+    )
+    srfnet.write_text(
+        header + "\n".join(f"srfnet_long_component,s1,t{idx},{1 if idx == 0 else 0},{1.0 if idx == 0 else 0.0:.8f},{7 - idx}" for idx in range(8)) + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        assemble_score_route_rows(
+            route_config,
+            {
+                "conformer_component": conformer,
+                "srfnet_long_component": srfnet,
+            },
+        )
+    except ValueError as exc:
+        assert "crop provenance mismatch" in str(exc)
+    else:
+        raise AssertionError("component provenance mismatch should fail")
