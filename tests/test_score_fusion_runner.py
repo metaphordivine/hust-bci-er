@@ -118,7 +118,7 @@ def test_score_fusion_runner_rejects_partial_score_matrix_provenance_columns(tmp
     source = run_score_fusion_routes.SourceArtifact(matrix, "score_matrix")
 
     try:
-        run_score_fusion_routes._component_rows_from_score_matrix(source, "conformer_component")
+        run_score_fusion_routes._component_rows_from_score_matrix(source, "conformer_component", "sliding_window_conformer_lite")
     except ValueError as exc:
         assert "partial crop provenance columns" in str(exc)
     else:
@@ -517,6 +517,16 @@ def test_score_fusion_main_keeps_protocol_jobs_distinct(tmp_path):
     assert summary["passed"] == 1
     assert len(prediction_rows) == 16
     assert {row["protocol_job"] for row in prediction_rows} == {"p2__eval_crop1", "p2__eval_crop2"}
+
+
+def test_source_protocol_job_key_strips_exact_base_route_id():
+    source = run_score_fusion_routes.SourceArtifact(
+        Path("score_matrix.csv"),
+        "score_matrix",
+        job_id="p2__route__with__parts__eval_crop1",
+    )
+
+    assert run_score_fusion_routes._source_protocol_job_key(source, "route__with__parts") == "p2__eval_crop1"
 
 
 def test_score_fusion_audit_blocks_synthetic_component_evidence(tmp_path, monkeypatch):

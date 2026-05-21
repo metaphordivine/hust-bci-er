@@ -266,16 +266,17 @@ def _has_complete_score_matrix_crop_provenance(rows: list[dict[str, str]], crop_
     return True
 
 
-def _source_protocol_job_key(source: SourceArtifact) -> str | None:
+def _source_protocol_job_key(source: SourceArtifact, base_route_id: str) -> str | None:
     if not source.job_id:
         return None
-    parts = source.job_id.split("__")
-    if len(parts) >= 3:
-        return "__".join([parts[0], *parts[2:]])
+    for protocol in ("p1", "p2", "p3"):
+        prefix = f"{protocol}__{base_route_id}__"
+        if source.job_id.startswith(prefix):
+            return f"{protocol}__{source.job_id[len(prefix):]}"
     return source.job_id
 
 
-def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str) -> list[dict[str, str]]:
+def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str, base_route_id: str) -> list[dict[str, str]]:
     rows = _read_csv(source.path)
     if not rows:
         raise ValueError(f"score matrix is empty: {source.path}")
@@ -301,7 +302,7 @@ def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str)
             if has_crop_provenance:
                 item["source_crop_id"] = str(row.get(source_crop_col, ""))
                 item["window_start_sec"] = str(row.get(window_start_col, ""))
-            protocol_job = _source_protocol_job_key(source)
+            protocol_job = _source_protocol_job_key(source, base_route_id)
             if protocol_job is not None:
                 item["protocol_job"] = protocol_job
             if source.seed is not None:
@@ -316,7 +317,7 @@ def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str)
     return out
 
 
-def _component_rows_from_predictions(source: SourceArtifact, component_id: str) -> list[dict[str, str]]:
+def _component_rows_from_predictions(source: SourceArtifact, component_id: str, base_route_id: str) -> list[dict[str, str]]:
     rows = _read_csv(source.path)
     if not rows:
         raise ValueError(f"predictions file is empty: {source.path}")
@@ -349,7 +350,7 @@ def _component_rows_from_predictions(source: SourceArtifact, component_id: str) 
                 raise ValueError(f"predictions row {idx} has partial crop provenance values: {source.path}")
             item["source_crop_id"] = str(source_crop_id)
             item["window_start_sec"] = str(window_start_sec)
-        protocol_job = _source_protocol_job_key(source)
+        protocol_job = _source_protocol_job_key(source, base_route_id)
         if protocol_job is not None:
             item["protocol_job"] = protocol_job
         if source.seed is not None:
@@ -381,9 +382,9 @@ def export_component_score(
         rows: list[dict[str, str]] = []
         for source in source_artifacts:
             if source.kind == "score_matrix":
-                rows.extend(_component_rows_from_score_matrix(source, component_id))
+                rows.extend(_component_rows_from_score_matrix(source, component_id, base_route_id))
             else:
-                rows.extend(_component_rows_from_predictions(source, component_id))
+                rows.extend(_component_rows_from_predictions(source, component_id, base_route_id))
     except Exception as exc:
         print(f"  export failed for {component_id}: {exc}", file=sys.stderr)
         return 1
