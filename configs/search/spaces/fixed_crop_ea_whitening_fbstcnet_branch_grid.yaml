@@ -1,0 +1,36 @@
+# Concrete P3 candidates for the EA + whitening + FBSTCNet stability route.
+# The candidates keep protocol identity fixed and vary only preprocessing
+# epsilon plus FBSTCNet branch/connectivity knobs.
+
+candidates:
+  - preprocessing: [euclidean_alignment, whitening_eps1e3]
+    model.variant: M
+    model.pool_stride: 10
+    model.power_drop_prob: 0.35
+    model.gamma: 300
+  - preprocessing: [euclidean_alignment, whitening_eps1e3]
+    model.variant: M
+    model.pool_stride: 10
+    model.power_drop_prob: 0.35
+    model.gamma: 200
+  - preprocessing: [euclidean_alignment, whitening_eps1e3]
+    model.variant: M
+    model.pool_stride: 20
+    model.power_drop_prob: 0.50
+    model.gamma: 300
+  - preprocessing: [euclidean_alignment, whitening_eps1e3]
+    model.variant: P
+    model.pool_stride: 10
+    model.power_drop_prob: 0.35
+    model.gamma: 300
+  - preprocessing: [euclidean_alignment, whitening_eps1e3]
+    model.variant: C
+    model.pool_stride: 10
+    model.power_drop_prob: 0.35
+    model.gamma: 300
+  - preprocessing: [euclidean_alignment, whitening_eps3e4]
+    model.variant: M
+    model.pool_stride: 10
+    model.power_drop_prob: 0.35
+    model.gamma: 300
+
