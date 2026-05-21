@@ -429,6 +429,19 @@ candidates:
     ]
 
 
+def test_p3_param_grid_loads_whitening_fbstcnet_branch_candidates():
+    candidates = load_param_grid(Path("configs/search/spaces/fixed_crop_ea_whitening_fbstcnet_branch_grid.yaml"))
+
+    assert len(candidates) == 6
+    assert candidates[0]["preprocessing"] == ["euclidean_alignment", "whitening_eps1e3"]
+    assert candidates[0]["model.variant"] == "M"
+    assert candidates[1]["model.gamma"] == 200
+    assert candidates[2]["model.power_drop_prob"] == 0.50
+    assert candidates[3]["model.variant"] == "P"
+    assert candidates[4]["model.variant"] == "C"
+    assert candidates[5]["preprocessing"] == ["euclidean_alignment", "whitening_eps3e4"]
+
+
 def test_p3_materialization_rejects_abstract_multi_param_grid(tmp_path):
     with pytest.raises(ValueError, match="requires concrete parameter overrides"):
         materialize_protocol_run(

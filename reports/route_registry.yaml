@@ -118,6 +118,21 @@ routes:
   - route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
+  - route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet_c_only
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet_m_conn_light
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet_m_power_light
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_whitening_eps1e3_fbstcnet_p_only
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_whitening_eps3e4_fbstcnet
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_pure_deformer_lite
     owner: metaphordivine
     blocker: missing_real_candidate_run
