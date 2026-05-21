@@ -4,7 +4,7 @@ import numpy as np
 
 from hust_bci_er.inference.clean_score_routes import score_route_by_id
 from hust_bci_er.inference.score_fusion import assemble_score_route, assemble_score_node, calibrated_probability_average, softmax_rows
-from hust_bci_er.inference.score_route_assembly import assemble_score_route_rows, write_score_route_rows
+from hust_bci_er.inference.score_route_assembly import assemble_score_route_rows, read_component_score_table, write_score_route_rows
 
 
 def test_assemble_score_route_from_component_arrays():
@@ -334,6 +334,22 @@ def test_assemble_score_route_rows_rejects_missing_component_provenance(tmp_path
         assert "missing crop provenance while another component provides it" in str(exc)
     else:
         raise AssertionError("missing component provenance should fail")
+
+
+def test_read_component_score_table_rejects_single_provenance_column(tmp_path):
+    component = tmp_path / "component.csv"
+    component.write_text(
+        "component_id,subject_id,trial_id,source_crop_id,score\n"
+        "conformer_component,s1,t0,0,0.1\n",
+        encoding="utf-8",
+    )
+
+    try:
+        read_component_score_table(component, component_id="conformer_component")
+    except ValueError as exc:
+        assert "partial crop provenance columns" in str(exc)
+    else:
+        raise AssertionError("single provenance column should fail")
 
 
 def test_assemble_score_route_rows_rejects_component_provenance_mismatch(tmp_path):

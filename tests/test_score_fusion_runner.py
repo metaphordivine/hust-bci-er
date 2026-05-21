@@ -67,6 +67,26 @@ def test_export_component_scores_prefers_score_matrix_crops(tmp_path):
     assert {row["crop_id"] for row in rows[:5]} == {"0", "1", "2", "3", "4"}
 
 
+def test_export_component_scores_rejects_partial_score_matrix_provenance_columns(tmp_path, capsys):
+    matrix = tmp_path / "score_matrix.csv"
+    output = tmp_path / "component.csv"
+    header = ["subject_id", "trial_id", "y_true", *[f"crop_{idx}" for idx in range(5)], "crop_0_source_crop_id"]
+    matrix.write_text(
+        ",".join(header) + "\n" + "s1,t0,1,0.1,0.2,0.3,0.4,0.5,0\n",
+        encoding="utf-8",
+    )
+
+    rc = export_component_scores.export_component_scores_from_score_matrix(
+        matrix,
+        "conformer_component",
+        output,
+    )
+
+    assert rc == 1
+    assert "partial crop provenance columns" in capsys.readouterr().err
+    assert not output.exists()
+
+
 def test_export_component_scores_rejects_partial_prediction_provenance(tmp_path, capsys):
     predictions = tmp_path / "predictions.csv"
     output = tmp_path / "component.csv"
@@ -85,6 +105,45 @@ def test_export_component_scores_rejects_partial_prediction_provenance(tmp_path,
 
     assert rc == 1
     assert "partial crop provenance values" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_score_fusion_runner_rejects_partial_score_matrix_provenance_columns(tmp_path):
+    matrix = tmp_path / "score_matrix.csv"
+    header = ["subject_id", "trial_id", "y_true", *[f"crop_{idx}" for idx in range(5)], "crop_0_source_crop_id"]
+    matrix.write_text(
+        ",".join(header) + "\n" + "s1,t0,1,0.1,0.2,0.3,0.4,0.5,0\n",
+        encoding="utf-8",
+    )
+    source = run_score_fusion_routes.SourceArtifact(matrix, "score_matrix")
+
+    try:
+        run_score_fusion_routes._component_rows_from_score_matrix(source, "conformer_component")
+    except ValueError as exc:
+        assert "partial crop provenance columns" in str(exc)
+    else:
+        raise AssertionError("partial score-matrix provenance columns should fail")
+
+
+def test_score_fusion_export_rejects_single_prediction_provenance_column(tmp_path, capsys):
+    predictions = tmp_path / "predictions.csv"
+    output = tmp_path / "component.csv"
+    predictions.write_text(
+        "subject_id,trial_id,source_crop_id,score\n"
+        "s1,t0,0,0.1\n",
+        encoding="utf-8",
+    )
+    source = run_score_fusion_routes.SourceArtifact(predictions, "predictions")
+
+    rc = run_score_fusion_routes.export_component_score(
+        "conformer_component",
+        "ea_deformer",
+        [source],
+        output,
+    )
+
+    assert rc == 1
+    assert "partial crop provenance columns" in capsys.readouterr().err
     assert not output.exists()
 
 
@@ -134,6 +193,7 @@ def test_score_fusion_runner_writes_prediction_matrix_metric_and_manifest(tmp_pa
 
     assert len(prediction_rows) == 8
     assert len(matrix_rows) == 8
+    assert "y_pred" not in prediction_rows[0]
     assert "crop_4" in matrix_rows[0]
     assert (output_dir / "metric_audit.json").exists()
     assert manifest["metric_inputs"]["score_matrix_csv"] == "score_matrix.csv"
@@ -198,7 +258,7 @@ def test_score_fusion_preserves_per_crop_source_provenance(tmp_path):
     ) == 0
 
     output_dir = tmp_path / "run"
-    rc, _info = run_score_fusion_routes.assemble_score_fusion(
+    rc, info = run_score_fusion_routes.assemble_score_fusion(
         ROUTE,
         {
             "conformer_component": conformer_component,
@@ -208,11 +268,25 @@ def test_score_fusion_preserves_per_crop_source_provenance(tmp_path):
     )
 
     assert rc == 0
+    run_score_fusion_routes._write_score_fusion_manifest(
+        ROUTE,
+        output_dir,
+        {
+            "conformer_component": conformer_component,
+            "srfnet_long_component": srfnet_component,
+        },
+        source_manifest_paths=[],
+        score_matrix_evidence=info["score_matrix_evidence"],
+        component_score_evidence={"conformer_component": "genuine", "srfnet_long_component": "genuine"},
+    )
     matrix_rows = list(csv.DictReader((output_dir / "score_matrix.csv").open(encoding="utf-8", newline="")))
     assert matrix_rows[0]["crop_0_source_crop_id"] == "10"
     assert matrix_rows[0]["crop_0_window_start_sec"] == "10.00000000"
     assert matrix_rows[0]["crop_4_source_crop_id"] == "14"
     assert matrix_rows[0]["crop_4_window_start_sec"] == "14.00000000"
+    dataset = yaml.safe_load((output_dir / "dataset_manifest.yaml").read_text(encoding="utf-8"))
+    assert dataset["trial_index"][0]["crop_ids"] == ["10", "11", "12", "13", "14"]
+    assert dataset["trial_index"][0]["window_start_secs"] == [10.0, 11.0, 12.0, 13.0, 14.0]
 
 
 def _write_source_manifest(

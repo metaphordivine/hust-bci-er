@@ -65,7 +65,11 @@ def read_component_score_table(path: Path, *, component_id: str | None = None) -
     scores: list[float] = []
     y_true: dict[tuple[str, ...], str] = {}
     provenance: dict[tuple[str, ...], tuple[str, str]] = {}
-    has_provenance = "source_crop_id" in rows[0] and "window_start_sec" in rows[0]
+    has_source_provenance_col = "source_crop_id" in rows[0]
+    has_window_provenance_col = "window_start_sec" in rows[0]
+    if has_source_provenance_col != has_window_provenance_col:
+        raise ValueError(f"component score table has partial crop provenance columns: {path}")
+    has_provenance = has_source_provenance_col and has_window_provenance_col
     for row in rows:
         key = tuple(str(row[col]) for col in key_sources)
         if key in seen_keys:

@@ -93,10 +93,16 @@ def export_component_scores_from_score_matrix(
         if col in rows[0] and any(row.get(col) not in {None, ""} for row in rows):
             optional_keys.append(col)
 
-    has_crop_provenance = all(
-        f"{crop_col}_source_crop_id" in fields and f"{crop_col}_window_start_sec" in fields
+    provenance_columns = [
+        col
         for crop_col in crop_cols
-    )
+        for col in (f"{crop_col}_source_crop_id", f"{crop_col}_window_start_sec")
+    ]
+    present_provenance_columns = [col for col in provenance_columns if col in fields]
+    has_crop_provenance = bool(present_provenance_columns)
+    if has_crop_provenance and len(present_provenance_columns) != len(provenance_columns):
+        print(f"score matrix has partial crop provenance columns: {score_matrix_path}", file=sys.stderr)
+        return 1
     provenance_fields = ["source_crop_id", "window_start_sec"] if has_crop_provenance else []
 
     fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", "crop_id", *provenance_fields, "score", "y_true"]
@@ -117,8 +123,13 @@ def export_component_scores_from_score_matrix(
                 for col in optional_keys:
                     item[col] = str(row.get(col, ""))
                 if has_crop_provenance:
-                    item["source_crop_id"] = str(row.get(f"{crop_col}_source_crop_id", ""))
-                    item["window_start_sec"] = str(row.get(f"{crop_col}_window_start_sec", ""))
+                    source_crop_id = row.get(f"{crop_col}_source_crop_id")
+                    window_start_sec = row.get(f"{crop_col}_window_start_sec")
+                    if source_crop_id in {None, ""} or window_start_sec in {None, ""}:
+                        print(f"score matrix row has partial crop provenance values: {score_matrix_path}", file=sys.stderr)
+                        return 1
+                    item["source_crop_id"] = str(source_crop_id)
+                    item["window_start_sec"] = str(window_start_sec)
                 writer.writerow(item)
     return 0
 

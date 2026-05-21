@@ -245,6 +245,27 @@ def _score_matrix_crop_columns(fields: set[str]) -> list[str]:
     return []
 
 
+def _has_complete_score_matrix_crop_provenance(rows: list[dict[str, str]], crop_cols: list[str], path: Path) -> bool:
+    fields = set(rows[0])
+    provenance_columns = [
+        col
+        for crop_col in crop_cols
+        for col in (f"{crop_col}_source_crop_id", f"{crop_col}_window_start_sec")
+    ]
+    present = [col for col in provenance_columns if col in fields]
+    if not present:
+        return False
+    if len(present) != len(provenance_columns):
+        raise ValueError(f"score matrix has partial crop provenance columns: {path}")
+    for idx, row in enumerate(rows):
+        for crop_col in crop_cols:
+            source_crop_id = row.get(f"{crop_col}_source_crop_id")
+            window_start_sec = row.get(f"{crop_col}_window_start_sec")
+            if source_crop_id in {None, ""} or window_start_sec in {None, ""}:
+                raise ValueError(f"score matrix row {idx} has partial crop provenance values: {path}")
+    return True
+
+
 def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str) -> list[dict[str, str]]:
     rows = _read_csv(source.path)
     if not rows:
@@ -253,6 +274,7 @@ def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str)
     crop_cols = _score_matrix_crop_columns(fields)
     if not {"subject_id", "trial_id", "y_true"}.issubset(fields) or len(crop_cols) != 5:
         raise ValueError(f"score matrix must include subject_id, trial_id, y_true, crop_0..crop_4: {source.path}")
+    has_crop_provenance = _has_complete_score_matrix_crop_provenance(rows, crop_cols, source.path)
     out: list[dict[str, str]] = []
     for row in rows:
         for crop_id, crop_col in enumerate(crop_cols):
@@ -267,7 +289,7 @@ def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str)
             }
             source_crop_col = f"{crop_col}_source_crop_id"
             window_start_col = f"{crop_col}_window_start_sec"
-            if source_crop_col in fields and window_start_col in fields:
+            if has_crop_provenance:
                 item["source_crop_id"] = str(row.get(source_crop_col, ""))
                 item["window_start_sec"] = str(row.get(window_start_col, ""))
             if source.seed is not None:
@@ -289,9 +311,14 @@ def _component_rows_from_predictions(source: SourceArtifact, component_id: str) 
     fields = set(rows[0])
     if not {"subject_id", "trial_id"}.issubset(fields) or not ({"score", "y_score", "probability", "logit"} & fields):
         raise ValueError(f"predictions must include subject_id, trial_id, and a score column: {source.path}")
+    has_source_provenance_col = "source_crop_id" in fields
+    has_window_provenance_col = "window_start_sec" in fields
+    if has_source_provenance_col != has_window_provenance_col:
+        raise ValueError(f"predictions have partial crop provenance columns: {source.path}")
+    has_provenance = has_source_provenance_col and has_window_provenance_col
     score_col = next(col for col in ("y_score", "score", "probability", "logit") if col in fields)
     out: list[dict[str, str]] = []
-    for row in rows:
+    for idx, row in enumerate(rows):
         item = {
             "component_id": component_id,
             "subject_id": str(row["subject_id"]),
@@ -303,10 +330,13 @@ def _component_rows_from_predictions(source: SourceArtifact, component_id: str) 
             item["y_true"] = str(row["y_true"])
         if row.get("crop_id") not in {None, ""}:
             item["crop_id"] = str(row["crop_id"])
-        if row.get("source_crop_id") not in {None, ""}:
-            item["source_crop_id"] = str(row["source_crop_id"])
-        if row.get("window_start_sec") not in {None, ""}:
-            item["window_start_sec"] = str(row["window_start_sec"])
+        if has_provenance:
+            source_crop_id = row.get("source_crop_id")
+            window_start_sec = row.get("window_start_sec")
+            if source_crop_id in {None, ""} or window_start_sec in {None, ""}:
+                raise ValueError(f"predictions row {idx} has partial crop provenance values: {source.path}")
+            item["source_crop_id"] = str(source_crop_id)
+            item["window_start_sec"] = str(window_start_sec)
         if source.seed is not None:
             item["seed"] = str(source.seed)
         elif row.get("seed") not in {None, ""}:
@@ -342,6 +372,12 @@ def export_component_score(
     except Exception as exc:
         print(f"  export failed for {component_id}: {exc}", file=sys.stderr)
         return 1
+    has_provenance = any(row.get("source_crop_id") not in {None, ""} or row.get("window_start_sec") not in {None, ""} for row in rows)
+    if has_provenance:
+        for idx, row in enumerate(rows):
+            if row.get("source_crop_id") in {None, ""} or row.get("window_start_sec") in {None, ""}:
+                print(f"  export failed for {component_id}: component row {idx} has partial crop provenance values", file=sys.stderr)
+                return 1
     fieldnames = ["component_id"]
     for col in (
         "seed",
@@ -349,14 +385,14 @@ def export_component_score(
         "subject_id",
         "trial_id",
         "crop_id",
-        "source_crop_id",
-        "window_start_sec",
         "score",
         "y_true",
         "score_matrix_evidence",
     ):
         if col in {"subject_id", "trial_id", "score"} or any(row.get(col) not in {None, ""} for row in rows):
             fieldnames.append(col)
+        if col == "crop_id" and has_provenance:
+            fieldnames.extend(["source_crop_id", "window_start_sec"])
     _write_csv(output_path, rows, fieldnames)
     return 0
 
@@ -454,7 +490,6 @@ def _write_score_fusion_outputs(fused_rows: list[dict[str, str]], output_dir: Pa
             "subject_id": str(first["subject_id"]),
             "trial_id": str(first["trial_id"]),
             "y_score": f"{mean_score:.12g}",
-            "y_pred": str(int(mean_score >= 0.0)),
         }
         if first.get("y_true") not in {None, ""}:
             pred["y_true"] = str(first["y_true"])
@@ -487,7 +522,7 @@ def _write_score_fusion_outputs(fused_rows: list[dict[str, str]], output_dir: Pa
         for local_idx, row_idx in enumerate(indices):
             predictions[row_idx]["pred_top4"] = str(int(top4[local_idx]))
 
-    pred_fields = ["route_id", *metadata_cols, "subject_id", "trial_id", "y_score", "y_pred"]
+    pred_fields = ["route_id", *metadata_cols, "subject_id", "trial_id", "y_score"]
     if any("y_true" in row for row in predictions):
         pred_fields.append("y_true")
     pred_fields.append("pred_top4")
@@ -532,8 +567,8 @@ def _write_derived_dataset_manifest(
         {
             "subject_id": str(row["subject_id"]),
             "trial_id": str(row["trial_id"]),
-            "crop_ids": [str(idx) for idx in range(5)],
-            "window_start_secs": [float(idx) for idx in range(5)],
+            "crop_ids": [str(row.get(f"crop_{idx}_source_crop_id") or idx) for idx in range(5)],
+            "window_start_secs": [float(row.get(f"crop_{idx}_window_start_sec") or idx) for idx in range(5)],
         }
         for row in rows
     ]
