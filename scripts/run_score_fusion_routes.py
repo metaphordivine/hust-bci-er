@@ -265,6 +265,11 @@ def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str)
                 "y_true": str(row["y_true"]),
                 "score_matrix_evidence": source.score_matrix_evidence,
             }
+            source_crop_col = f"{crop_col}_source_crop_id"
+            window_start_col = f"{crop_col}_window_start_sec"
+            if source_crop_col in fields and window_start_col in fields:
+                item["source_crop_id"] = str(row.get(source_crop_col, ""))
+                item["window_start_sec"] = str(row.get(window_start_col, ""))
             if source.seed is not None:
                 item["seed"] = str(source.seed)
             elif row.get("seed") not in {None, ""}:
@@ -298,6 +303,10 @@ def _component_rows_from_predictions(source: SourceArtifact, component_id: str) 
             item["y_true"] = str(row["y_true"])
         if row.get("crop_id") not in {None, ""}:
             item["crop_id"] = str(row["crop_id"])
+        if row.get("source_crop_id") not in {None, ""}:
+            item["source_crop_id"] = str(row["source_crop_id"])
+        if row.get("window_start_sec") not in {None, ""}:
+            item["window_start_sec"] = str(row["window_start_sec"])
         if source.seed is not None:
             item["seed"] = str(source.seed)
         elif row.get("seed") not in {None, ""}:
@@ -334,7 +343,18 @@ def export_component_score(
         print(f"  export failed for {component_id}: {exc}", file=sys.stderr)
         return 1
     fieldnames = ["component_id"]
-    for col in ("seed", "fold", "subject_id", "trial_id", "crop_id", "score", "y_true", "score_matrix_evidence"):
+    for col in (
+        "seed",
+        "fold",
+        "subject_id",
+        "trial_id",
+        "crop_id",
+        "source_crop_id",
+        "window_start_sec",
+        "score",
+        "y_true",
+        "score_matrix_evidence",
+    ):
         if col in {"subject_id", "trial_id", "score"} or any(row.get(col) not in {None, ""} for row in rows):
             fieldnames.append(col)
     _write_csv(output_path, rows, fieldnames)
@@ -408,18 +428,23 @@ def _write_score_fusion_outputs(fused_rows: list[dict[str, str]], output_dir: Pa
     for key, rows in sorted(trial_scores.items()):
         first = rows[0]
         scores_by_crop: dict[int, float] = {}
+        provenance_by_crop: dict[int, tuple[str, str]] = {}
         if has_crop_rows:
             for row in rows:
                 crop_raw = row.get("crop_id")
                 if crop_raw in {None, ""}:
                     continue
-                scores_by_crop[int(float(crop_raw))] = float(row["score"])
+                crop_idx = int(float(crop_raw))
+                scores_by_crop[crop_idx] = float(row["score"])
+                if row.get("source_crop_id") not in {None, ""} and row.get("window_start_sec") not in {None, ""}:
+                    provenance_by_crop[crop_idx] = (str(row["source_crop_id"]), str(row["window_start_sec"]))
         if len(scores_by_crop) == 5 and sorted(scores_by_crop) == [0, 1, 2, 3, 4]:
             crop_scores = [scores_by_crop[idx] for idx in range(5)]
         else:
             score_matrix_evidence = "synthetic"
             mean_source = float(first["score"])
             crop_scores = [mean_source for _idx in range(5)]
+        use_source_provenance = len(provenance_by_crop) == 5 and len(set(provenance_by_crop.values())) == 1
 
         mean_score = sum(crop_scores) / len(crop_scores)
         pred = {
@@ -444,9 +469,12 @@ def _write_score_fusion_outputs(fused_rows: list[dict[str, str]], output_dir: Pa
             }
         )
         for idx, score in enumerate(crop_scores):
+            source_crop_id, window_start_sec = (
+                provenance_by_crop[idx] if use_source_provenance else (str(idx), f"{float(idx):.8f}")
+            )
             score_row[f"crop_{idx}"] = f"{score:.12g}"
-            score_row[f"crop_{idx}_source_crop_id"] = str(idx)
-            score_row[f"crop_{idx}_window_start_sec"] = f"{float(idx):.8f}"
+            score_row[f"crop_{idx}_source_crop_id"] = source_crop_id
+            score_row[f"crop_{idx}_window_start_sec"] = window_start_sec
         score_rows.append(score_row)
 
     by_group: dict[tuple[str, ...], list[int]] = {}
@@ -579,6 +607,25 @@ def _source_split_path(source_manifest_path: Path) -> Path | None:
     if source is not None and source.exists():
         return source
     return None
+
+
+def _source_crop_policy(source_manifest_path: Path) -> dict[str, Any] | None:
+    manifest = _load_source_manifest(source_manifest_path)
+    if manifest is None:
+        return None
+    policy = manifest.get("protocol_job_crop_policy")
+    if not isinstance(policy, dict):
+        policy = manifest.get("crop_policy")
+    return dict(policy) if isinstance(policy, dict) else None
+
+
+def _common_source_crop_policy(source_manifest_paths: list[Path]) -> dict[str, Any] | None:
+    policies = [_source_crop_policy(path) for path in source_manifest_paths]
+    policies = [policy for policy in policies if policy is not None]
+    if not policies or len(policies) != len(source_manifest_paths):
+        return None
+    encoded = {json.dumps(policy, sort_keys=True, ensure_ascii=False) for policy in policies}
+    return dict(policies[0]) if len(encoded) == 1 else None
 
 
 def _unique_source_split_hashes(source_manifest_paths: list[Path]) -> set[str]:
@@ -745,6 +792,7 @@ def _write_score_fusion_manifest(
     )
     determinism = reproducibility_manifest(ReproducibilityConfig(seed=seed))
     determinism["pythonhashseed_env"] = str(seed)
+    common_crop_policy = _common_source_crop_policy(source_manifest_paths)
     manifest = build_run_manifest_payload(
         context,
         metrics=metric_report["metrics"],
@@ -758,6 +806,7 @@ def _write_score_fusion_manifest(
         determinism=determinism,
         top4_group_keys=metric_group_keys,
         metric_group_keys=metric_group_keys,
+        crop_policy=common_crop_policy,
     )
     score_route = score_route_by_id(route_id)
     manifest["score_matrix_evidence"] = score_matrix_evidence

@@ -12,22 +12,26 @@ from scripts import export_component_scores, run_score_fusion_routes
 ROUTE = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
 
 
-def _write_score_matrix(path: Path, *, base: float) -> None:
+def _write_score_matrix(path: Path, *, base: float, repeated_source_crop: int | None = None) -> None:
     header = [
         "subject_id",
         "trial_id",
         "y_true",
-        "crop_0",
-        "crop_1",
-        "crop_2",
-        "crop_3",
-        "crop_4",
     ]
+    for crop in range(5):
+        header.append(f"crop_{crop}")
+        if repeated_source_crop is not None:
+            header.extend([f"crop_{crop}_source_crop_id", f"crop_{crop}_window_start_sec"])
     rows = []
     for idx in range(8):
         label = 1 if idx >= 4 else 0
         scores = [base + idx * 0.1 + crop * 0.01 for crop in range(5)]
-        rows.append(["s1", f"t{idx}", str(label), *[f"{score:.3f}" for score in scores]])
+        row = ["s1", f"t{idx}", str(label)]
+        for crop, score in enumerate(scores):
+            row.append(f"{score:.3f}")
+            if repeated_source_crop is not None:
+                row.extend([str(repeated_source_crop), f"{float(repeated_source_crop):.8f}"])
+        rows.append(row)
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
@@ -108,6 +112,40 @@ def test_score_fusion_runner_writes_prediction_matrix_metric_and_manifest(tmp_pa
     }
 
 
+def test_score_fusion_preserves_primary_component_crop_provenance(tmp_path):
+    conformer_matrix = tmp_path / "conformer_score_matrix.csv"
+    srfnet_matrix = tmp_path / "srfnet_score_matrix.csv"
+    conformer_component = tmp_path / "conformer_component.csv"
+    srfnet_component = tmp_path / "srfnet_component.csv"
+    _write_score_matrix(conformer_matrix, base=0.0, repeated_source_crop=0)
+    _write_score_matrix(srfnet_matrix, base=1.0, repeated_source_crop=0)
+    assert export_component_scores.export_component_scores_from_score_matrix(
+        conformer_matrix,
+        "conformer_component",
+        conformer_component,
+    ) == 0
+    assert export_component_scores.export_component_scores_from_score_matrix(
+        srfnet_matrix,
+        "srfnet_long_component",
+        srfnet_component,
+    ) == 0
+
+    output_dir = tmp_path / "run"
+    rc, _info = run_score_fusion_routes.assemble_score_fusion(
+        ROUTE,
+        {
+            "conformer_component": conformer_component,
+            "srfnet_long_component": srfnet_component,
+        },
+        output_dir,
+    )
+
+    assert rc == 0
+    matrix_rows = list(csv.DictReader((output_dir / "score_matrix.csv").open(encoding="utf-8", newline="")))
+    assert matrix_rows[0]["crop_4_source_crop_id"] == "0"
+    assert matrix_rows[0]["crop_4_window_start_sec"] == "0.00000000"
+
+
 def _write_source_manifest(
     root: Path,
     *,
@@ -115,6 +153,7 @@ def _write_source_manifest(
     fold: int,
     include_seed_fold: bool = True,
     score_matrix_evidence: str = "genuine",
+    crop_policy: dict | None = None,
 ) -> Path:
     root.mkdir(parents=True)
     split = {
@@ -138,6 +177,9 @@ def _write_source_manifest(
         "split_sha256": sha256_file(split_path),
         "score_matrix_evidence": score_matrix_evidence,
     }
+    if crop_policy is not None:
+        manifest["crop_policy"] = crop_policy
+        manifest["protocol_job_crop_policy"] = crop_policy
     if include_seed_fold:
         manifest["seed"] = seed
         manifest["fold"] = fold
@@ -188,6 +230,39 @@ def test_score_fusion_manifest_merges_multiple_source_splits(tmp_path):
     assert {str(row["fold"]) for row in split["trial_rows"]} == {"seed42_fold0", "seed42_fold1"}
     assert len(split["fold_definitions"]) == 2
     assert manifest["score_fusion_source_evidence"]["split_evidence"] == "merged_source_protocol_splits"
+
+
+def test_score_fusion_manifest_inherits_common_source_crop_policy(tmp_path):
+    conformer_matrix = tmp_path / "conformer_score_matrix.csv"
+    srfnet_matrix = tmp_path / "srfnet_score_matrix.csv"
+    conformer_component = tmp_path / "conformer_component.csv"
+    srfnet_component = tmp_path / "srfnet_component.csv"
+    _write_score_matrix(conformer_matrix, base=0.0, repeated_source_crop=0)
+    _write_score_matrix(srfnet_matrix, base=1.0, repeated_source_crop=0)
+    assert export_component_scores.export_component_scores_from_score_matrix(conformer_matrix, "conformer_component", conformer_component) == 0
+    assert export_component_scores.export_component_scores_from_score_matrix(srfnet_matrix, "srfnet_long_component", srfnet_component) == 0
+    source_policy = {"name": "crop1", "selection": "fixed_index", "crop_index": 0, "tie_break": "not_applicable"}
+    source_a = _write_source_manifest(tmp_path / "source_a", seed=42, fold=0, crop_policy=source_policy)
+    source_b = _write_source_manifest(tmp_path / "source_b", seed=42, fold=0, crop_policy=source_policy)
+    output_dir = tmp_path / "run"
+    rc, info = run_score_fusion_routes.assemble_score_fusion(
+        ROUTE,
+        {"conformer_component": conformer_component, "srfnet_long_component": srfnet_component},
+        output_dir,
+    )
+    assert rc == 0
+
+    run_score_fusion_routes._write_score_fusion_manifest(
+        ROUTE,
+        output_dir,
+        {"conformer_component": conformer_component, "srfnet_long_component": srfnet_component},
+        source_manifest_paths=[source_a, source_b],
+        score_matrix_evidence=info["score_matrix_evidence"],
+        component_score_evidence={"conformer_component": "genuine", "srfnet_long_component": "genuine"},
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["crop_policy"] == source_policy
 
 
 def test_score_fusion_manifest_uses_protocol_job_fold_metadata(tmp_path):

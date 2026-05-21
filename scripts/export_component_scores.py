@@ -93,7 +93,13 @@ def export_component_scores_from_score_matrix(
         if col in rows[0] and any(row.get(col) not in {None, ""} for row in rows):
             optional_keys.append(col)
 
-    fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", "crop_id", "score", "y_true"]
+    has_crop_provenance = all(
+        f"{crop_col}_source_crop_id" in fields and f"{crop_col}_window_start_sec" in fields
+        for crop_col in crop_cols
+    )
+    provenance_fields = ["source_crop_id", "window_start_sec"] if has_crop_provenance else []
+
+    fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", "crop_id", *provenance_fields, "score", "y_true"]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -110,6 +116,9 @@ def export_component_scores_from_score_matrix(
                 }
                 for col in optional_keys:
                     item[col] = str(row.get(col, ""))
+                if has_crop_provenance:
+                    item["source_crop_id"] = str(row.get(f"{crop_col}_source_crop_id", ""))
+                    item["window_start_sec"] = str(row.get(f"{crop_col}_window_start_sec", ""))
                 writer.writerow(item)
     return 0
 
@@ -152,8 +161,9 @@ def export_component_scores(
 
     truth_col = schema.get("y_true")
     has_truth = truth_col is not None
+    provenance_cols = [col for col in ("source_crop_id", "window_start_sec") if col in rows[0] and rows[0].get(col) not in {None, ""}]
 
-    fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", "score"]
+    fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", *provenance_cols, "score"]
     if has_truth:
         fieldnames.append("y_true")
 
@@ -168,6 +178,8 @@ def export_component_scores(
                 "score": str(row[score_col]),
             }
             for col in optional_keys:
+                item[col] = str(row.get(col, ""))
+            for col in provenance_cols:
                 item[col] = str(row.get(col, ""))
             if has_truth:
                 item["y_true"] = str(row[truth_col])
