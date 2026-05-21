@@ -42,7 +42,7 @@ def softmax_rows(x: np.ndarray, *, temperature: float = 1.0) -> np.ndarray:
 def calibrated_probability_average(*arrays: np.ndarray, weights: list[float] | None = None, temperature: float = 1.0) -> np.ndarray:
     if not arrays:
         raise ValueError("at least one score array is required")
-    raw_weights = weights or [1.0 / len(arrays)] * len(arrays)
+    raw_weights = [1.0 / len(arrays)] * len(arrays) if weights is None else weights
     if len(raw_weights) != len(arrays):
         raise ValueError("weights length must match arrays")
     normalized_weights = np.asarray(raw_weights, dtype=np.float64)

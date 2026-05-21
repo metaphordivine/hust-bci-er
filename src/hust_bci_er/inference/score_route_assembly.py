@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from collections import defaultdict
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Mapping
 
@@ -24,6 +25,24 @@ class ComponentScoreTable:
     scores: np.ndarray
     y_true: Mapping[tuple[str, ...], str]
     provenance: Mapping[tuple[str, ...], tuple[str, str]]
+
+
+def _canonical_provenance_value(value: str) -> str:
+    text = str(value).strip()
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return text
+    if not number.is_finite():
+        return text
+    normalized = number.normalize()
+    if normalized == 0:
+        return "0"
+    return format(normalized, "f").rstrip("0").rstrip(".")
+
+
+def canonical_provenance(provenance: tuple[str, str]) -> tuple[str, str]:
+    return (_canonical_provenance_value(provenance[0]), _canonical_provenance_value(provenance[1]))
 
 
 def read_component_score_table(path: Path, *, component_id: str | None = None) -> ComponentScoreTable:
@@ -173,9 +192,10 @@ def matrices_from_component_tables(
                 if provenance is None:
                     raise ValueError(f"component score table is missing crop provenance for alignment key: {name} {key}")
                 existing = provenance_by_key.get(key)
-                if existing is not None and existing != provenance:
+                if existing is not None and canonical_provenance(existing) != canonical_provenance(provenance):
                     raise ValueError(f"component score crop provenance mismatch for alignment key: {key}")
-                provenance_by_key[key] = provenance
+                if existing is None:
+                    provenance_by_key[key] = provenance
 
     return group_columns, groups, [trials_by_group[group] for group in groups], component_matrices, truth_by_key, provenance_by_key
 

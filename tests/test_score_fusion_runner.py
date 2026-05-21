@@ -147,6 +147,26 @@ def test_score_fusion_export_rejects_single_prediction_provenance_column(tmp_pat
     assert not output.exists()
 
 
+def test_export_component_scores_rejects_empty_single_prediction_provenance_column(tmp_path, capsys):
+    predictions = tmp_path / "predictions.csv"
+    output = tmp_path / "component.csv"
+    predictions.write_text(
+        "subject_id,trial_id,source_crop_id,score\n"
+        "s1,t0,,0.1\n",
+        encoding="utf-8",
+    )
+
+    rc = export_component_scores.export_component_scores(
+        predictions,
+        "conformer_component",
+        output,
+    )
+
+    assert rc == 1
+    assert "partial crop provenance columns" in capsys.readouterr().err
+    assert not output.exists()
+
+
 def test_score_fusion_runner_writes_prediction_matrix_metric_and_manifest(tmp_path):
     conformer_matrix = tmp_path / "conformer_score_matrix.csv"
     srfnet_matrix = tmp_path / "srfnet_score_matrix.csv"

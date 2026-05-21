@@ -50,6 +50,7 @@ def test_calibrated_probability_average_rejects_invalid_weights():
     second = np.array([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=float)
 
     for weights, message in [
+        ([], "weights length must match arrays"),
         ([0.0, 0.0], "weights sum must be positive"),
         ([1.0, -0.1], "weights must be non-negative"),
         ([1.0, np.nan], "weights must be finite"),
@@ -378,3 +379,30 @@ def test_assemble_score_route_rows_rejects_component_provenance_mismatch(tmp_pat
         assert "crop provenance mismatch" in str(exc)
     else:
         raise AssertionError("component provenance mismatch should fail")
+
+
+def test_assemble_score_route_rows_allows_numeric_equivalent_provenance_formats(tmp_path):
+    route_config = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
+    conformer = tmp_path / "conformer.csv"
+    srfnet = tmp_path / "srfnet.csv"
+    header = "component_id,subject_id,trial_id,source_crop_id,window_start_sec,score\n"
+    conformer.write_text(
+        header + "\n".join(f"conformer_component,s1,t{idx},0,0,{8 - idx}" for idx in range(8)) + "\n",
+        encoding="utf-8",
+    )
+    srfnet.write_text(
+        header + "\n".join(f"srfnet_long_component,s1,t{idx},0.00000000,0.00000000,{7 - idx}" for idx in range(8)) + "\n",
+        encoding="utf-8",
+    )
+
+    rows = assemble_score_route_rows(
+        route_config,
+        {
+            "conformer_component": conformer,
+            "srfnet_long_component": srfnet,
+        },
+    )
+
+    assert len(rows) == 8
+    assert rows[0]["source_crop_id"] == "0"
+    assert rows[0]["window_start_sec"] == "0"
