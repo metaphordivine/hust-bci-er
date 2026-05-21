@@ -15,6 +15,7 @@ from hust_bci_er.models.backbones.fbstcnet import (
     FBSTCNet,
     Cheby2FilterBank,
     FFTRectangularFilterBank,
+    RiemannianBranchGate,
     aggregate_branch_logits,
     aggregate_crop_logits,
 )
@@ -248,6 +249,58 @@ def test_fbstcnet_return_crop_logits_is_structured_for_mixed_variant():
     assert result["combined"].shape[1] == result["power"].shape[1] + result["connectivity"].shape[1]
 
 
+def test_fbstcnet_riemannian_gate_returns_normalized_branch_weights():
+    model = FBSTCNet(
+        n_chans=30,
+        n_outputs=2,
+        n_times=256,
+        sfreq=200.0,
+        variant="M",
+        branch_fusion="riemannian_gate",
+        gate_hidden_dim=8,
+        gate_dropout=0.0,
+    )
+    model.eval()
+    x = torch.randn(2, 30, 256)
+
+    with torch.no_grad():
+        result = model(x, return_crop_logits=True)
+        logits = model(x)
+
+    assert set(result) == {"power", "connectivity", "combined", "branch_weights"}
+    assert tuple(result["branch_weights"].shape) == (2, 2)
+    assert torch.allclose(result["branch_weights"].sum(dim=1), torch.ones(2), atol=1e-6)
+    assert tuple(logits.shape) == (2, 2)
+    assert torch.isfinite(logits).all()
+
+    loss = torch.nn.functional.cross_entropy(model(x), torch.tensor([0, 1]))
+    loss.backward()
+    gate_grad = model.branch_gate.gate[0].weight.grad
+    assert gate_grad is not None
+    assert torch.isfinite(gate_grad).all()
+
+
+def test_riemannian_branch_gate_rejects_invalid_regularization():
+    with pytest.raises(ValueError, match="covariance_eps"):
+        RiemannianBranchGate(n_chans=30, n_branches=2, covariance_eps=0.0)
+    with pytest.raises(ValueError, match="shrinkage"):
+        RiemannianBranchGate(n_chans=30, n_branches=2, shrinkage=1.0)
+    with pytest.raises(ValueError, match="temperature"):
+        RiemannianBranchGate(n_chans=30, n_branches=2, temperature=0.0)
+
+
+def test_fbstcnet_riemannian_gate_requires_mixed_variant():
+    with pytest.raises(ValueError, match="requires mixed variant M"):
+        FBSTCNet(
+            n_chans=30,
+            n_outputs=2,
+            n_times=256,
+            sfreq=200.0,
+            variant="P",
+            branch_fusion="riemannian_gate",
+        )
+
+
 # ---------------------------------------------------------------------------
 # build_model passthrough
 # ---------------------------------------------------------------------------
@@ -277,6 +330,20 @@ def test_build_model_passes_cheby2_params_to_fbstcnet():
     assert params["order"] == 6
     assert params["stopband_ripple_db"] == 40.0
     assert params["transition_bw_hz"] == 1.5
+
+
+def test_build_model_passes_riemannian_gate_to_fbstcnet():
+    model = build_model(
+        "fbstcnet",
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        branch_fusion="riemannian_gate",
+        gate_hidden_dim=8,
+        gate_temperature=1.5,
+    )
+    assert model.branch_fusion == "riemannian_gate"
+    assert model.branch_gate.temperature == pytest.approx(1.5)
 
 
 def test_build_model_passes_attention_pooling_to_deformer():

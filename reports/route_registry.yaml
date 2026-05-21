@@ -76,6 +76,9 @@ routes:
   - route_id: fixed_crop_ea_fbstcnet
     owner: metaphordivine
     blocker:
+  - route_id: fixed_crop_ea_fbstcnet_riem_guided_gate
+    owner: metaphordivine
+    blocker: pending_p2_p3_confirmation
   - route_id: fixed_crop_ea_fbcnet
     owner: metaphordivine
     blocker: missing_real_candidate_run
