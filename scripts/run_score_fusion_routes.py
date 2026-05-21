@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,7 @@ sys.path.insert(0, str(SRC))
 from hust_bci_er.config.component_map import base_route_for_component  # noqa: E402
 from hust_bci_er.audit.manifest import sha256_file  # noqa: E402
 from hust_bci_er.audit.run_manifest import build_run_manifest_payload, prepare_run_manifest_context  # noqa: E402
+from hust_bci_er.evaluation.exact_single_crop import assignment_grid, top4_predictions  # noqa: E402
 from hust_bci_er.evaluation.report import build_metric_report, write_metric_report  # noqa: E402
 from hust_bci_er.inference.clean_score_routes import score_route_by_id  # noqa: E402
 from hust_bci_er.inference.score_route_assembly import assemble_score_route_rows  # noqa: E402
@@ -61,6 +63,11 @@ class SourceArtifact:
     fold: int | None = None
     manifest_path: Path | None = None
     score_matrix_evidence: str = "synthetic"
+
+
+MetadataKey = tuple[tuple[str, str], ...]
+TrialKey = tuple[MetadataKey, str, str]
+FixedCropRows = dict[TrialKey, dict[int, dict[str, str]]]
 
 
 def route_config_paths() -> list[Path]:
@@ -276,6 +283,18 @@ def _source_protocol_job_key(source: SourceArtifact, base_route_id: str) -> str 
     return source.job_id
 
 
+def _p2_fixed_crop_index(protocol_job: str | None) -> int | None:
+    if protocol_job is None:
+        return None
+    prefix = "p2__eval_crop"
+    if not protocol_job.startswith(prefix):
+        return None
+    suffix = protocol_job[len(prefix) :]
+    if suffix not in {"1", "2", "3", "4", "5"}:
+        return None
+    return int(suffix) - 1
+
+
 def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str, base_route_id: str) -> list[dict[str, str]]:
     rows = _read_csv(source.path)
     if not rows:
@@ -381,6 +400,11 @@ def export_component_score(
     try:
         rows: list[dict[str, str]] = []
         for source in source_artifacts:
+            if _source_protocol_job_key(source, base_route_id) == "p2__eval_worst":
+                # P2 worst-crop selection is route/model-score dependent. For score
+                # fusion, synthesize it after fixed-crop component scores are fused
+                # so the worst assignment is selected at the fused-route level.
+                continue
             if source.kind == "score_matrix":
                 rows.extend(_component_rows_from_score_matrix(source, component_id, base_route_id))
             else:
@@ -467,7 +491,71 @@ def _trial_key(row: dict[str, str], metadata_cols: list[str]) -> tuple[str, ...]
     return tuple(str(row.get(col, "")) for col in [*metadata_cols, "subject_id", "trial_id"])
 
 
+def _without_protocol_metadata(row: dict[str, str]) -> MetadataKey:
+    return tuple(
+        (col, str(row.get(col, "")))
+        for col in ("seed", "fold")
+        if row.get(col) not in {None, ""}
+    )
+
+
+def _representative_fixed_crop_rows(fused_rows: list[dict[str, str]]) -> FixedCropRows:
+    by_trial: FixedCropRows = {}
+    for row in fused_rows:
+        crop_idx = _p2_fixed_crop_index(row.get("protocol_job"))
+        if crop_idx is None:
+            continue
+        key = (_without_protocol_metadata(row), str(row["subject_id"]), str(row["trial_id"]))
+        by_trial.setdefault(key, {}).setdefault(crop_idx, row)
+    return by_trial
+
+
+def _synthesize_p2_worst_rows(fused_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    if any(row.get("protocol_job") == "p2__eval_worst" for row in fused_rows):
+        return []
+    by_trial = _representative_fixed_crop_rows(fused_rows)
+    complete = {key: crops for key, crops in by_trial.items() if set(crops) == {0, 1, 2, 3, 4}}
+    if not complete:
+        return []
+
+    by_subject: dict[tuple[MetadataKey, str], list[tuple[TrialKey, dict[int, dict[str, str]]]]] = {}
+    for key, crops in complete.items():
+        metadata, subject_id, _trial_id = key
+        by_subject.setdefault((metadata, subject_id), []).append((key, crops))
+
+    synthesized: list[dict[str, str]] = []
+    for (_metadata, _subject_id), items in by_subject.items():
+        items = sorted(items, key=lambda item: item[0][2])
+        selected_by_key: dict[TrialKey, int] = {}
+        if len(items) == 8:
+            mat = np.array(
+                [[float(crops[crop_idx]["score"]) for crop_idx in range(5)] for _key, crops in items],
+                dtype=np.float64,
+            )
+            y_true = np.array([int(float(crops[0]["y_true"])) for _key, crops in items], dtype=np.int8)
+            grid = assignment_grid(mat.shape[0], mat.shape[1])
+            selected = mat[np.arange(mat.shape[0]), grid]
+            pred = top4_predictions(selected)
+            values = (pred == y_true[None, :]).mean(axis=1)
+            assignment = grid[int(np.argmin(values))]
+            for (key, _crops), crop_idx in zip(items, assignment):
+                selected_by_key[key] = int(crop_idx)
+        else:
+            for key, crops in items:
+                selected_by_key[key] = int(np.argmin([float(crops[crop_idx]["score"]) for crop_idx in range(5)]))
+
+        for key, crops in items:
+            selected = dict(crops[selected_by_key[key]])
+            selected["protocol_job"] = "p2__eval_worst"
+            for crop_idx in range(5):
+                item = dict(selected)
+                item["crop_id"] = str(crop_idx)
+                synthesized.append(item)
+    return synthesized
+
+
 def _write_score_fusion_outputs(fused_rows: list[dict[str, str]], output_dir: Path) -> str:
+    fused_rows = [*fused_rows, *_synthesize_p2_worst_rows(fused_rows)]
     metadata_cols = _metadata_columns(fused_rows)
     has_crop_rows = any(row.get("crop_id") not in {None, ""} for row in fused_rows)
     trial_scores: dict[tuple[str, ...], list[dict[str, str]]] = {}
