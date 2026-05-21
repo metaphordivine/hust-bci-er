@@ -68,7 +68,7 @@ def read_component_score_table(path: Path, *, component_id: str | None = None) -
                 raise ValueError(f"component score table component_id does not match {component_id}: {path} ({actual})")
 
     optional_key_cols: list[str] = []
-    for col in ("seed", "fold", "crop_id"):
+    for col in ("protocol_job", "seed", "fold", "crop_id"):
         if col not in rows[0]:
             continue
         present = [row.get(col) not in {None, ""} for row in rows]

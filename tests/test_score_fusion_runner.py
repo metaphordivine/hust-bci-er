@@ -482,6 +482,43 @@ def test_score_fusion_main_trusts_component_csvs_exported_earlier_in_same_run(tm
     assert sum("repo_doctor.py" in call for cmd in audit_calls for call in cmd) == 4
 
 
+def _write_protocol_job_base_run(root: Path, route_id: str, *, suffixes: list[str], base: float) -> None:
+    run_dir = root / route_id
+    jobs = []
+    for offset, suffix in enumerate(suffixes):
+        job_id = f"p2__{route_id}__{suffix}"
+        job_dir = run_dir / "job_runs" / job_id
+        _write_source_manifest(job_dir, seed=42, fold=0)
+        _write_score_matrix(job_dir / "score_matrix.csv", base=base + offset)
+        jobs.append({"job_id": job_id, "seed": 42, "fold": 0})
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "protocol_run_manifest.json").write_text(json.dumps({"jobs": jobs}), encoding="utf-8")
+
+
+def test_score_fusion_main_keeps_protocol_jobs_distinct(tmp_path):
+    base_runs = tmp_path / "base_runs"
+    suffixes = ["eval_crop1", "eval_crop2"]
+    _write_protocol_job_base_run(base_runs, "sliding_window_conformer_lite", suffixes=suffixes, base=0.0)
+    _write_protocol_job_base_run(base_runs, "sliding_window_srfnet", suffixes=suffixes, base=1.0)
+
+    output_dir = tmp_path / "score_fusion"
+    rc = run_score_fusion_routes.main(
+        [
+            "--route-filter", "conformer_srfnet_score_average",
+            "--base-runs-dir", str(base_runs),
+            "--export-missing",
+            "--output-dir", str(output_dir),
+        ]
+    )
+
+    summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
+    prediction_rows = list(csv.DictReader((output_dir / "conformer_srfnet_score_average" / "predictions.csv").open(encoding="utf-8", newline="")))
+    assert rc == 0
+    assert summary["passed"] == 1
+    assert len(prediction_rows) == 16
+    assert {row["protocol_job"] for row in prediction_rows} == {"p2__eval_crop1", "p2__eval_crop2"}
+
+
 def test_score_fusion_audit_blocks_synthetic_component_evidence(tmp_path, monkeypatch):
     base_runs = tmp_path / "base_runs"
     _write_base_run(base_runs, "sliding_window_conformer_lite", seed=42, fold=0, base=0.0, score_matrix_evidence="synthetic")

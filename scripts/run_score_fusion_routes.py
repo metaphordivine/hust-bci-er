@@ -266,6 +266,15 @@ def _has_complete_score_matrix_crop_provenance(rows: list[dict[str, str]], crop_
     return True
 
 
+def _source_protocol_job_key(source: SourceArtifact) -> str | None:
+    if not source.job_id:
+        return None
+    parts = source.job_id.split("__")
+    if len(parts) >= 3:
+        return "__".join([parts[0], *parts[2:]])
+    return source.job_id
+
+
 def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str) -> list[dict[str, str]]:
     rows = _read_csv(source.path)
     if not rows:
@@ -292,6 +301,9 @@ def _component_rows_from_score_matrix(source: SourceArtifact, component_id: str)
             if has_crop_provenance:
                 item["source_crop_id"] = str(row.get(source_crop_col, ""))
                 item["window_start_sec"] = str(row.get(window_start_col, ""))
+            protocol_job = _source_protocol_job_key(source)
+            if protocol_job is not None:
+                item["protocol_job"] = protocol_job
             if source.seed is not None:
                 item["seed"] = str(source.seed)
             elif row.get("seed") not in {None, ""}:
@@ -337,6 +349,9 @@ def _component_rows_from_predictions(source: SourceArtifact, component_id: str) 
                 raise ValueError(f"predictions row {idx} has partial crop provenance values: {source.path}")
             item["source_crop_id"] = str(source_crop_id)
             item["window_start_sec"] = str(window_start_sec)
+        protocol_job = _source_protocol_job_key(source)
+        if protocol_job is not None:
+            item["protocol_job"] = protocol_job
         if source.seed is not None:
             item["seed"] = str(source.seed)
         elif row.get("seed") not in {None, ""}:
@@ -380,6 +395,7 @@ def export_component_score(
                 return 1
     fieldnames = ["component_id"]
     for col in (
+        "protocol_job",
         "seed",
         "fold",
         "subject_id",
@@ -439,7 +455,7 @@ def assemble_score_fusion(
 
 
 def _metadata_columns(rows: list[dict[str, str]]) -> list[str]:
-    return [col for col in ("seed", "fold") if any(row.get(col) not in {None, ""} for row in rows)]
+    return [col for col in ("protocol_job", "seed", "fold") if any(row.get(col) not in {None, ""} for row in rows)]
 
 
 def _prediction_group_key(row: dict[str, str], metadata_cols: list[str]) -> tuple[str, ...]:
