@@ -444,7 +444,9 @@ def _write_score_fusion_outputs(fused_rows: list[dict[str, str]], output_dir: Pa
             score_matrix_evidence = "synthetic"
             mean_source = float(first["score"])
             crop_scores = [mean_source for _idx in range(5)]
-        use_source_provenance = len(provenance_by_crop) == 5 and len(set(provenance_by_crop.values())) == 1
+        if provenance_by_crop and sorted(provenance_by_crop) != [0, 1, 2, 3, 4]:
+            raise ValueError(f"score_fusion crop provenance is partial for trial: {'|'.join(key)}")
+        use_source_provenance = sorted(provenance_by_crop) == [0, 1, 2, 3, 4]
 
         mean_score = sum(crop_scores) / len(crop_scores)
         pred = {
@@ -469,9 +471,7 @@ def _write_score_fusion_outputs(fused_rows: list[dict[str, str]], output_dir: Pa
             }
         )
         for idx, score in enumerate(crop_scores):
-            source_crop_id, window_start_sec = (
-                provenance_by_crop[idx] if use_source_provenance else (str(idx), f"{float(idx):.8f}")
-            )
+            source_crop_id, window_start_sec = provenance_by_crop[idx] if use_source_provenance else (str(idx), f"{float(idx):.8f}")
             score_row[f"crop_{idx}"] = f"{score:.12g}"
             score_row[f"crop_{idx}_source_crop_id"] = source_crop_id
             score_row[f"crop_{idx}_window_start_sec"] = window_start_sec

@@ -12,7 +12,18 @@ from scripts import export_component_scores, run_score_fusion_routes
 ROUTE = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
 
 
-def _write_score_matrix(path: Path, *, base: float, repeated_source_crop: int | None = None) -> None:
+def _write_score_matrix(
+    path: Path,
+    *,
+    base: float,
+    repeated_source_crop: int | None = None,
+    source_crops: list[int] | None = None,
+) -> None:
+    if repeated_source_crop is not None and source_crops is not None:
+        raise ValueError("set repeated_source_crop or source_crops, not both")
+    crop_sources = source_crops
+    if repeated_source_crop is not None:
+        crop_sources = [repeated_source_crop for _idx in range(5)]
     header = [
         "subject_id",
         "trial_id",
@@ -20,7 +31,7 @@ def _write_score_matrix(path: Path, *, base: float, repeated_source_crop: int | 
     ]
     for crop in range(5):
         header.append(f"crop_{crop}")
-        if repeated_source_crop is not None:
+        if crop_sources is not None:
             header.extend([f"crop_{crop}_source_crop_id", f"crop_{crop}_window_start_sec"])
     rows = []
     for idx in range(8):
@@ -29,8 +40,8 @@ def _write_score_matrix(path: Path, *, base: float, repeated_source_crop: int | 
         row = ["s1", f"t{idx}", str(label)]
         for crop, score in enumerate(scores):
             row.append(f"{score:.3f}")
-            if repeated_source_crop is not None:
-                row.extend([str(repeated_source_crop), f"{float(repeated_source_crop):.8f}"])
+            if crop_sources is not None:
+                row.extend([str(crop_sources[crop]), f"{float(crop_sources[crop]):.8f}"])
         rows.append(row)
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
@@ -54,6 +65,27 @@ def test_export_component_scores_prefers_score_matrix_crops(tmp_path):
     assert len(rows) == 40
     assert rows[0]["component_id"] == "conformer_component"
     assert {row["crop_id"] for row in rows[:5]} == {"0", "1", "2", "3", "4"}
+
+
+def test_export_component_scores_rejects_partial_prediction_provenance(tmp_path, capsys):
+    predictions = tmp_path / "predictions.csv"
+    output = tmp_path / "component.csv"
+    predictions.write_text(
+        "subject_id,trial_id,source_crop_id,window_start_sec,score\n"
+        "s1,t0,,,0.1\n"
+        "s1,t1,4,4.00000000,0.2\n",
+        encoding="utf-8",
+    )
+
+    rc = export_component_scores.export_component_scores(
+        predictions,
+        "conformer_component",
+        output,
+    )
+
+    assert rc == 1
+    assert "partial crop provenance values" in capsys.readouterr().err
+    assert not output.exists()
 
 
 def test_score_fusion_runner_writes_prediction_matrix_metric_and_manifest(tmp_path):
@@ -144,6 +176,43 @@ def test_score_fusion_preserves_primary_component_crop_provenance(tmp_path):
     matrix_rows = list(csv.DictReader((output_dir / "score_matrix.csv").open(encoding="utf-8", newline="")))
     assert matrix_rows[0]["crop_4_source_crop_id"] == "0"
     assert matrix_rows[0]["crop_4_window_start_sec"] == "0.00000000"
+
+
+def test_score_fusion_preserves_per_crop_source_provenance(tmp_path):
+    conformer_matrix = tmp_path / "conformer_score_matrix.csv"
+    srfnet_matrix = tmp_path / "srfnet_score_matrix.csv"
+    conformer_component = tmp_path / "conformer_component.csv"
+    srfnet_component = tmp_path / "srfnet_component.csv"
+    source_crops = [10, 11, 12, 13, 14]
+    _write_score_matrix(conformer_matrix, base=0.0, source_crops=source_crops)
+    _write_score_matrix(srfnet_matrix, base=1.0, source_crops=source_crops)
+    assert export_component_scores.export_component_scores_from_score_matrix(
+        conformer_matrix,
+        "conformer_component",
+        conformer_component,
+    ) == 0
+    assert export_component_scores.export_component_scores_from_score_matrix(
+        srfnet_matrix,
+        "srfnet_long_component",
+        srfnet_component,
+    ) == 0
+
+    output_dir = tmp_path / "run"
+    rc, _info = run_score_fusion_routes.assemble_score_fusion(
+        ROUTE,
+        {
+            "conformer_component": conformer_component,
+            "srfnet_long_component": srfnet_component,
+        },
+        output_dir,
+    )
+
+    assert rc == 0
+    matrix_rows = list(csv.DictReader((output_dir / "score_matrix.csv").open(encoding="utf-8", newline="")))
+    assert matrix_rows[0]["crop_0_source_crop_id"] == "10"
+    assert matrix_rows[0]["crop_0_window_start_sec"] == "10.00000000"
+    assert matrix_rows[0]["crop_4_source_crop_id"] == "14"
+    assert matrix_rows[0]["crop_4_window_start_sec"] == "14.00000000"
 
 
 def _write_source_manifest(

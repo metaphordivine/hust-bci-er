@@ -137,7 +137,8 @@ def matrices_from_component_tables(
 
     component_matrices: dict[str, np.ndarray] = {}
     truth_by_key: dict[tuple[str, ...], str] = {}
-    provenance_by_key = dict(first.provenance)
+    provenance_by_key: dict[tuple[str, ...], tuple[str, str]] = {}
+    has_provenance = any(bool(table.provenance) for table in tables.values())
     has_truth = any(bool(table.y_true) for table in tables.values())
     first_key_set = set(first_keys)
     for name in required_components:
@@ -160,6 +161,17 @@ def matrices_from_component_tables(
                 if existing is not None and existing != truth:
                     raise ValueError(f"component score y_true mismatch for alignment key: {key}")
                 truth_by_key[key] = truth
+        if has_provenance:
+            if not table.provenance:
+                raise ValueError(f"component score table is missing crop provenance while another component provides it: {name}")
+            for key in first_keys:
+                provenance = table.provenance.get(key)
+                if provenance is None:
+                    raise ValueError(f"component score table is missing crop provenance for alignment key: {name} {key}")
+                existing = provenance_by_key.get(key)
+                if existing is not None and existing != provenance:
+                    raise ValueError(f"component score crop provenance mismatch for alignment key: {key}")
+                provenance_by_key[key] = provenance
 
     return group_columns, groups, [trials_by_group[group] for group in groups], component_matrices, truth_by_key, provenance_by_key
 

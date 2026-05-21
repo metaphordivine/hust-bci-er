@@ -161,7 +161,20 @@ def export_component_scores(
 
     truth_col = schema.get("y_true")
     has_truth = truth_col is not None
-    provenance_cols = [col for col in ("source_crop_id", "window_start_sec") if col in rows[0] and rows[0].get(col) not in {None, ""}]
+    provenance_keys = ("source_crop_id", "window_start_sec")
+    has_provenance = any(row.get(col) not in {None, ""} for row in rows for col in provenance_keys)
+    provenance_cols: list[str] = []
+    if has_provenance:
+        missing_columns = [col for col in provenance_keys if col not in rows[0]]
+        if missing_columns:
+            print(f"predictions file has partial crop provenance columns {missing_columns}: {predictions_path}", file=sys.stderr)
+            return 1
+        for idx, row in enumerate(rows):
+            missing_values = [col for col in provenance_keys if row.get(col) in {None, ""}]
+            if missing_values:
+                print(f"predictions row {idx} has partial crop provenance values {missing_values}: {predictions_path}", file=sys.stderr)
+                return 1
+        provenance_cols = list(provenance_keys)
 
     fieldnames = ["component_id", *optional_keys, "subject_id", "trial_id", *provenance_cols, "score"]
     if has_truth:
