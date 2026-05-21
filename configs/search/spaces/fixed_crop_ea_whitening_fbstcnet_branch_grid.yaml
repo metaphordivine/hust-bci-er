@@ -3,6 +3,7 @@
 # epsilon plus FBSTCNet branch/connectivity knobs.
 
 candidates:
+  # Existing baseline route: fixed_crop_ea_whitening_eps1e3_fbstcnet.
   - preprocessing: [euclidean_alignment, whitening_eps1e3]
     model.variant: M
     model.pool_stride: 10
@@ -33,4 +34,3 @@ candidates:
     model.pool_stride: 10
     model.power_drop_prob: 0.35
     model.gamma: 300
-

@@ -19,6 +19,8 @@ This route is part of the EA + whitening + FBSTCNet branch stability grid. The
 family tests whether subject alignment, whitening regularization, FBSTCNet
 branch choice, or the connectivity window explains the strong fixed-crop P3
 results without changing split definitions or evaluation protocol semantics.
+This is the lead design summary for the grid; sibling routes stay summary-light
+until a real run produces candidate-grade evidence.
 
 ## Candidate Set
 
