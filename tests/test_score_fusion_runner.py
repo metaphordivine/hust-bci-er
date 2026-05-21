@@ -565,6 +565,51 @@ def test_score_fusion_synthesizes_p2_worst_after_fusion(tmp_path):
     assert sum(row["protocol_job"] == "p2__eval_worst" for row in prediction_rows) == 8
 
 
+def test_score_fusion_synthesizes_p2_worst_without_truth_labels():
+    rows = []
+    for trial_idx in range(8):
+        for crop_idx in range(5):
+            rows.append(
+                {
+                    "route_id": "conformer_srfnet_score_average",
+                    "protocol_job": f"p2__eval_crop{crop_idx + 1}",
+                    "subject_id": "s1",
+                    "trial_id": f"t{trial_idx}",
+                    "crop_id": "0",
+                    "score": str(float(5 - crop_idx + trial_idx)),
+                    "pred_top4": "0",
+                }
+            )
+
+    worst_rows = run_score_fusion_routes._synthesize_p2_worst_rows(rows)
+
+    assert len(worst_rows) == 40
+    assert {row["protocol_job"] for row in worst_rows} == {"p2__eval_worst"}
+    assert {row["score"] for row in worst_rows if row["trial_id"] == "t0"} == {"1.0"}
+
+
+def test_export_component_score_rejects_only_route_dependent_p2_worst(tmp_path, capsys):
+    matrix = tmp_path / "score_matrix.csv"
+    output = tmp_path / "component.csv"
+    _write_score_matrix(matrix, base=0.0, repeated_source_crop=3)
+    source = run_score_fusion_routes.SourceArtifact(
+        matrix,
+        "score_matrix",
+        job_id="p2__sliding_window_conformer_lite__eval_worst",
+    )
+
+    rc = run_score_fusion_routes.export_component_score(
+        "conformer_component",
+        "sliding_window_conformer_lite",
+        [source],
+        output,
+    )
+
+    assert rc == 1
+    assert "no component score rows after filtering" in capsys.readouterr().err
+    assert not output.exists()
+
+
 def test_source_protocol_job_key_strips_exact_base_route_id():
     source = run_score_fusion_routes.SourceArtifact(
         Path("score_matrix.csv"),

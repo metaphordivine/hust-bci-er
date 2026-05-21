@@ -412,6 +412,9 @@ def export_component_score(
     except Exception as exc:
         print(f"  export failed for {component_id}: {exc}", file=sys.stderr)
         return 1
+    if not rows:
+        print(f"  export failed for {component_id}: no component score rows after filtering route-dependent P2 worst jobs", file=sys.stderr)
+        return 1
     has_provenance = any(row.get("source_crop_id") not in {None, ""} or row.get("window_start_sec") not in {None, ""} for row in rows)
     if has_provenance:
         for idx, row in enumerate(rows):
@@ -527,7 +530,8 @@ def _synthesize_p2_worst_rows(fused_rows: list[dict[str, str]]) -> list[dict[str
     for (_metadata, _subject_id), items in by_subject.items():
         items = sorted(items, key=lambda item: item[0][2])
         selected_by_key: dict[TrialKey, int] = {}
-        if len(items) == 8:
+        has_truth = all(crops[0].get("y_true") not in {None, ""} for _key, crops in items)
+        if len(items) == 8 and has_truth:
             mat = np.array(
                 [[float(crops[crop_idx]["score"]) for crop_idx in range(5)] for _key, crops in items],
                 dtype=np.float64,
