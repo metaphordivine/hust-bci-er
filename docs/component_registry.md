@@ -54,6 +54,7 @@
 ## Graph Models
 
 - `dgcnn`
+- `dual_graph_conformer`
 - `lggnet`
 
 ## Score Route Models

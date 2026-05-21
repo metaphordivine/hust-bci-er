@@ -23,6 +23,7 @@ from hust_bci_er.models.backbones.riemannian_tangent import RiemannianTangentNet
 from hust_bci_er.models.factory import build_model
 from hust_bci_er.models.eeg_montage import HUST_30_A2_CHANNELS, HUST_30_A2_REGIONS
 from hust_bci_er.models.graph.dgcnn import DGCNN
+from hust_bci_er.models.graph.graph_conformer import DualGraphConformer
 from hust_bci_er.models.graph.lggnet import LGGNet, normalize_adjacency
 
 
@@ -663,6 +664,38 @@ def test_dgcnn_forward_shape():
     assert tuple(out.shape) == (2, 2)
 
 
+def test_dual_graph_conformer_forward_shape():
+    model = DualGraphConformer(
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        channel_montage="hust_30_a2",
+        embedding_dim=16,
+        graph_hidden_dim=8,
+        fusion_dim=16,
+        token_count=4,
+        num_heads=4,
+        transformer_depth=1,
+        temporal_kernel_size=15,
+        classifier_hidden_dim=8,
+        dropout=0.1,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_dual_graph_conformer_rejects_head_mismatch():
+    with pytest.raises(ValueError, match="embedding_dim must be divisible"):
+        DualGraphConformer(
+            n_channels=30,
+            n_times=256,
+            embedding_dim=18,
+            num_heads=4,
+        )
+
+
 def test_dgcnn_records_declared_hust_montage():
     model = DGCNN(n_channels=30, n_times=256, channel_montage="hust_30_a2")
     assert model.channel_names == HUST_30_A2_CHANNELS
@@ -690,10 +723,11 @@ def test_build_model_builds_dgcnn_graph_model():
     assert tuple(out.shape) == (2, 2)
 
 
-@pytest.mark.parametrize("name", ["dgcnn", "fbcnet", "lggnet", "riemannian_tangent", "tsception"])
+@pytest.mark.parametrize("name", ["dgcnn", "dual_graph_conformer", "fbcnet", "lggnet", "riemannian_tangent", "tsception"])
 def test_new_models_forward_backward_on_candidate_length(name):
     kwargs = {
         "dgcnn": {"channel_montage": "hust_30_a2", "node_features": 4, "graph_hidden_dim": 4, "k_order": 2, "temporal_kernel_size": 31, "classifier_hidden_dim": 8},
+        "dual_graph_conformer": {"channel_montage": "hust_30_a2", "embedding_dim": 16, "graph_hidden_dim": 4, "fusion_dim": 8, "k_order": 2, "num_heads": 4, "transformer_depth": 1, "temporal_kernel_size": 15, "token_count": 4, "classifier_hidden_dim": 8, "dropout": 0.1},
         "fbcnet": {"n_bands": 3, "spatial_filters": 2, "temporal_kernel_size": 31, "n_segments": 4, "classifier_hidden_dim": 8},
         "lggnet": {"channel_montage": "hust_30_a2", "temporal_filters": 4, "temporal_kernel_sizes": (15, 31), "graph_hidden_dim": 4, "classifier_hidden_dim": 8},
         "riemannian_tangent": {"covariance_eps": 1e-3, "shrinkage": 0.1},

@@ -10,8 +10,8 @@ from hust_bci_er.config.registry import GRAPH_MODELS, TORCH_BACKBONES  # noqa: E
 from hust_bci_er.models.factory import build_model  # noqa: E402
 
 
-HUST_MONTAGE_MODELS = {"dgcnn", "lggnet", "tsception"}
-LONG_BACKWARD_MODELS = {"dgcnn", "fbcnet", "lggnet", "riemannian_tangent", "tsception"}
+HUST_MONTAGE_MODELS = {"dgcnn", "dual_graph_conformer", "lggnet", "tsception"}
+LONG_BACKWARD_MODELS = {"dgcnn", "dual_graph_conformer", "fbcnet", "lggnet", "riemannian_tangent", "tsception"}
 
 
 def smoke_kwargs(name: str) -> dict[str, str]:

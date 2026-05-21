@@ -16,6 +16,7 @@ from .backbones.shallow_conv_net import build_shallow_conv_net
 from .backbones.srfnet import build_srfnet
 from .backbones.tsception import build_tsception
 from .graph.dgcnn import build_dgcnn
+from .graph.graph_conformer import build_dual_graph_conformer
 from .graph.lggnet import build_lggnet
 
 
@@ -35,6 +36,7 @@ BUILDERS = {
 
 GRAPH_BUILDERS = {
     "dgcnn": build_dgcnn,
+    "dual_graph_conformer": build_dual_graph_conformer,
     "lggnet": build_lggnet,
 }
 

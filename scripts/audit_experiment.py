@@ -70,6 +70,7 @@ MODEL_IMPLEMENTATION_PATHS = {
     "cbramod": "src/hust_bci_er/models/backbones/cbramod.py",
     "cbramod_pretrained": "src/hust_bci_er/models/backbones/cbramod_pretrained.py",
     "dgcnn": "src/hust_bci_er/models/graph/dgcnn.py",
+    "dual_graph_conformer": "src/hust_bci_er/models/graph/graph_conformer.py",
     "fbcnet": "src/hust_bci_er/models/backbones/fbcnet.py",
     "fbstcnet": "src/hust_bci_er/models/backbones/fbstcnet.py",
     "riemannian_tangent": "src/hust_bci_er/models/backbones/riemannian_tangent.py",

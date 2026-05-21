@@ -23,6 +23,7 @@ from scripts.audit_experiment import (
     recompute_primary_metric_from_predictions,
     recompute_exact_metric_from_matrix,
     run_audit,
+    route_implementation_paths,
     split_evidence_consistency_errors,
     split_manifest_has_formal_evidence,
     split_leakage_errors,
@@ -464,6 +465,20 @@ def test_evidence_lineage_rejects_missing_model_implementation_mapping():
     rule = next(check for check in checks if check["rule_id"] == "EVIDENCE_COMMIT_CONTAINS_ROUTE_AND_IMPLEMENTATION")
     assert rule["status"] == "FAIL"
     assert "missing implementation path mapping for model: new_backbone" in rule["message"]
+
+
+def test_dual_graph_conformer_has_evidence_implementation_mapping():
+    route_data = yaml.safe_load(
+        Path("configs/routes/models/sliding_ea_dual_graph_conformer_w6_s1.yaml").read_text(encoding="utf-8")
+    )
+
+    paths = route_implementation_paths(
+        route_data,
+        "configs/routes/models/sliding_ea_dual_graph_conformer_w6_s1.yaml",
+    )
+
+    assert "src/hust_bci_er/models/graph/graph_conformer.py" in paths
+    assert not any(path.startswith("__missing_model_impl_mapping__:") for path in paths)
 
 
 def test_genuine_score_matrix_requires_crop_provenance(tmp_path):
