@@ -46,6 +46,11 @@ _COMPONENT_BINDINGS: tuple[ComponentRouteBinding, ...] = (
         "FBSTCNet fixed-crop CAR base route",
     ),
     ComponentRouteBinding(
+        "tuned_sliding_fbstcnet_zscore_component",
+        "tuned_sliding_window_fbstcnet_zscore_only",
+        "Tuned sliding-window FBSTCNet without EA, zscore preprocessing only",
+    ),
+    ComponentRouteBinding(
         "fixed_crop_whitening_eps1e3_fbstcnet_component",
         "fixed_crop_whitening_eps1e3_fbstcnet",
         "FBSTCNet fixed-crop no-EA whitening_eps1e3 base route",

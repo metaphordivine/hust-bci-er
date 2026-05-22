@@ -143,6 +143,27 @@ CLEAN_SCORE_ROUTES = [
         margin_high=0.85,
     ),
     ScoreRoute(
+        "car_fbstcnet_query_srfnet_whitening_eps3e4_conformer_tuned_fbstcnet_context_fusion",
+        "car_fbstcnet_query_srfnet_whitening_eps3e4_conformer_tuned_fbstcnet_context_fusion",
+        (
+            "fixed_crop_car_fbstcnet_component",
+            "srfnet_whitening_eps3e4_component",
+            "conformer_component",
+            "tuned_sliding_fbstcnet_zscore_component",
+        ),
+        True,
+        "query-context fusion using fixed-crop CAR FBSTCNet as query and SRFNet whitening eps3e4/Conformer/tuned sliding FBSTCNet zscore as context",
+        method="query_context",
+        query_component="fixed_crop_car_fbstcnet_component",
+        context_components=(
+            "srfnet_whitening_eps3e4_component",
+            "conformer_component",
+            "tuned_sliding_fbstcnet_zscore_component",
+        ),
+        alpha=0.25,
+        temperature=0.75,
+    ),
+    ScoreRoute(
         "whitening_eps3e4_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion",
         "whitening_eps3e4_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion",
         ("fixed_crop_whitening_eps3e4_fbstcnet_component", "srfnet_whitening_eps3e4_component", "conformer_component"),

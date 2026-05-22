@@ -1,0 +1,24 @@
+route_id: car_fbstcnet_query_srfnet_whitening_eps3e4_conformer_tuned_fbstcnet_context_fusion
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 10
+preprocessing: [car, zscore, whitening_eps3e4]
+features: []
+model:
+  name: score_fusion
+  score_node: car_fbstcnet_query_srfnet_whitening_eps3e4_conformer_tuned_fbstcnet_context_fusion
+  components:
+    - fixed_crop_car_fbstcnet_component
+    - srfnet_whitening_eps3e4_component
+    - conformer_component
+    - tuned_sliding_fbstcnet_zscore_component
+adaptation: none
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "IDEA only. Adds tuned_sliding_window_fbstcnet_zscore_only as an extra query-context component to test whether sliding-window FBSTCNet improves P2 worst-crop and DEP/HC balance without using subject/trial/file identifiers."
