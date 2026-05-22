@@ -2,7 +2,7 @@
 
 route_id: car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion
 route_status: IDEA
-audit_decision: PASS_P1_FULL_AND_P3_DIAGNOSTIC_P2
+audit_decision: PASS_P1_P2_FIXED_CROPS_AND_P3
 gate: candidate
 primary_metric: exact_single_crop_expected_BA
 primary_metric_value: 0.7267276088888889
@@ -12,7 +12,7 @@ dataset: train_v1
 split: P1/P2 protocol runner component splits
 seed: protocol default unless specified by component manifests
 protocol: score_fusion margin_adaptive_query_context
-risk notes: Uses genuine PR41 component score matrices only. The adaptive margin rule improves P2 worst-crop BA but lowers full P1/P3 mean BA and DEP/HC margin relative to PR41, so keep it as a diagnostic idea rather than a replacement route. Do not tune adaptive parameters from outer results.
+risk notes: Uses genuine PR41 component score matrices only. The adaptive margin rule improves P2 worst-crop BA but lowers full P1/P3 mean BA and DEP/HC margin relative to PR41, so keep it as a diagnostic idea rather than a replacement route. Mixed P2 aggregate is diagnostic; per-fixed-crop P2 assemblies pass candidate audit. Do not tune adaptive parameters from outer results.
 
 evidence:
   - run: P1 full 3x5
@@ -33,6 +33,11 @@ evidence:
     exact_single_crop_expected_BA: 0.7112679569892475
     dep_hc_ratio: 0.827606583815545
     p2_worst_ba: 0.5208333333333334
+  - run: P2 fixed-crop candidate repair
+    output_root: outputs/remote_fix_pr42_p2_crop_candidate_20260522_233648/p2__eval_crop*/car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion
+    audit: PASS for crop1 through crop5
+    crop_exact_ba: [0.7291667, 0.7291667, 0.7708333, 0.7500000, 0.7291667]
+    crop_dep_hc_ratio: [0.9166667, 0.8000000, 0.8461538, 0.8800000, 0.8000000]
   - run: P3 nested
     output_root: /root/autodl-tmp/hust-bci-er-pr42-exec-B-20260522_1114/outputs/pr42_margin_adaptive_full_20260522_1118/p3/car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion
     audit: PASS

@@ -2,7 +2,7 @@
 
 route_id: car_fbstcnet_as_query_srfnet_reference_whitening_eps3e4_conformer_context_fusion
 route_status: IDEA
-audit_decision: PASS_P1_AND_P3_DIAGNOSTIC_P2
+audit_decision: PASS_P1_P2_FIXED_CROPS_AND_P3
 gate: candidate
 primary_metric: exact_single_crop_expected_BA
 primary_metric_value: 0.7363766933333333
@@ -12,7 +12,7 @@ dataset: train_v1
 split: component protocol splits
 seed: component manifests
 protocol: score_fusion query_context
-risk notes: Uses genuine component score matrices. P1 and P3 pass candidate audit; P2 is diagnostic-only because crop provenance semantics are not a candidate gate. Do not tune alpha or temperature from P3 outer/final results.
+risk notes: Uses genuine component score matrices. P1 and P3 pass candidate audit; the mixed P2 aggregate is diagnostic-only, while per-fixed-crop P2 assemblies pass candidate audit. Do not tune alpha or temperature from P3 outer/final results.
 
 ## Route Family
 
@@ -43,6 +43,10 @@ Runs assembled on B from PR46 commit `f6f71ef6a25e86559e3370a8d775e9637d7c524f`:
   - exact BA: 0.7161225.
   - DEP mean BA: 0.6345352; HC mean BA: 0.7569161; DEP/HC: 0.8383164.
   - Crop means: crop1 0.7292, crop2 0.7083, crop3 0.8125, crop4 0.7708, crop5 0.7292, random 0.7500, worst 0.5000.
+- P2 fixed-crop candidate repair: `outputs/remote_fix_pr46_p2_crop_candidate_20260522_233648/p2__eval_crop*/car_fbstcnet_as_query_srfnet_reference_whitening_eps3e4_conformer_context_fusion`.
+  - Audit: PASS for crop1 through crop5.
+  - crop exact BA: 0.7291667, 0.7083333, 0.8125000, 0.7708333, 0.7291667.
+  - crop DEP/HC: 0.9166667, 0.8333333, 0.8888889, 0.9600000, 0.8000000.
 - P3 nested: `outputs/pr46_B_20260522_1843_car_query_srf_ref_context_p3/car_fbstcnet_as_query_srfnet_reference_whitening_eps3e4_conformer_context_fusion`.
   - Audit: PASS.
   - exact BA: 0.7363767.

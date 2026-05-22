@@ -428,6 +428,45 @@ def test_score_fusion_manifest_inherits_common_source_crop_policy(tmp_path):
     assert manifest["crop_policy"] == source_policy
 
 
+def test_score_fusion_manifest_keeps_source_split_when_dataset_is_missing(tmp_path):
+    conformer_matrix = tmp_path / "conformer_score_matrix.csv"
+    srfnet_matrix = tmp_path / "srfnet_score_matrix.csv"
+    conformer_component = tmp_path / "conformer_component.csv"
+    srfnet_component = tmp_path / "srfnet_component.csv"
+    _write_score_matrix(conformer_matrix, base=0.0, repeated_source_crop=0)
+    _write_score_matrix(srfnet_matrix, base=1.0, repeated_source_crop=0)
+    assert export_component_scores.export_component_scores_from_score_matrix(conformer_matrix, "conformer_component", conformer_component) == 0
+    assert export_component_scores.export_component_scores_from_score_matrix(srfnet_matrix, "srfnet_long_component", srfnet_component) == 0
+    source_a = _write_source_manifest(tmp_path / "source_a", seed=42, fold=0)
+    source_b = _write_source_manifest(tmp_path / "source_b", seed=42, fold=0)
+    for source in (source_a, source_b):
+        manifest = json.loads(source.read_text(encoding="utf-8"))
+        manifest.pop("dataset_manifest_path", None)
+        source.write_text(json.dumps(manifest), encoding="utf-8")
+    output_dir = tmp_path / "run"
+    rc, info = run_score_fusion_routes.assemble_score_fusion(
+        ROUTE,
+        {"conformer_component": conformer_component, "srfnet_long_component": srfnet_component},
+        output_dir,
+    )
+    assert rc == 0
+
+    run_score_fusion_routes._write_score_fusion_manifest(
+        ROUTE,
+        output_dir,
+        {"conformer_component": conformer_component, "srfnet_long_component": srfnet_component},
+        source_manifest_paths=[source_a, source_b],
+        score_matrix_evidence=info["score_matrix_evidence"],
+        component_score_evidence={"conformer_component": "genuine", "srfnet_long_component": "genuine"},
+    )
+
+    split = yaml.safe_load((output_dir / "split_manifest.yaml").read_text(encoding="utf-8"))
+    dataset = yaml.safe_load((output_dir / "dataset_manifest.yaml").read_text(encoding="utf-8"))
+    assert split["train_subjects"]
+    assert split["test_subjects"]
+    assert dataset["status"] == "ready"
+
+
 def test_score_fusion_manifest_uses_protocol_job_fold_metadata(tmp_path):
     protocol_root = tmp_path / "protocol"
     job_dir = protocol_root / "job_runs" / "p1__route__seed42__fold1"
@@ -505,8 +544,21 @@ def _write_p2_crop_policy_base_run(root: Path, route_id: str, *, base: float, wo
     for offset, suffix in enumerate(suffixes):
         job_id = f"p2__{route_id}__{suffix}"
         job_dir = run_dir / "job_runs" / job_id
-        _write_source_manifest(job_dir, seed=42, fold=0)
         repeated_source_crop = int(suffix[-1]) - 1 if suffix.startswith("eval_crop") else worst_source_crop
+        if suffix.startswith("eval_crop"):
+            crop_policy = {
+                "name": f"crop{repeated_source_crop + 1}",
+                "selection": "fixed_index",
+                "crop_index": repeated_source_crop,
+                "tie_break": "not_applicable",
+            }
+        else:
+            crop_policy = {
+                "name": "worst",
+                "selection": "label_aware_min_metric_stress_test",
+                "tie_break": "lowest_assignment_index",
+            }
+        _write_source_manifest(job_dir, seed=42, fold=0, crop_policy=crop_policy)
         _write_score_matrix(job_dir / "score_matrix.csv", base=base + offset, repeated_source_crop=repeated_source_crop)
         jobs.append({"job_id": job_id, "seed": 42, "fold": 0})
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -566,6 +618,104 @@ def test_score_fusion_synthesizes_p2_worst_after_fusion(tmp_path):
     assert "p2__eval_worst" not in {row["protocol_job"] for row in component_rows}
     assert "p2__eval_worst" in {row["protocol_job"] for row in prediction_rows}
     assert sum(row["protocol_job"] == "p2__eval_worst" for row in prediction_rows) == 8
+
+
+def test_score_fusion_protocol_job_filter_exports_one_p2_crop_policy(tmp_path):
+    base_runs = tmp_path / "base_runs"
+    _write_p2_crop_policy_base_run(base_runs, "sliding_window_conformer_lite", base=0.0, worst_source_crop=3)
+    _write_p2_crop_policy_base_run(base_runs, "sliding_window_srfnet", base=1.0, worst_source_crop=4)
+
+    output_dir = tmp_path / "score_fusion"
+    rc = run_score_fusion_routes.main(
+        [
+            "--route-filter", "conformer_srfnet_score_average",
+            "--base-runs-dir", str(base_runs),
+            "--export-missing",
+            "--protocol-job-filter", "p2__eval_crop3",
+            "--output-dir", str(output_dir),
+        ]
+    )
+
+    summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
+    component_rows = list(
+        csv.DictReader(
+            (output_dir / "component_scores" / "p2__eval_crop3" / "conformer_component.csv").open(encoding="utf-8", newline="")
+        )
+    )
+    prediction_rows = list(
+        csv.DictReader(
+            (output_dir / "conformer_srfnet_score_average" / "predictions.csv").open(encoding="utf-8", newline="")
+        )
+    )
+    matrix_rows = list(
+        csv.DictReader(
+            (output_dir / "conformer_srfnet_score_average" / "score_matrix.csv").open(encoding="utf-8", newline="")
+        )
+    )
+    manifest = json.loads((output_dir / "conformer_srfnet_score_average" / "manifest.json").read_text(encoding="utf-8"))
+    assert rc == 0
+    assert summary["passed"] == 1
+    assert {row["protocol_job"] for row in component_rows} == {"p2__eval_crop3"}
+    assert {row["protocol_job"] for row in prediction_rows} == {"p2__eval_crop3"}
+    assert {row["crop_0_source_crop_id"] for row in matrix_rows} == {"2"}
+    assert manifest["crop_policy"]["name"] == "crop3"
+    assert manifest["crop_policy"]["crop_index"] == 2
+
+
+def test_score_fusion_protocol_job_filter_reexports_stale_component_cache(tmp_path):
+    base_runs = tmp_path / "base_runs"
+    _write_p2_crop_policy_base_run(base_runs, "sliding_window_conformer_lite", base=0.0, worst_source_crop=3)
+    _write_p2_crop_policy_base_run(base_runs, "sliding_window_srfnet", base=1.0, worst_source_crop=4)
+
+    stale_components = tmp_path / "stale_components"
+    stale_components.mkdir()
+    for component_id in ["conformer_component", "srfnet_component"]:
+        with (stale_components / f"{component_id}.csv").open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["sample_id", "protocol_job", "subject_id", "trial_id", "crop_id", "class_0", "class_1"],
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "sample_id": "stale-0",
+                    "protocol_job": "p2__eval_crop1",
+                    "subject_id": "s1",
+                    "trial_id": "t0",
+                    "crop_id": "0",
+                    "class_0": "1.0",
+                    "class_1": "0.0",
+                }
+            )
+
+    output_dir = tmp_path / "score_fusion"
+    rc = run_score_fusion_routes.main(
+        [
+            "--route-filter",
+            "conformer_srfnet_score_average",
+            "--component-scores-dir",
+            str(stale_components),
+            "--base-runs-dir",
+            str(base_runs),
+            "--export-missing",
+            "--protocol-job-filter",
+            "p2__eval_crop3",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
+    component_rows = list(csv.DictReader((stale_components / "conformer_component.csv").open(encoding="utf-8", newline="")))
+    prediction_rows = list(
+        csv.DictReader(
+            (output_dir / "conformer_srfnet_score_average" / "predictions.csv").open(encoding="utf-8", newline="")
+        )
+    )
+    assert rc == 0
+    assert summary["passed"] == 1
+    assert {row["protocol_job"] for row in component_rows} == {"p2__eval_crop3"}
+    assert {row["protocol_job"] for row in prediction_rows} == {"p2__eval_crop3"}
 
 
 def test_score_fusion_synthesizes_p2_worst_without_truth_labels():
