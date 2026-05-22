@@ -37,6 +37,9 @@ routes:
   - route_id: car_whitening_eps3e4_fbstcnet_srfnet_whitening_eps3e4_conformer_score_average
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: car_noea_eps3e4_m_conn_srfnet_whitening_conformer_calibrated_average
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: ea_deformer
     owner: metaphordivine
     blocker:

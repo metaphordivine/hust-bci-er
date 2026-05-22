@@ -56,6 +56,11 @@ _COMPONENT_BINDINGS: tuple[ComponentRouteBinding, ...] = (
         "FBSTCNet fixed-crop no-EA whitening_eps3e4 base route",
     ),
     ComponentRouteBinding(
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component",
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_light",
+        "FBSTCNet fixed-crop no-EA whitening_eps3e4 mixed connectivity-light route",
+    ),
+    ComponentRouteBinding(
         "dgcnn_dann_cohort_component",
         "sliding_ea_dgcnn_dann_cohort_w6_s1",
         "Sliding-window DGCNN with cohort-domain DANN adaptation",

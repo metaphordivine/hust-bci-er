@@ -124,6 +124,23 @@ def test_car_fbstcnet_margin_adaptive_route_uses_whitening_context():
     assert base_route_for_component("srfnet_whitening_eps3e4_component") == "sliding_window_srfnet_whitening_eps3e4"
 
 
+def test_car_noea_m_conn_calibrated_route_uses_m_conn_component():
+    route = score_route_by_id("car_noea_eps3e4_m_conn_srfnet_whitening_conformer_calibrated_average")
+    assert route is not None
+    assert route.method == "calibrated_probability_average"
+    assert route.components == (
+        "fixed_crop_car_fbstcnet_component",
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component",
+        "srfnet_whitening_eps3e4_component",
+        "conformer_component",
+    )
+    assert route.weights == (0.34, 0.26, 0.24, 0.16)
+    assert route.temperature == 1.20
+    assert base_route_for_component("fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component") == (
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_light"
+    )
+
+
 def test_score_route_lookup_by_id_and_node():
     route = score_route_by_id("conformer_srfnet_score_average")
     assert route is not None

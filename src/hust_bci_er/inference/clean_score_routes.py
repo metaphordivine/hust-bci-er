@@ -151,6 +151,21 @@ CLEAN_SCORE_ROUTES = [
         weights=(0.35, 0.25, 0.25, 0.15),
     ),
     ScoreRoute(
+        "car_noea_eps3e4_m_conn_srfnet_whitening_conformer_calibrated_average",
+        "car_noea_eps3e4_m_conn_srfnet_whitening_conformer_calibrated_average",
+        (
+            "fixed_crop_car_fbstcnet_component",
+            "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component",
+            "srfnet_whitening_eps3e4_component",
+            "conformer_component",
+        ),
+        True,
+        "temperature-smoothed probability average of CAR FBSTCNet, no-EA eps3e4 m-conn FBSTCNet, SRFNet whitening eps3e4, and Conformer scores",
+        method="calibrated_probability_average",
+        weights=(0.34, 0.26, 0.24, 0.16),
+        temperature=1.20,
+    ),
+    ScoreRoute(
         "srfnet_as_query_fbstcnet_context_fusion",
         "srfnet_as_query_fbstcnet_context_fusion",
         ("srfnet_long_component", "fixed_crop_ea_fbstcnet_component", "conformer_component"),
