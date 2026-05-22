@@ -24,3 +24,15 @@ fixed-crop aggregation and candidate audit rules as the FBSTCNet whitening grid.
 - Run P1 seed42 and P2.
 - Compare against mixed and power-only branch controls.
 - Use mainly for branch attribution or fusion diversity unless it is stable across crop policies.
+
+## Latest Remote Evidence
+
+Remote PR44 runs on 2026-05-22 produced:
+
+- P1 seed42 mean BA: 0.6857.
+- P2 eval mean BA: 0.6429.
+- P3 final mean BA: 0.7018 from `outputs/pr44_promote_A_20260522_152350_ea_eps3e4_conly_p3` and matching C-side replication.
+
+Interpretation: the connectivity-only branch underperforms the mixed-branch
+routes and should not be expanded as a standalone route. It remains useful for
+branch attribution and fusion diversity diagnostics only.

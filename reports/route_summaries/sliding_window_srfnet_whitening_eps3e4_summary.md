@@ -13,3 +13,16 @@ split: P1/P2/P3 protocol runner
 seed: protocol default unless specified by run manifest
 protocol: SRFNet whitening eps3e4 sliding-window score component
 risk notes: Placeholder summary for the SRFNet eps3e4 component route. Its main purpose is score-fusion complementarity and sliding-window/whitening diagnosis; require leave-one-out fusion and matched protocol evidence before treating it as a standalone route.
+
+## Latest Remote Evidence
+
+Backfill and PR35-aligned runs on 2026-05-22 produced:
+
+- P1 seed42 mean BA: 0.6328.
+- P2 mean BA: 0.6449.
+- P3 final mean BA: 0.6294 from `outputs/backfill_pr35_A_20260522_160445_sliding_srfnet_whitening_eps3e4_p3`.
+
+Interpretation: the route is not competitive as a standalone model. Preserve
+it only as a balance/component diagnostic for score fusion and sliding-window
+ablation, especially if DEP/HC balance remains complementary to stronger
+FBSTCNet or DGCNN routes.

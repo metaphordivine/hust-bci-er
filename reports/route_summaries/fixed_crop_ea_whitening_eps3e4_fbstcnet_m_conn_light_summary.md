@@ -24,3 +24,17 @@ eps3e4 m-conn-light control.
 - Run P1 seed42 and P2 before P3.
 - Compare against `fixed_crop_whitening_eps3e4_fbstcnet_m_conn_light`.
 - Inspect fold spread and DEP/HC balance before using it as a standalone route.
+
+## Latest Remote Evidence
+
+Remote PR44 runs on 2026-05-22 produced:
+
+- P1 seed42 mean BA: 0.7199.
+- P1 extra seeds 123/456 mean BA: 0.7023.
+- P1 extra seeds 789/1024 mean BA: 0.7081.
+- P3 final mean BA: 0.7116 from `outputs/pr44_promote_B_20260522_152345_ea_eps3e4_mconn_p3`.
+
+Interpretation: the seed42 result passed the lightweight 0.98a screen, but
+the extra-seed mean regressed. P3 did not beat the no-EA eps1e3/eps3e4 paired
+controls, so this remains an IDEA/component route until DEP/HC and score-fusion
+benefit are demonstrated.

@@ -25,3 +25,17 @@ effects without changing splits, evaluation protocols, or model inputs.
 - Run P1 seed42 and P2 before any broader P1/P3 expansion.
 - Compare against the EA sibling `fixed_crop_ea_whitening_eps1e3_fbstcnet_m_conn_light`.
 - Keep only as fusion/component evidence if P2 mean or DEP/HC balance does not meet the exploration threshold.
+
+## Latest Remote Evidence
+
+Remote PR44 runs on 2026-05-22 produced:
+
+- P1 seed42 mean BA: 0.7108.
+- P1 extra seeds 123/456 mean BA: 0.7060.
+- P2 eval mean BA: 0.6518.
+- P3 final mean BA: 0.7127 from `outputs/pr44_promote_A_20260522_152347_noea_eps1e3_mconn_p3` and matching C-side replication.
+
+Interpretation: no-EA eps1e3 is close to no-EA eps3e4 and slightly ahead of
+the EA eps3e4 sibling on P3, but its P2 score is too low for standalone
+promotion. Keep it as an EA/whitening ablation and possible score-fusion
+component.
