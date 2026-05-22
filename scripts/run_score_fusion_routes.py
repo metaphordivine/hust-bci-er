@@ -389,6 +389,8 @@ def export_component_score(
     base_route_id: str,
     source_artifacts: list[SourceArtifact],
     output_path: Path,
+    *,
+    protocol_job_filter: str | None = None,
 ) -> int:
     route_config = ROOT / "configs" / "routes" / "models" / f"{base_route_id}.yaml"
     if not route_config.exists():
@@ -400,7 +402,10 @@ def export_component_score(
     try:
         rows: list[dict[str, str]] = []
         for source in source_artifacts:
-            if _source_protocol_job_key(source, base_route_id) == "p2__eval_worst":
+            protocol_job = _source_protocol_job_key(source, base_route_id)
+            if protocol_job_filter is not None and protocol_job != protocol_job_filter:
+                continue
+            if protocol_job == "p2__eval_worst":
                 # P2 worst-crop selection is route/model-score dependent. For score
                 # fusion, synthesize it after fixed-crop component scores are fused
                 # so the worst assignment is selected at the fused-route level.
@@ -413,7 +418,8 @@ def export_component_score(
         print(f"  export failed for {component_id}: {exc}", file=sys.stderr)
         return 1
     if not rows:
-        print(f"  export failed for {component_id}: no component score rows after filtering route-dependent P2 worst jobs", file=sys.stderr)
+        suffix = f" and protocol job {protocol_job_filter}" if protocol_job_filter else ""
+        print(f"  export failed for {component_id}: no component score rows after filtering route-dependent P2 worst jobs{suffix}", file=sys.stderr)
         return 1
     has_provenance = any(row.get("source_crop_id") not in {None, ""} or row.get("window_start_sec") not in {None, ""} for row in rows)
     if has_provenance:
@@ -447,6 +453,11 @@ def _component_score_evidence_from_csv(path: Path) -> str:
         return "synthetic"
     values = {str(row.get("score_matrix_evidence") or "synthetic") for row in rows}
     return "genuine" if values == {"genuine"} else "synthetic"
+
+
+def _component_score_protocol_jobs(path: Path) -> set[str]:
+    rows = _read_csv(path)
+    return {str(row.get("protocol_job") or "").strip() for row in rows if str(row.get("protocol_job") or "").strip()}
 
 
 def _component_score_evidence_from_sources(source_artifacts: list[SourceArtifact]) -> str:
@@ -716,8 +727,17 @@ def _write_derived_dataset_split(
     score_matrix_path: Path,
     component_score_paths: dict[str, Path],
 ) -> tuple[Path, Path]:
-    rows = _read_csv(score_matrix_path)
     dataset_path = _write_derived_dataset_manifest(route_data, output_dir, score_matrix_path, component_score_paths)
+    split_path = _write_derived_split_manifest(route_data, output_dir, score_matrix_path)
+    return dataset_path, split_path
+
+
+def _write_derived_split_manifest(
+    route_data: dict[str, Any],
+    output_dir: Path,
+    score_matrix_path: Path,
+) -> Path:
+    rows = _read_csv(score_matrix_path)
     subjects = sorted({str(row["subject_id"]) for row in rows})
     split_rows = [
         {
@@ -740,7 +760,7 @@ def _write_derived_dataset_split(
     }
     split_path = output_dir / "split_manifest.yaml"
     split_path.write_text(yaml.safe_dump(split, sort_keys=False, allow_unicode=True), encoding="utf-8")
-    return dataset_path, split_path
+    return split_path
 
 
 def _source_split_path(source_manifest_path: Path) -> Path | None:
@@ -910,8 +930,10 @@ def _write_score_fusion_manifest(
                 split_path = _copy_manifest_artifact(source_manifest, "split_manifest_path", output_dir / "split_manifest.yaml")
             if dataset_path is not None and split_path is not None:
                 break
-    if dataset_path is None or split_path is None:
-        dataset_path, split_path = _write_derived_dataset_split(route_data, output_dir, score_matrix_path, component_score_paths)
+    if dataset_path is None:
+        dataset_path = _write_derived_dataset_manifest(route_data, output_dir, score_matrix_path, component_score_paths)
+    if split_path is None:
+        split_path = _write_derived_split_manifest(route_data, output_dir, score_matrix_path)
 
     metric_group_keys = tuple([*_metadata_columns(_read_csv(predictions_path)), "subject_id"])
     metric_report = build_metric_report(
@@ -998,6 +1020,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--export-missing", action="store_true", help="Auto-export component scores from base route predictions.")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs" / "score_fusion_batch")
     parser.add_argument("--route-filter", help="Substring filter for score_fusion route_id.")
+    parser.add_argument("--protocol-job-filter", help="Only export and assemble one normalized protocol job, e.g. p2__eval_crop1.")
     parser.add_argument("--audit", action="store_true", help="Run repo_doctor experiment audit after assembly.")
     args = parser.parse_args(argv)
 
@@ -1029,6 +1052,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--component-scores-dir is required (or use --base-runs-dir --export-missing)")
 
     component_scores_dir = args.component_scores_dir or (args.output_dir / "component_scores")
+    if args.protocol_job_filter and args.component_scores_dir is None:
+        component_scores_dir = component_scores_dir / args.protocol_job_filter
     component_scores_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[dict[str, Any]] = []
@@ -1052,6 +1077,15 @@ def main(argv: list[str] | None = None) -> int:
             expected = component_scores_dir / f"{comp_id}.csv"
             base_route = base_route_for_component(comp_id)
             if expected.exists():
+                if args.protocol_job_filter:
+                    jobs = _component_score_protocol_jobs(expected)
+                    if jobs != {args.protocol_job_filter}:
+                        print(
+                            f"  {comp_id}: existing component score has protocol jobs {sorted(jobs)}; expected only {args.protocol_job_filter}",
+                            file=sys.stderr,
+                        )
+                        missing.append(comp_id)
+                        continue
                 component_scores[comp_id] = expected
                 component_score_evidence[comp_id] = exported_component_evidence.get(comp_id) or _component_score_evidence_from_csv(expected)
                 current_run_sources = exported_component_sources.get(comp_id)
@@ -1072,11 +1106,23 @@ def main(argv: list[str] | None = None) -> int:
             if args.export_missing and args.base_runs_dir:
                 base_run_dir = args.base_runs_dir / base_route
                 source_artifacts = find_component_source_artifacts(base_run_dir)
+                if args.protocol_job_filter:
+                    source_artifacts = [
+                        source
+                        for source in source_artifacts
+                        if _source_protocol_job_key(source, base_route) == args.protocol_job_filter
+                    ]
                 if not source_artifacts:
                     print(f"  {comp_id}: no score_matrix/predictions found in {base_run_dir}")
                     missing.append(comp_id)
                     continue
-                rc = export_component_score(comp_id, base_route, source_artifacts, expected)
+                rc = export_component_score(
+                    comp_id,
+                    base_route,
+                    source_artifacts,
+                    expected,
+                    protocol_job_filter=args.protocol_job_filter,
+                )
                 if rc == 0:
                     component_scores[comp_id] = expected
                     component_evidence = _component_score_evidence_from_sources(source_artifacts)

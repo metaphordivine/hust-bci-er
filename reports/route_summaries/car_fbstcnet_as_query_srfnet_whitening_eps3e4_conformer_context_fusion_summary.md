@@ -2,7 +2,7 @@
 
 route_id: car_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion
 route_status: IDEA
-audit_decision: PASS_P1_FULL_AND_P3_DIAGNOSTIC_P2
+audit_decision: PASS_P1_P2_FIXED_CROPS_AND_P3
 gate: candidate
 primary_metric: exact_single_crop_expected_BA
 primary_metric_value: 0.7307332266666667
@@ -12,7 +12,7 @@ dataset: train_v1
 split: P1/P2 protocol runner component splits
 seed: protocol default unless specified by component manifests
 protocol: score_fusion query_context
-risk notes: Uses genuine score_matrix components only. P1 full 3x5 and P3 assembled cleanly; P2 is retained as diagnostic because the P2 audit is not a candidate gate. Do not tune weights from outer results.
+risk notes: Uses genuine score_matrix components only. P1 full 3x5 and P3 assembled cleanly; the mixed P2 aggregate is diagnostic, while per-fixed-crop P2 assemblies pass candidate audit. Do not tune weights from outer results.
 
 evidence:
   - run: P1 full 3x5
@@ -33,6 +33,11 @@ evidence:
     exact_single_crop_expected_BA: 0.7180239139784946
     dep_hc_ratio: 0.8658339627823937
     p2_worst_ba: 0.5
+  - run: P2 fixed-crop candidate repair
+    output_root: outputs/remote_fix_pr41_p2_crop_candidate_20260522_233648/p2__eval_crop*/car_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion
+    audit: PASS for crop1 through crop5
+    crop_exact_ba: [0.7083333, 0.7083333, 0.8125000, 0.7916667, 0.7500000]
+    crop_dep_hc_ratio: [0.9565217, 0.8333333, 0.8888889, 1.0400000, 0.8800000]
   - run: P3 nested
     output_root: /root/autodl-tmp/hust-bci-er-pr41-exec-B-20260522_1009/outputs/pr41_score_fusion_full_p3_20260522_102046/p3/car_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion
     audit: PASS

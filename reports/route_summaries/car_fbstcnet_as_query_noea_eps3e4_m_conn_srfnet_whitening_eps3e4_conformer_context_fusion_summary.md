@@ -2,7 +2,7 @@
 
 route_id: car_fbstcnet_as_query_noea_eps3e4_m_conn_srfnet_whitening_eps3e4_conformer_context_fusion
 route_status: IDEA
-audit_decision: PASS_P1_AND_P3_DIAGNOSTIC_P2
+audit_decision: PASS_P1_P2_FIXED_CROPS_AND_P3
 gate: candidate
 primary_metric: exact_single_crop_expected_BA
 primary_metric_value: 0.7365558186666668
@@ -12,7 +12,7 @@ dataset: train_v1
 split: component protocol splits
 seed: component manifests
 protocol: score_fusion query_context
-risk notes: Fixed alpha and temperature are design priors. Do not tune alpha or temperature from P3 outer/final results; P2 remains diagnostic-only because mixed crop provenance is not a candidate gate.
+risk notes: Fixed alpha and temperature are design priors. Do not tune alpha or temperature from P3 outer/final results. The mixed P2 aggregate remains diagnostic-only, while per-fixed-crop P2 assemblies now pass candidate audit.
 
 ## Route Family
 
@@ -46,6 +46,15 @@ raw temporary dumps were not copied or committed.
   - Audit: DIAGNOSTIC_ONLY. Candidate audit fails on mixed P2 crop provenance
     semantics, not missing component evidence.
   - exact BA: 0.7135795.
+- P2 fixed-crop candidate repair:
+  `outputs/pr49_fix_p2_crop_candidate_20260522_230728/p2__eval_crop*/car_fbstcnet_as_query_noea_eps3e4_m_conn_srfnet_whitening_eps3e4_conformer_context_fusion`.
+  - Audit: PASS for crop1 through crop5 after assembling each normalized
+    protocol job separately.
+  - crop1 exact BA 0.7291667; DEP/HC 0.9166667.
+  - crop2 exact BA 0.7291667; DEP/HC 0.9166667.
+  - crop3 exact BA 0.7916667; DEP/HC 1.0400000.
+  - crop4 exact BA 0.7916667; DEP/HC 0.9230769.
+  - crop5 exact BA 0.6875000; DEP/HC 0.8695652.
 - P3 nested:
   `outputs/pr49_local_20260522_2124_car_query_noea_mconn_context_p3/car_fbstcnet_as_query_noea_eps3e4_m_conn_srfnet_whitening_eps3e4_conformer_context_fusion`.
   - Audit: PASS.
