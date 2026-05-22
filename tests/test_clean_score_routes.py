@@ -17,6 +17,7 @@ def test_descriptive_score_fusion_routes_are_present():
     assert "whitening_eps1e3_with_conformer_srfnet_reference_average" in route_ids
     assert "fbstcnet_srfnet_score_average" in route_ids
     assert "fbstcnet_as_query_srfnet_context_fusion" in route_ids
+    assert "car_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion" in route_ids
     assert "dgcnn_adaptation_fbstcnet_srfnet_conformer_score_average" in route_ids
     assert "interpretable_calibrated_diverse_score_fusion" in route_ids
 
@@ -83,6 +84,23 @@ def test_fbstcnet_query_context_routes_are_registered():
     assert srf.context_components == ("fixed_crop_ea_fbstcnet_component", "conformer_component")
     assert srf.alpha == 0.25
     assert srf.temperature == 0.75
+
+
+def test_car_fbstcnet_query_context_route_uses_whitening_context():
+    route = score_route_by_id("car_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion")
+    assert route is not None
+    assert route.method == "query_context"
+    assert route.components == (
+        "fixed_crop_car_fbstcnet_component",
+        "srfnet_whitening_eps3e4_component",
+        "conformer_component",
+    )
+    assert route.query_component == "fixed_crop_car_fbstcnet_component"
+    assert route.context_components == ("srfnet_whitening_eps3e4_component", "conformer_component")
+    assert route.alpha == 0.25
+    assert route.temperature == 0.75
+    assert base_route_for_component("fixed_crop_car_fbstcnet_component") == "fixed_crop_car_fbstcnet"
+    assert base_route_for_component("srfnet_whitening_eps3e4_component") == "sliding_window_srfnet_whitening_eps3e4"
 
 
 def test_score_route_lookup_by_id_and_node():
