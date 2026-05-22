@@ -219,6 +219,22 @@ def test_car_noea_m_conn_calibrated_route_from_component_arrays():
     assert np.allclose(scores.sum(axis=1), 1.0)
 
 
+def test_car_query_noea_m_conn_context_route_from_component_arrays():
+    route = score_route_by_id("car_fbstcnet_as_query_noea_eps3e4_m_conn_srfnet_whitening_eps3e4_conformer_context_fusion")
+    assert route is not None
+    component_scores = {
+        "fixed_crop_car_fbstcnet_component": np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component": np.array([[8, 7, 5, 6, 4, 3, 2, 1]], dtype=float),
+        "srfnet_whitening_eps3e4_component": np.array([[7, 8, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "conformer_component": np.array([[8, 6, 7, 5, 4, 3, 2, 1]], dtype=float),
+    }
+
+    scores = assemble_score_route(route, component_scores)
+
+    assert scores.shape == (1, 8)
+    assert np.isfinite(scores).all()
+
+
 def test_assemble_score_route_rows_from_component_csvs(tmp_path):
     route_config = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
     conformer = tmp_path / "conformer.csv"
