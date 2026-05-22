@@ -28,6 +28,9 @@ routes:
   - route_id: conformer_srfnet_whitening_eps3e4_average
     owner: metaphordivine
     blocker:
+  - route_id: car_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion
+    owner: metaphordivine
+    blocker:
   - route_id: ea_deformer
     owner: metaphordivine
     blocker:
