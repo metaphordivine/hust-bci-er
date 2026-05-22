@@ -18,6 +18,9 @@ class ScoreRoute:
     context_components: tuple[str, ...] = ()
     alpha: float | None = None
     temperature: float | None = None
+    adaptive_alpha_max: float | None = None
+    margin_low: float | None = None
+    margin_high: float | None = None
 
 
 CLEAN_SCORE_ROUTES = [
@@ -106,6 +109,21 @@ CLEAN_SCORE_ROUTES = [
         context_components=("srfnet_whitening_eps3e4_component", "conformer_component"),
         alpha=0.25,
         temperature=0.75,
+    ),
+    ScoreRoute(
+        "car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion",
+        "car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion",
+        ("fixed_crop_car_fbstcnet_component", "srfnet_whitening_eps3e4_component", "conformer_component"),
+        True,
+        "margin-adaptive query-context fusion that increases SRFNet/Conformer context weight when CAR FBSTCNet top-4 margin is small",
+        method="margin_adaptive_query_context",
+        query_component="fixed_crop_car_fbstcnet_component",
+        context_components=("srfnet_whitening_eps3e4_component", "conformer_component"),
+        alpha=0.25,
+        adaptive_alpha_max=0.45,
+        temperature=0.75,
+        margin_low=0.15,
+        margin_high=0.85,
     ),
     ScoreRoute(
         "srfnet_as_query_fbstcnet_context_fusion",

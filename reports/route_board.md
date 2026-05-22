@@ -5,6 +5,7 @@ generated_by: `python scripts/update_route_board.py`
 | route_id | owner | status | latest_gate | primary_metric | dataset | split | model | adapter | protocol | summary | blocker |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | `car_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion` | metaphordivine | IDEA | candidate | `exact_single_crop_expected_BA` | `train_v1` | `p1_seed42_fold0` | `score_fusion` | `` | `p1_repeated_group_kfold` | present |  |
+| `car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion` | metaphordivine | IDEA |  | `exact_single_crop_expected_BA` | `train_v1` | `p1_seed42_fold0` | `score_fusion` | `` | `p1_repeated_group_kfold` | pending_placeholder | missing_real_candidate_run |
 | `conformer_srfnet_score_average` | metaphordivine | CANDIDATE | candidate | `exact_single_crop_expected_BA` | `train_v1` | `p1_seed42_fold0` | `score_fusion` | `` | `p1_repeated_group_kfold` | present |  |
 | `conformer_srfnet_whitening_eps1e3_average` | metaphordivine | CANDIDATE | candidate | `exact_single_crop_expected_BA` | `train_v1` | `p1_seed42_fold0` | `score_fusion` | `` | `p1_repeated_group_kfold` | present |  |
 | `conformer_srfnet_whitening_eps1e3_handcrafted_weight25_average` | unassigned | IDEA |  | `exact_single_crop_expected_BA` | `train_v1` | `route_component_split_v1` | `score_fusion` | `` | `p1_repeated_group_kfold` | not_required | missing_real_candidate_run |
