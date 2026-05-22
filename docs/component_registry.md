@@ -42,6 +42,7 @@
 - `fbstcnet`
 - `riemannian_tangent`
 - `shallow_conv_net`
+- `srf_fbstcnet_gate`
 - `srfnet`
 - `tsception`
 

@@ -9,6 +9,7 @@ def test_new_models_have_candidate_audit_implementation_paths():
         "lggnet": "src/hust_bci_er/models/graph/lggnet.py",
         "cbramod_pretrained": "src/hust_bci_er/models/backbones/cbramod_pretrained.py",
         "riemannian_tangent": "src/hust_bci_er/models/backbones/riemannian_tangent.py",
+        "srf_fbstcnet_gate": "src/hust_bci_er/models/backbones/srf_fbstcnet_gate.py",
     }
     for model_name, model_path in expected.items():
         paths = route_implementation_paths(

@@ -232,6 +232,9 @@ routes:
   - route_id: sliding_window_srfnet_whitening_eps3e4
     owner: metaphordivine
     blocker:
+  - route_id: sliding_window_srf_fbstcnet_gate_whitening_eps3e4_w6_s1
+    owner: metaphordivine
+    blocker: missing_lightweight_screen
   - route_id: srfnet_as_query_fbstcnet_context_fusion
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit

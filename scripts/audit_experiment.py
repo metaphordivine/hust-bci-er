@@ -74,6 +74,7 @@ MODEL_IMPLEMENTATION_PATHS = {
     "fbcnet": "src/hust_bci_er/models/backbones/fbcnet.py",
     "fbstcnet": "src/hust_bci_er/models/backbones/fbstcnet.py",
     "riemannian_tangent": "src/hust_bci_er/models/backbones/riemannian_tangent.py",
+    "srf_fbstcnet_gate": "src/hust_bci_er/models/backbones/srf_fbstcnet_gate.py",
     "lggnet": "src/hust_bci_er/models/graph/lggnet.py",
     "tsception": "src/hust_bci_er/models/backbones/tsception.py",
     "toy_centroid": "src/hust_bci_er/training/toy_adapter.py",
