@@ -251,6 +251,47 @@ def test_car_query_noea_m_conn_context_route_from_component_arrays():
     assert np.isfinite(scores).all()
 
 
+def test_car_sparse_noea_m_conn_context_route_from_component_arrays():
+    route = score_route_by_id("car_fbstcnet_sparse_noea_m_conn_srfnet_whitening_conformer_context_fusion")
+    assert route is not None
+    component_scores = {
+        "fixed_crop_car_fbstcnet_component": np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component": np.array([[8, 7, 5, 6, 4, 3, 2, 1]], dtype=float),
+        "srfnet_whitening_eps3e4_component": np.array([[7, 8, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "conformer_component": np.array([[8, 6, 7, 5, 4, 3, 2, 1]], dtype=float),
+    }
+
+    scores = assemble_score_route(route, component_scores)
+
+    assert scores.shape == (1, 8)
+    assert np.isfinite(scores).all()
+
+
+def test_car_boundary_repair_noea_m_conn_context_route_from_component_arrays():
+    route = score_route_by_id("car_fbstcnet_boundary_repair_noea_m_conn_srfnet_whitening_conformer_context_fusion")
+    assert route is not None
+    confident_scores = {
+        "fixed_crop_car_fbstcnet_component": np.array([[8.0, 7.0, 6.0, 5.0, 1.0, 0.0, -1.0, -2.0]], dtype=float),
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component": np.array([[1.0, 2.0, 3.0, 4.0, 8.0, 7.0, 6.0, 5.0]], dtype=float),
+        "srfnet_whitening_eps3e4_component": np.array([[2.0, 1.0, 3.0, 4.0, 8.0, 7.0, 6.0, 5.0]], dtype=float),
+        "conformer_component": np.array([[1.0, 3.0, 2.0, 4.0, 8.0, 7.0, 6.0, 5.0]], dtype=float),
+    }
+    uncertain_scores = dict(confident_scores)
+    uncertain_scores["fixed_crop_car_fbstcnet_component"] = np.array(
+        [[8.0, 7.0, 6.0, 5.0, 4.95, 0.0, -1.0, -2.0]],
+        dtype=float,
+    )
+
+    confident = assemble_score_route(route, confident_scores)
+    uncertain = assemble_score_route(route, uncertain_scores)
+
+    assert confident.shape == (1, 8)
+    assert uncertain.shape == (1, 8)
+    assert np.isfinite(confident).all()
+    assert np.isfinite(uncertain).all()
+    assert np.linalg.norm(uncertain - confident) > 0.0
+
+
 def test_assemble_score_route_rows_from_component_csvs(tmp_path):
     route_config = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
     conformer = tmp_path / "conformer.csv"

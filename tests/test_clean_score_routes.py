@@ -183,6 +183,37 @@ def test_car_noea_m_conn_calibrated_route_uses_m_conn_component():
     )
 
 
+def test_car_sparse_balance_routes_use_low_weight_m_conn_context():
+    sparse = score_route_by_id("car_fbstcnet_sparse_noea_m_conn_srfnet_whitening_conformer_context_fusion")
+    assert sparse is not None
+    assert sparse.method == "query_context"
+    assert sparse.components == (
+        "fixed_crop_car_fbstcnet_component",
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component",
+        "srfnet_whitening_eps3e4_component",
+        "conformer_component",
+    )
+    assert sparse.query_component == "fixed_crop_car_fbstcnet_component"
+    assert sparse.context_components == (
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component",
+        "srfnet_whitening_eps3e4_component",
+        "conformer_component",
+    )
+    assert sparse.alpha == 0.20
+    assert sparse.temperature == 1.00
+
+    repair = score_route_by_id("car_fbstcnet_boundary_repair_noea_m_conn_srfnet_whitening_conformer_context_fusion")
+    assert repair is not None
+    assert repair.method == "margin_adaptive_query_context"
+    assert repair.query_component == "fixed_crop_car_fbstcnet_component"
+    assert repair.context_components == sparse.context_components
+    assert repair.alpha == 0.0
+    assert repair.adaptive_alpha_max == 0.25
+    assert repair.temperature == 1.00
+    assert repair.margin_low == 0.15
+    assert repair.margin_high == 0.85
+
+
 def test_score_route_lookup_by_id_and_node():
     route = score_route_by_id("conformer_srfnet_score_average")
     assert route is not None
