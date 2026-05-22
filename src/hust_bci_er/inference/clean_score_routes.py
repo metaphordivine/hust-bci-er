@@ -111,6 +111,23 @@ CLEAN_SCORE_ROUTES = [
         temperature=0.75,
     ),
     ScoreRoute(
+        "car_fbstcnet_as_query_srfnet_reference_whitening_eps3e4_conformer_context_fusion",
+        "car_fbstcnet_as_query_srfnet_reference_whitening_eps3e4_conformer_context_fusion",
+        (
+            "fixed_crop_car_fbstcnet_component",
+            "srfnet_long_component",
+            "srfnet_whitening_eps3e4_component",
+            "conformer_component",
+        ),
+        True,
+        "query-context fusion using fixed-crop CAR FBSTCNet as query and SRFNet reference, SRFNet whitening eps3e4, and Conformer as context",
+        method="query_context",
+        query_component="fixed_crop_car_fbstcnet_component",
+        context_components=("srfnet_long_component", "srfnet_whitening_eps3e4_component", "conformer_component"),
+        alpha=0.25,
+        temperature=0.75,
+    ),
+    ScoreRoute(
         "car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion",
         "car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion",
         ("fixed_crop_car_fbstcnet_component", "srfnet_whitening_eps3e4_component", "conformer_component"),
