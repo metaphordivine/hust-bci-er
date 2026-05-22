@@ -662,6 +662,62 @@ def test_score_fusion_protocol_job_filter_exports_one_p2_crop_policy(tmp_path):
     assert manifest["crop_policy"]["crop_index"] == 2
 
 
+def test_score_fusion_protocol_job_filter_reexports_stale_component_cache(tmp_path):
+    base_runs = tmp_path / "base_runs"
+    _write_p2_crop_policy_base_run(base_runs, "sliding_window_conformer_lite", base=0.0, worst_source_crop=3)
+    _write_p2_crop_policy_base_run(base_runs, "sliding_window_srfnet", base=1.0, worst_source_crop=4)
+
+    stale_components = tmp_path / "stale_components"
+    stale_components.mkdir()
+    for component_id in ["conformer_component", "srfnet_component"]:
+        with (stale_components / f"{component_id}.csv").open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["sample_id", "protocol_job", "subject_id", "trial_id", "crop_id", "class_0", "class_1"],
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "sample_id": "stale-0",
+                    "protocol_job": "p2__eval_crop1",
+                    "subject_id": "s1",
+                    "trial_id": "t0",
+                    "crop_id": "0",
+                    "class_0": "1.0",
+                    "class_1": "0.0",
+                }
+            )
+
+    output_dir = tmp_path / "score_fusion"
+    rc = run_score_fusion_routes.main(
+        [
+            "--route-filter",
+            "conformer_srfnet_score_average",
+            "--component-scores-dir",
+            str(stale_components),
+            "--base-runs-dir",
+            str(base_runs),
+            "--export-missing",
+            "--protocol-job-filter",
+            "p2__eval_crop3",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
+    component_rows = list(csv.DictReader((stale_components / "conformer_component.csv").open(encoding="utf-8", newline="")))
+    prediction_rows = list(
+        csv.DictReader(
+            (output_dir / "conformer_srfnet_score_average" / "predictions.csv").open(encoding="utf-8", newline="")
+        )
+    )
+    assert rc == 0
+    assert summary["passed"] == 1
+    assert {row["protocol_job"] for row in component_rows} == {"p2__eval_crop3"}
+    assert {row["protocol_job"] for row in prediction_rows} == {"p2__eval_crop3"}
+
+
 def test_score_fusion_synthesizes_p2_worst_without_truth_labels():
     rows = []
     for trial_idx in range(8):

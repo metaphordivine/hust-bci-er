@@ -1077,25 +1077,34 @@ def main(argv: list[str] | None = None) -> int:
             expected = component_scores_dir / f"{comp_id}.csv"
             base_route = base_route_for_component(comp_id)
             if expected.exists():
+                should_reexport = False
                 if args.protocol_job_filter:
                     jobs = _component_score_protocol_jobs(expected)
                     if jobs != {args.protocol_job_filter}:
-                        print(
-                            f"  {comp_id}: existing component score has protocol jobs {sorted(jobs)}; expected only {args.protocol_job_filter}",
-                            file=sys.stderr,
-                        )
-                        missing.append(comp_id)
-                        continue
-                component_scores[comp_id] = expected
-                component_score_evidence[comp_id] = exported_component_evidence.get(comp_id) or _component_score_evidence_from_csv(expected)
-                current_run_sources = exported_component_sources.get(comp_id)
-                if current_run_sources:
-                    for manifest_path in current_run_sources:
-                        if manifest_path not in source_manifest_paths:
-                            source_manifest_paths.append(manifest_path)
-                else:
-                    untrusted_component_scores.append(comp_id)
-                continue
+                        if args.export_missing and args.base_runs_dir:
+                            print(
+                                f"  {comp_id}: existing component score has protocol jobs {sorted(jobs)}; re-exporting only {args.protocol_job_filter}",
+                                file=sys.stderr,
+                            )
+                            should_reexport = True
+                        else:
+                            print(
+                                f"  {comp_id}: existing component score has protocol jobs {sorted(jobs)}; expected only {args.protocol_job_filter}",
+                                file=sys.stderr,
+                            )
+                            missing.append(comp_id)
+                            continue
+                if not should_reexport:
+                    component_scores[comp_id] = expected
+                    component_score_evidence[comp_id] = exported_component_evidence.get(comp_id) or _component_score_evidence_from_csv(expected)
+                    current_run_sources = exported_component_sources.get(comp_id)
+                    if current_run_sources:
+                        for manifest_path in current_run_sources:
+                            if manifest_path not in source_manifest_paths:
+                                source_manifest_paths.append(manifest_path)
+                    else:
+                        untrusted_component_scores.append(comp_id)
+                    continue
 
             # Try to export from base route predictions
             if base_route is None:
