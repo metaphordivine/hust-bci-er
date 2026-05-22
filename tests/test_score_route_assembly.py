@@ -3,7 +3,16 @@ from pathlib import Path
 import numpy as np
 
 from hust_bci_er.inference.clean_score_routes import score_route_by_id
-from hust_bci_er.inference.score_fusion import assemble_score_route, assemble_score_node, calibrated_probability_average, softmax_rows
+from hust_bci_er.inference.score_fusion import (
+    assemble_score_route,
+    assemble_score_node,
+    calibrated_probability_average,
+    margin_adaptive_query_context_fusion,
+    query_context_fusion,
+    softmax_rows,
+    top4_boundary_margin,
+    zscore_rows,
+)
 from hust_bci_er.inference.score_route_assembly import assemble_score_route_rows, read_component_score_table, write_score_route_rows
 
 
@@ -87,6 +96,55 @@ def test_car_fbstcnet_query_context_route_from_component_arrays():
     assert route is not None
     component_scores = {
         "fixed_crop_car_fbstcnet_component": np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "srfnet_whitening_eps3e4_component": np.array([[7, 8, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "conformer_component": np.array([[8, 6, 7, 5, 4, 3, 2, 1]], dtype=float),
+    }
+
+    scores = assemble_score_route(route, component_scores)
+
+    assert scores.shape == (1, 8)
+    assert np.isfinite(scores).all()
+
+
+def test_margin_adaptive_query_context_increases_context_when_query_margin_is_small():
+    confident_query = np.array([[8.0, 7.0, 6.0, 5.0, 1.0, 0.0, -1.0, -2.0]], dtype=float)
+    uncertain_query = np.array([[8.0, 7.0, 6.0, 5.0, 4.95, 0.0, -1.0, -2.0]], dtype=float)
+    context = [np.array([[1.0, 2.0, 3.0, 4.0, 8.0, 7.0, 6.0, 5.0]], dtype=float)]
+
+    confident = margin_adaptive_query_context_fusion(
+        confident_query,
+        context,
+        alpha=0.25,
+        alpha_max=0.45,
+        temperature=0.75,
+        margin_low=0.15,
+        margin_high=0.85,
+    )
+    uncertain = margin_adaptive_query_context_fusion(
+        uncertain_query,
+        context,
+        alpha=0.25,
+        alpha_max=0.45,
+        temperature=0.75,
+        margin_low=0.15,
+        margin_high=0.85,
+    )
+    base_uncertain = query_context_fusion(uncertain_query, context, alpha=0.25, temperature=0.75)
+    context_z = zscore_rows(context[0])
+
+    assert top4_boundary_margin(confident_query)[0] > top4_boundary_margin(uncertain_query)[0]
+    assert confident.shape == uncertain_query.shape
+    assert uncertain.shape == uncertain_query.shape
+    assert np.isfinite(confident).all()
+    assert np.isfinite(uncertain).all()
+    assert np.linalg.norm(uncertain - context_z) < np.linalg.norm(base_uncertain - context_z)
+
+
+def test_margin_adaptive_car_fbstcnet_route_from_component_arrays():
+    route = score_route_by_id("car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion")
+    assert route is not None
+    component_scores = {
+        "fixed_crop_car_fbstcnet_component": np.array([[8, 7, 6, 5, 4.95, 3, 2, 1]], dtype=float),
         "srfnet_whitening_eps3e4_component": np.array([[7, 8, 6, 5, 4, 3, 2, 1]], dtype=float),
         "conformer_component": np.array([[8, 6, 7, 5, 4, 3, 2, 1]], dtype=float),
     }
