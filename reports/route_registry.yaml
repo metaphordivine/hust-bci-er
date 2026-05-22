@@ -34,6 +34,9 @@ routes:
   - route_id: car_fbstcnet_margin_adaptive_srfnet_whitening_eps3e4_conformer_context_fusion
     owner: metaphordivine
     blocker: underperformed_reference_candidate
+  - route_id: car_whitening_eps3e4_fbstcnet_srfnet_whitening_eps3e4_conformer_score_average
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: ea_deformer
     owner: metaphordivine
     blocker:
@@ -145,6 +148,12 @@ routes:
   - route_id: fixed_crop_ea_whitening_eps3e4_fbstcnet
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_whitening_eps3e4_fbstcnet_c_only
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_ea_whitening_eps3e4_fbstcnet_m_conn_light
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_whitening_eps3e4_fbstcnet
     owner: metaphordivine
     blocker: missing_real_candidate_run
@@ -166,6 +175,12 @@ routes:
   - route_id: fixed_crop_whitening_eps1e3_fbstcnet
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
+  - route_id: fixed_crop_whitening_eps1e3_fbstcnet_m_conn_light
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_whitening_eps3e4_fbstcnet_m_conn_light
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fbstcnet_as_query_srfnet_context_fusion
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
@@ -277,4 +292,7 @@ routes:
   - route_id: whitening_eps1e3_with_conformer_srfnet_reference_average
     owner: metaphordivine
     blocker:
+  - route_id: whitening_eps3e4_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
 
