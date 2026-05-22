@@ -30,7 +30,7 @@ routes:
     blocker:
   - route_id: car_fbstcnet_as_query_srfnet_whitening_eps3e4_conformer_context_fusion
     owner: metaphordivine
-    blocker: missing_real_candidate_run
+    blocker:
   - route_id: ea_deformer
     owner: metaphordivine
     blocker:
