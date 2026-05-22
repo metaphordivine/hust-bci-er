@@ -455,6 +455,9 @@ def test_score_fusion_main_trusts_component_csvs_exported_earlier_in_same_run(tm
     _write_base_run(base_runs, "fixed_crop_ea_fbstcnet", seed=42, fold=0, base=2.0)
     _write_base_run(base_runs, "sliding_ea_dgcnn_dann_cohort_w6_s1", seed=42, fold=0, base=3.0)
     _write_base_run(base_runs, "sliding_ea_dgcnn_coral_cohort_w6_s1", seed=42, fold=0, base=4.0)
+    _write_base_run(base_runs, "fixed_crop_car_fbstcnet", seed=42, fold=0, base=5.0)
+    _write_base_run(base_runs, "fixed_crop_whitening_eps3e4_fbstcnet", seed=42, fold=0, base=6.0)
+    _write_base_run(base_runs, "sliding_window_srfnet_whitening_eps3e4", seed=42, fold=0, base=7.0)
 
     audit_calls: list[list[str]] = []
 
@@ -477,9 +480,9 @@ def test_score_fusion_main_trusts_component_csvs_exported_earlier_in_same_run(tm
 
     summary = json.loads((output_dir / "score_fusion_summary.json").read_text(encoding="utf-8"))
     assert rc == 0
-    assert summary["passed"] == 4
-    assert [item["status"] for item in summary["results"]] == ["PASS", "PASS", "PASS", "PASS"]
-    assert sum("repo_doctor.py" in call for cmd in audit_calls for call in cmd) == 4
+    assert summary["passed"] == 5
+    assert [item["status"] for item in summary["results"]] == ["PASS", "PASS", "PASS", "PASS", "PASS"]
+    assert sum("repo_doctor.py" in call for cmd in audit_calls for call in cmd) == 5
 
 
 def _write_protocol_job_base_run(root: Path, route_id: str, *, suffixes: list[str], base: float) -> None:
