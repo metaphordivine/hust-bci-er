@@ -155,6 +155,22 @@ def test_margin_adaptive_car_fbstcnet_route_from_component_arrays():
     assert np.isfinite(scores).all()
 
 
+def test_car_fbstcnet_tuned_context_route_from_component_arrays():
+    route = score_route_by_id("car_fbstcnet_query_srfnet_whitening_eps3e4_conformer_tuned_fbstcnet_context_fusion")
+    assert route is not None
+    component_scores = {
+        "fixed_crop_car_fbstcnet_component": np.array([[8, 7, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "srfnet_whitening_eps3e4_component": np.array([[7, 8, 6, 5, 4, 3, 2, 1]], dtype=float),
+        "conformer_component": np.array([[8, 6, 7, 5, 4, 3, 2, 1]], dtype=float),
+        "tuned_sliding_fbstcnet_zscore_component": np.array([[6, 7, 8, 5, 4, 3, 2, 1]], dtype=float),
+    }
+
+    scores = assemble_score_route(route, component_scores)
+
+    assert scores.shape == (1, 8)
+    assert np.isfinite(scores).all()
+
+
 def test_assemble_score_route_rows_from_component_csvs(tmp_path):
     route_config = Path("configs/routes/models/conformer_srfnet_score_average.yaml")
     conformer = tmp_path / "conformer.csv"

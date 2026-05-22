@@ -46,6 +46,11 @@ _COMPONENT_BINDINGS: tuple[ComponentRouteBinding, ...] = (
         "FBSTCNet fixed-crop CAR base route",
     ),
     ComponentRouteBinding(
+        "tuned_sliding_fbstcnet_zscore_component",
+        "tuned_sliding_window_fbstcnet_zscore_only",
+        "Tuned sliding-window FBSTCNet without EA, zscore preprocessing only",
+    ),
+    ComponentRouteBinding(
         "dgcnn_dann_cohort_component",
         "sliding_ea_dgcnn_dann_cohort_w6_s1",
         "Sliding-window DGCNN with cohort-domain DANN adaptation",
