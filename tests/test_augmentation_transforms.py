@@ -11,6 +11,7 @@ from hust_bci_er.data.augmentations import (
     gaussian_noise,
     normalize_transform_config,
     random_bandstop,
+    region_scale_down,
     smooth_time_mask,
     time_mask,
     time_shift,
@@ -33,6 +34,7 @@ def test_window_transforms_preserve_shape_and_dtype():
         (channel_noise, {"max_channels": 2, "noise_std_ratio": 0.03}),
         (dc_shift, {"offset_std_ratio": 0.02}),
         (random_bandstop, {"sfreq": 32.0, "width_hz": 2.0, "freq_range": [4.0, 10.0]}),
+        (region_scale_down, {"scale_range": [0.5, 0.8]}),
         (smooth_time_mask, {"mask_ratio": 0.10}),
         (time_mask, {"max_width": 8}),
         (time_shift, {"max_shift": 4}),
@@ -92,6 +94,16 @@ def test_dc_shift_applies_channelwise_offsets():
     offsets = y - x
     assert np.allclose(offsets, offsets[:, :1])
     assert not np.allclose(y, x)
+
+
+def test_region_scale_down_excludes_frontal_by_default():
+    rng = np.random.default_rng(0)
+    x = np.ones((30, 16), dtype=np.float32)
+
+    y = region_scale_down(x, rng=rng, scale_range=[0.5, 0.5])
+
+    np.testing.assert_array_equal(y[[0, 1, 2, 3, 4, 5, 6], :], x[[0, 1, 2, 3, 4, 5, 6], :])
+    assert np.any(np.isclose(y.sum(axis=1), 8.0))
 
 
 def test_apply_transforms_only_changes_train_split():

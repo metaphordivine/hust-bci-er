@@ -382,6 +382,17 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
             validate_non_negative_number(item.get("offset_std_ratio", 0.02), f"{field}.offset_std_ratio", errors)
             if "per_channel" in item and not isinstance(item["per_channel"], bool):
                 errors.append(f"{field}.per_channel must be boolean")
+        elif name == "region_scale_down":
+            scale_range = item.get("scale_range", [0.5, 0.8])
+            if not isinstance(scale_range, list) or len(scale_range) != 2:
+                errors.append(f"{field}.scale_range must be [low, high]")
+            else:
+                low = validate_probability(scale_range[0], f"{field}.scale_range[0]", errors)
+                high = validate_probability(scale_range[1], f"{field}.scale_range[1]", errors)
+                if low is not None and high is not None and low > high:
+                    errors.append(f"{field}.scale_range must be sorted")
+            if "include_frontal" in item and not isinstance(item["include_frontal"], bool):
+                errors.append(f"{field}.include_frontal must be boolean")
         elif name == "time_mask":
             max_width = validate_positive_int(item.get("max_width", 25), f"{field}.max_width", errors)
             window_samples = augmentation_window_samples(augmentation)

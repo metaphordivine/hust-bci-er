@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from hust_bci_er.models.eeg_montage import HUST_30_A2_CHANNELS, indices_for_channel_names
+from hust_bci_er.models.eeg_montage import HUST_30_A2_CHANNELS, HUST_30_A2_REGIONS, indices_for_channel_names
 
 
 TRAIN_ONLY_SPLITS = {"train"}
@@ -268,6 +268,30 @@ def dc_shift(
     return (signal + offsets).astype(np.float32)
 
 
+def region_scale_down(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    scale_range: Sequence[float] = (0.5, 0.8),
+    include_frontal: bool = False,
+    channel_names: Sequence[str] = HUST_30_A2_CHANNELS,
+) -> np.ndarray:
+    if not isinstance(scale_range, Sequence) or len(scale_range) != 2:
+        raise ValueError("region_scale_down.scale_range must contain [low, high]")
+    low = float(scale_range[0])
+    high = float(scale_range[1])
+    if low < 0 or high <= 0 or low > high or high > 1.0:
+        raise ValueError("region_scale_down.scale_range must be sorted within [0, 1]")
+    signal = np.asarray(x, dtype=np.float32).copy()
+    regions = HUST_30_A2_REGIONS if include_frontal else HUST_30_A2_REGIONS[1:]
+    region = regions[int(rng.integers(0, len(regions)))]
+    indices = [idx for idx in indices_for_channel_names(channel_names, region) if idx < signal.shape[0]]
+    if not indices:
+        return signal
+    signal[list(indices), :] *= float(rng.uniform(low, high))
+    return signal.astype(np.float32)
+
+
 AUGMENTATION_TRANSFORMS = {
     "amplitude_scale": amplitude_scale,
     "band_amplitude_scale": band_amplitude_scale,
@@ -277,6 +301,7 @@ AUGMENTATION_TRANSFORMS = {
     "channel_dropout": channel_dropout,
     "smooth_time_mask": smooth_time_mask,
     "random_bandstop": random_bandstop,
+    "region_scale_down": region_scale_down,
     "time_mask": time_mask,
     "time_shift": time_shift,
 }

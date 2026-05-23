@@ -90,6 +90,7 @@ AUGMENTATION_TRANSFORMS = {
     "dc_shift",
     "gaussian_noise",
     "random_bandstop",
+    "region_scale_down",
     "smooth_time_mask",
     "time_mask",
     "time_shift",
