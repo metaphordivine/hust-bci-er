@@ -8,7 +8,6 @@ from typing import Any
 import numpy as np
 
 from hust_bci_er.analysis.dep_hc_router import (
-    LABEL_TO_COHORT,
     RouterSample,
     aggregate_subject_rows,
     balanced_accuracy_binary,
@@ -18,7 +17,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     predict_dep_probability,
     subject_threshold_diagnostic,
 )
-from hust_bci_er.tasks.dep_hc.experiment import extract_dep_hc_task_features
+from hust_bci_er.tasks.dep_hc.experiment import dep_hc_prediction_rows, extract_dep_hc_task_features
 from hust_bci_er.tasks.dep_hc.features import DEP_HC_FEATURE_SETS
 
 
@@ -97,7 +96,7 @@ def evaluate_dep_hc_feature_fusion(
     p_dep = _weighted_probabilities(eval_probs, weights)
     y_pred = (p_dep >= threshold).astype(int)
 
-    prediction_rows = _prediction_rows(eval_samples, y_eval, p_dep, y_pred)
+    prediction_rows = dep_hc_prediction_rows(eval_samples, y_eval, p_dep, y_pred)
     subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold)
     subject_truth = np.array([cohort_label(row["cohort"]) for row in subject_rows], dtype=int)
     subject_pred = np.array([cohort_label(row["predicted_cohort"]) for row in subject_rows], dtype=int)
@@ -189,27 +188,3 @@ def _weighted_probabilities(probabilities: Sequence[np.ndarray], weights: np.nda
     return np.clip(weights @ stacked, 0.0, 1.0)
 
 
-def _prediction_rows(
-    samples: Sequence[RouterSample],
-    y_true: np.ndarray,
-    p_dep: np.ndarray,
-    y_pred: np.ndarray,
-) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    for sample, truth, prob, pred in zip(samples, y_true, p_dep, y_pred):
-        rows.append(
-            {
-                "subject_id": sample.subject_id,
-                "trial_id": sample.trial_id,
-                "crop_id": str(sample.crop_id),
-                "window_start_sec": f"{float(sample.window_start_sec):.8f}",
-                "cohort": sample.cohort,
-                "y_true": str(int(truth)),
-                "p_hc": f"{1.0 - float(prob):.12g}",
-                "p_dep": f"{float(prob):.12g}",
-                "confidence": f"{max(float(prob), 1.0 - float(prob)):.12g}",
-                "y_pred": str(int(pred)),
-                "predicted_cohort": LABEL_TO_COHORT[int(pred)],
-            }
-        )
-    return rows

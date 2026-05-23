@@ -43,6 +43,32 @@ def extract_dep_hc_task_features(
     )
 
 
+def dep_hc_prediction_rows(
+    samples: Sequence[RouterSample],
+    y_true: np.ndarray,
+    p_dep: np.ndarray,
+    y_pred: np.ndarray,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for sample, truth, prob, pred in zip(samples, y_true, p_dep, y_pred):
+        rows.append(
+            {
+                "subject_id": sample.subject_id,
+                "trial_id": sample.trial_id,
+                "crop_id": str(sample.crop_id),
+                "window_start_sec": f"{float(sample.window_start_sec):.8f}",
+                "cohort": sample.cohort,
+                "y_true": str(int(truth)),
+                "p_hc": f"{1.0 - float(prob):.12g}",
+                "p_dep": f"{float(prob):.12g}",
+                "confidence": f"{max(float(prob), 1.0 - float(prob)):.12g}",
+                "y_pred": str(int(pred)),
+                "predicted_cohort": LABEL_TO_COHORT[int(pred)],
+            }
+        )
+    return rows
+
+
 def evaluate_dep_hc_task(
     train_samples: Sequence[RouterSample],
     eval_samples: Sequence[RouterSample],
@@ -100,23 +126,7 @@ def evaluate_dep_hc_task(
     p_dep = predict_dep_probability(model, x_eval)
     y_pred = (p_dep >= threshold).astype(int)
 
-    prediction_rows = []
-    for sample, truth, prob, pred in zip(eval_samples, y_eval, p_dep, y_pred):
-        prediction_rows.append(
-            {
-                "subject_id": sample.subject_id,
-                "trial_id": sample.trial_id,
-                "crop_id": str(sample.crop_id),
-                "window_start_sec": f"{float(sample.window_start_sec):.8f}",
-                "cohort": sample.cohort,
-                "y_true": str(int(truth)),
-                "p_hc": f"{1.0 - float(prob):.12g}",
-                "p_dep": f"{float(prob):.12g}",
-                "confidence": f"{max(float(prob), 1.0 - float(prob)):.12g}",
-                "y_pred": str(int(pred)),
-                "predicted_cohort": LABEL_TO_COHORT[int(pred)],
-            }
-        )
+    prediction_rows = dep_hc_prediction_rows(eval_samples, y_eval, p_dep, y_pred)
 
     subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold)
     subject_truth = np.array([cohort_label(row["cohort"]) for row in subject_rows], dtype=int)
