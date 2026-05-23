@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import zlib
 
 import numpy as np
 
@@ -20,8 +21,11 @@ from hust_bci_er.analysis.dep_hc_router import (
 
 
 def _sample(subject: str, cohort: str, *, value: float, crop_id: int = 0) -> RouterSample:
-    rng = np.random.default_rng(abs(hash((subject, cohort, value, crop_id))) % (2**32))
-    base = rng.normal(loc=value, scale=0.01, size=(4, 64)).astype(np.float32)
+    seed = zlib.crc32(f"{subject}|{cohort}|{value}|{crop_id}".encode("utf-8"))
+    rng = np.random.default_rng(seed)
+    scale = 0.20 if cohort == "HC" else 1.20
+    base = rng.normal(loc=0.0, scale=scale, size=(4, 64)).astype(np.float32)
+    base += np.float32(value * 0.01)
     return RouterSample(
         x=base,
         subject_id=subject,
