@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import json
 import math
 import sys
@@ -100,7 +101,8 @@ def _expand_input(item: Path) -> list[Path]:
             return [direct]
         return sorted(item.glob("*/dep_hc_task_diagnostic.json"))
     paths: list[Path] = []
-    for match in sorted(ROOT.glob(str(item))):
+    matches = [Path(match) for match in glob.glob(str(item))] if item.is_absolute() else sorted(ROOT.glob(str(item)))
+    for match in matches:
         if match.is_file() and match.name == "dep_hc_task_diagnostic.json":
             paths.append(match)
         elif match.is_dir():
@@ -115,13 +117,23 @@ def _read_subject_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
+def canonical_feature_order(features: list[Any]) -> list[str]:
+    preferred = {
+        "traditional": 0,
+        "time_frequency": 1,
+        "connectivity": 2,
+        "graph_connectivity": 3,
+    }
+    return sorted((str(feature) for feature in features), key=lambda feature: (preferred.get(feature, 100), feature))
+
+
 def board_row(run: dict[str, Any]) -> dict[str, str]:
     root = Path(run["root"])
     payload = run["payload"]
     metrics = payload.get("metrics", {})
     config = payload.get("config", {})
     if "fusion_feature_sets" in metrics:
-        feature_or_fusion = "+".join(str(item) for item in metrics["fusion_feature_sets"])
+        feature_or_fusion = "+".join(canonical_feature_order(metrics["fusion_feature_sets"]))
         fusion_weight_by_feature = json.dumps(metrics.get("fusion_weight_by_feature", {}), sort_keys=True)
         fusion_weight_source = str(metrics.get("fusion_weight_source", "validation_subjects"))
         classifier = "fusion"
@@ -132,7 +144,10 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
         classifier = str(metrics.get("classifier", config.get("classifier", "")))
     hc = _float_metric(metrics, "hc_subject_recall")
     dep = _float_metric(metrics, "dep_subject_recall")
-    ratio = dep / hc if hc and math.isfinite(hc) else float("nan")
+    if math.isfinite(hc) and math.isfinite(dep):
+        ratio = dep / hc if hc != 0.0 else float("inf")
+    else:
+        ratio = float("nan")
     return {
         "run_id": root.name,
         "protocol": str(config.get("protocol", "")),
@@ -292,6 +307,8 @@ def _parse_optional_float(value: Any) -> float:
 
 
 def _format_float(value: float) -> str:
+    if math.isinf(value):
+        return "inf"
     return f"{value:.4f}" if math.isfinite(value) else ""
 
 

@@ -14,6 +14,7 @@ def _write_run(
     *,
     feature_set: str | None = "traditional",
     fusion: bool = False,
+    fusion_features: list[str] | None = None,
     subject_ba: float = 0.75,
     hc_recall: float = 0.5,
     dep_recall: float = 1.0,
@@ -31,10 +32,11 @@ def _write_run(
     }
     config = {"protocol": "p2", "split_id": "split_h123", "feature_set": feature_set}
     if fusion:
+        features = fusion_features or ["traditional", "time_frequency"]
         metrics.update(
             {
-                "fusion_feature_sets": ["traditional", "time_frequency"],
-                "fusion_weight_by_feature": {"traditional": 0.5, "time_frequency": 0.5},
+                "fusion_feature_sets": features,
+                "fusion_weight_by_feature": {feature: 0.5 for feature in features},
                 "fusion_weight_source": "fixed",
             }
         )
@@ -105,3 +107,37 @@ def test_summarize_dep_hc_diagnostics_glob_only_expands_diagnostic_json(tmp_path
     runs = summarize_dep_hc_diagnostics.load_dep_hc_runs([Path("outputs/dep_hc_*")])
 
     assert [Path(run["root"]).name for run in runs] == ["dep_hc_a"]
+
+
+def test_summarize_dep_hc_diagnostics_supports_absolute_glob(tmp_path: Path) -> None:
+    _write_run(tmp_path / "dep_hc_abs", feature_set="traditional")
+
+    runs = summarize_dep_hc_diagnostics.load_dep_hc_runs([tmp_path / "dep_hc_*"])
+
+    assert [Path(run["root"]).name for run in runs] == ["dep_hc_abs"]
+
+
+def test_summarize_dep_hc_diagnostics_normalizes_fusion_order_and_zero_hc_ratio(tmp_path: Path) -> None:
+    _write_run(
+        tmp_path / "fusion_a",
+        fusion=True,
+        fusion_features=["traditional", "time_frequency"],
+        subject_ba=0.5,
+        hc_recall=0.0,
+        dep_recall=1.0,
+    )
+    _write_run(
+        tmp_path / "fusion_b",
+        fusion=True,
+        fusion_features=["time_frequency", "traditional"],
+        subject_ba=0.75,
+        hc_recall=0.5,
+        dep_recall=1.0,
+    )
+
+    rows = [summarize_dep_hc_diagnostics.board_row(run) for run in summarize_dep_hc_diagnostics.load_dep_hc_runs([tmp_path])]
+    assert {row["feature_or_fusion"] for row in rows} == {"traditional+time_frequency"}
+    assert rows[0]["dep_vs_hc_ratio"] == "inf"
+    aggregate = summarize_dep_hc_diagnostics.aggregate_rows(rows)
+    assert len(aggregate) == 1
+    assert aggregate[0]["n"] == "2"
