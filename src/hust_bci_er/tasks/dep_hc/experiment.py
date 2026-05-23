@@ -103,7 +103,13 @@ def evaluate_dep_hc_task(
         )
         y_val = np.array([cohort_label(sample.cohort) for sample in val_samples], dtype=int)
         val_p_dep = predict_dep_probability(model, x_val)
-        threshold_summary = subject_threshold_diagnostic(val_samples, y_val, val_p_dep, objective=threshold_objective)
+        threshold_summary = subject_threshold_diagnostic(
+            val_samples,
+            y_val,
+            val_p_dep,
+            objective=threshold_objective,
+            aggregation=subject_aggregation,
+        )
         threshold = float(threshold_summary["threshold"])
         threshold_source = "fixed_0.5" if threshold_objective == "fixed_0_5" else "validation_subjects"
     else:
@@ -152,7 +158,7 @@ def evaluate_dep_hc_task(
     for key, value in threshold_summary.items():
         if key in {"objective", "threshold"}:
             continue
-        metrics[f"validation_threshold_{key}"] = float(value)
+        metrics[f"validation_threshold_{key}"] = value if isinstance(value, str) else float(value)
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")

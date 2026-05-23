@@ -148,6 +148,28 @@ def test_subject_threshold_objective_is_validation_only_summary():
         subject_threshold_diagnostic(samples, y_true, p_dep, objective="recall_gap")
 
 
+def test_subject_threshold_diagnostic_respects_aggregation():
+    samples = [
+        _sample("HC001", "HC", crop_id=0),
+        _sample("HC001", "HC", crop_id=1),
+        _sample("HC001", "HC", crop_id=2),
+        _sample("DEP001", "DEP", crop_id=0),
+        _sample("DEP001", "DEP", crop_id=1),
+        _sample("DEP001", "DEP", crop_id=2),
+    ]
+    y_true = np.array([0, 0, 0, 1, 1, 1])
+    p_dep = np.array([0.49, 0.49, 0.99, 0.51, 0.51, 0.01])
+
+    mean_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="fixed_0_5", aggregation="mean")
+    vote_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="fixed_0_5", aggregation="vote_frac")
+
+    assert mean_summary["balanced_accuracy"] == pytest.approx(0.0)
+    assert vote_summary["balanced_accuracy"] == pytest.approx(1.0)
+    assert vote_summary["aggregation"] == "vote_frac"
+    with pytest.raises(ValueError, match="unknown subject aggregation"):
+        subject_threshold_diagnostic(samples, y_true, p_dep, aggregation="filename")
+
+
 def test_dep_hc_task_rejects_unknown_class_weight_mode():
     with pytest.raises(ValueError, match="unknown class_weight_mode"):
         evaluate_dep_hc_task(

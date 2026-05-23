@@ -83,7 +83,13 @@ def evaluate_dep_hc_neural_task(
             optimizer.step()
 
     val_p_dep = _predict_dep_probabilities(model, x_val, device=torch_device, batch_size=batch_size)
-    threshold_summary = subject_threshold_diagnostic(val_samples, y_val.numpy(), val_p_dep, objective=threshold_objective)
+    threshold_summary = subject_threshold_diagnostic(
+        val_samples,
+        y_val.numpy(),
+        val_p_dep,
+        objective=threshold_objective,
+        aggregation=subject_aggregation,
+    )
     threshold = float(threshold_summary["threshold"])
     eval_p_dep = _predict_dep_probabilities(model, x_eval, device=torch_device, batch_size=batch_size)
     y_pred = (eval_p_dep >= threshold).astype(int)
@@ -112,7 +118,7 @@ def evaluate_dep_hc_neural_task(
     for key, value in threshold_summary.items():
         if key in {"objective", "threshold"}:
             continue
-        metrics[f"validation_threshold_{key}"] = float(value)
+        metrics[f"validation_threshold_{key}"] = value if isinstance(value, str) else float(value)
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")

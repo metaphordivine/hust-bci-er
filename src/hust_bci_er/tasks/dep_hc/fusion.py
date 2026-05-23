@@ -91,6 +91,7 @@ def evaluate_dep_hc_feature_fusion(
         val_probs,
         threshold_objective=threshold_objective,
         weight_step=weight_step,
+        subject_aggregation=subject_aggregation,
     )
     weights = np.asarray([weight, 1.0 - weight], dtype=np.float64)
     threshold = float(threshold_summary["threshold"])
@@ -122,7 +123,7 @@ def evaluate_dep_hc_feature_fusion(
     for key, value in threshold_summary.items():
         if key in {"objective", "threshold"}:
             continue
-        metrics[f"validation_threshold_{key}"] = float(value)
+        metrics[f"validation_threshold_{key}"] = value if isinstance(value, str) else float(value)
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
@@ -136,6 +137,7 @@ def _select_fusion_weight_and_threshold(
     *,
     threshold_objective: str,
     weight_step: float,
+    subject_aggregation: str,
 ) -> tuple[float, dict[str, float | str]]:
     best_weight = 0.5
     best_summary: dict[str, float | str] | None = None
@@ -143,7 +145,13 @@ def _select_fusion_weight_and_threshold(
     for weight in _weight_candidates(weight_step):
         weights = np.asarray([weight, 1.0 - weight], dtype=np.float64)
         p_dep = _weighted_probabilities(probabilities, weights)
-        summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective=threshold_objective)
+        summary = subject_threshold_diagnostic(
+            samples,
+            y_true,
+            p_dep,
+            objective=threshold_objective,
+            aggregation=subject_aggregation,
+        )
         key = _fusion_selection_key(summary, threshold_objective=threshold_objective, weight=float(weight))
         if best_key is None or key > best_key:
             best_key = key
