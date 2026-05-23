@@ -4,6 +4,8 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import summarize_dep_hc_diagnostics
 
 
@@ -92,3 +94,14 @@ def test_summarize_dep_hc_diagnostics_writes_board_and_hard_subjects(tmp_path: P
     markdown = (out_dir / "board.md").read_text(encoding="utf-8")
     assert "## Aggregate Summary" in markdown
     assert "| p2 | traditional+time_frequency | fixed | 1 | 0.7500 | 0.7500 | 0.5000 | 1.0000 |" in markdown
+
+
+def test_summarize_dep_hc_diagnostics_glob_only_expands_diagnostic_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_run(tmp_path / "outputs" / "dep_hc_a", feature_set="traditional")
+    (tmp_path / "outputs" / "dep_hc_empty").mkdir(parents=True)
+    (tmp_path / "outputs" / "dep_hc_notes.txt").write_text("not a run\n", encoding="utf-8")
+    monkeypatch.setattr(summarize_dep_hc_diagnostics, "ROOT", tmp_path)
+
+    runs = summarize_dep_hc_diagnostics.load_dep_hc_runs([Path("outputs/dep_hc_*")])
+
+    assert [Path(run["root"]).name for run in runs] == ["dep_hc_a"]

@@ -99,7 +99,15 @@ def _expand_input(item: Path) -> list[Path]:
         if direct.exists():
             return [direct]
         return sorted(item.glob("*/dep_hc_task_diagnostic.json"))
-    return sorted(ROOT.glob(str(item)))
+    paths: list[Path] = []
+    for match in sorted(ROOT.glob(str(item))):
+        if match.is_file() and match.name == "dep_hc_task_diagnostic.json":
+            paths.append(match)
+        elif match.is_dir():
+            direct = match / "dep_hc_task_diagnostic.json"
+            if direct.exists():
+                paths.append(direct)
+    return paths
 
 
 def _read_subject_rows(path: Path) -> list[dict[str, str]]:
