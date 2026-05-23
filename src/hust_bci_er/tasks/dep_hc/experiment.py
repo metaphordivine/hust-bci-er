@@ -23,6 +23,8 @@ from hust_bci_er.analysis.dep_hc_router import (
 )
 from hust_bci_er.tasks.dep_hc.features import DEP_HC_FEATURE_SETS, dep_hc_features
 
+DEP_HC_CLASSIFIERS = {"logistic", "linear_svm", "random_forest"}
+
 
 def extract_dep_hc_task_features(
     samples: Sequence[RouterSample],
@@ -83,6 +85,8 @@ def evaluate_dep_hc_task(
     threshold_objective: str = "balanced_accuracy",
     class_weight_mode: str = "balanced",
     subject_aggregation: str = "mean",
+    classifier: str = "logistic",
+    random_state: int = 42,
 ) -> dict[str, Any]:
     x_train = extract_dep_hc_task_features(
         train_samples,
@@ -91,7 +95,16 @@ def evaluate_dep_hc_task(
         channel_montage=channel_montage,
     )
     y_train = np.array([cohort_label(sample.cohort) for sample in train_samples], dtype=int)
-    model = fit_logistic_router(x_train, y_train, lr=lr, epochs=epochs, l2=l2, class_weight_mode=class_weight_mode)
+    model = fit_dep_hc_classifier(
+        x_train,
+        y_train,
+        classifier=classifier,
+        lr=lr,
+        epochs=epochs,
+        l2=l2,
+        class_weight_mode=class_weight_mode,
+        random_state=random_state,
+    )
     threshold = 0.5
     threshold_source = "fixed_0.5"
     if val_samples:
@@ -102,7 +115,7 @@ def evaluate_dep_hc_task(
             channel_montage=channel_montage,
         )
         y_val = np.array([cohort_label(sample.cohort) for sample in val_samples], dtype=int)
-        val_p_dep = predict_dep_probability(model, x_val)
+        val_p_dep = predict_dep_hc_probability(model, x_val, classifier=classifier)
         threshold_summary = subject_threshold_diagnostic(
             val_samples,
             y_val,
@@ -130,7 +143,7 @@ def evaluate_dep_hc_task(
         channel_montage=channel_montage,
     )
     y_eval = np.array([cohort_label(sample.cohort) for sample in eval_samples], dtype=int)
-    p_dep = predict_dep_probability(model, x_eval)
+    p_dep = predict_dep_hc_probability(model, x_eval, classifier=classifier)
     y_pred = (p_dep >= threshold).astype(int)
 
     prediction_rows = dep_hc_prediction_rows(eval_samples, y_eval, p_dep, y_pred)
@@ -149,6 +162,7 @@ def evaluate_dep_hc_task(
         "n_eval_subjects": len(subject_rows),
         "feature_dim": int(x_train.shape[1]),
         "feature_set": feature_set,
+        "classifier": classifier,
         "threshold": float(threshold),
         "threshold_source": threshold_source,
         "threshold_objective": threshold_objective,
@@ -163,6 +177,69 @@ def evaluate_dep_hc_task(
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
     return {"model": model, "metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
+
+
+def fit_dep_hc_classifier(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    *,
+    classifier: str = "logistic",
+    lr: float = 0.05,
+    epochs: int = 600,
+    l2: float = 1e-3,
+    class_weight_mode: str = "balanced",
+    random_state: int = 42,
+) -> Any:
+    if classifier not in DEP_HC_CLASSIFIERS:
+        raise ValueError(f"unknown DEP/HC classifier: {classifier}")
+    if classifier == "logistic":
+        return fit_logistic_router(
+            x_train,
+            y_train,
+            lr=lr,
+            epochs=epochs,
+            l2=l2,
+            class_weight_mode=class_weight_mode,
+        )
+    if class_weight_mode not in {"balanced", "uniform"}:
+        raise ValueError(f"unknown class_weight_mode: {class_weight_mode}")
+    try:
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.svm import SVC
+    except ModuleNotFoundError as exc:  # pragma: no cover - depends on optional local environment.
+        raise ModuleNotFoundError("scikit-learn is required for DEP/HC sklearn classifiers") from exc
+    class_weight = "balanced" if class_weight_mode == "balanced" else None
+    if classifier == "linear_svm":
+        return make_pipeline(
+            StandardScaler(),
+            SVC(
+                kernel="linear",
+                C=1.0,
+                probability=True,
+                class_weight=class_weight,
+                random_state=int(random_state),
+            ),
+        ).fit(x_train, y_train)
+    if classifier == "random_forest":
+        return RandomForestClassifier(
+            n_estimators=300,
+            max_features="sqrt",
+            min_samples_leaf=2,
+            class_weight=class_weight,
+            random_state=int(random_state),
+            n_jobs=1,
+        ).fit(x_train, y_train)
+    raise ValueError(f"unknown DEP/HC classifier: {classifier}")
+
+
+def predict_dep_hc_probability(model: Any, x: np.ndarray, *, classifier: str = "logistic") -> np.ndarray:
+    if classifier == "logistic":
+        return predict_dep_probability(model, x)
+    if hasattr(model, "predict_proba"):
+        return np.asarray(model.predict_proba(x)[:, 1], dtype=np.float64)
+    raise TypeError(f"DEP/HC classifier does not expose predict_proba: {classifier}")
 
 
 def write_dep_hc_task_outputs(result: dict[str, Any], out_dir: Path, *, config: dict[str, Any]) -> None:
