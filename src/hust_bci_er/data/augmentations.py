@@ -248,10 +248,31 @@ def band_amplitude_scale(
     return np.fft.irfft(spectrum, n=n_times, axis=-1).astype(np.float32)
 
 
+def dc_shift(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    offset_std_ratio: float = 0.02,
+    per_channel: bool = True,
+) -> np.ndarray:
+    if offset_std_ratio < 0:
+        raise ValueError("dc_shift.offset_std_ratio must be non-negative")
+    signal = np.asarray(x, dtype=np.float32)
+    if offset_std_ratio == 0:
+        return signal.copy()
+    scale = float(offset_std_ratio) * max(float(np.std(signal)), 1e-12)
+    if per_channel:
+        offsets = rng.normal(0.0, scale, size=(signal.shape[0], 1)).astype(np.float32)
+    else:
+        offsets = np.asarray(rng.normal(0.0, scale), dtype=np.float32)
+    return (signal + offsets).astype(np.float32)
+
+
 AUGMENTATION_TRANSFORMS = {
     "amplitude_scale": amplitude_scale,
     "band_amplitude_scale": band_amplitude_scale,
     "channel_noise": channel_noise,
+    "dc_shift": dc_shift,
     "gaussian_noise": gaussian_noise,
     "channel_dropout": channel_dropout,
     "smooth_time_mask": smooth_time_mask,

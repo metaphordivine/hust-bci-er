@@ -7,6 +7,7 @@ from hust_bci_er.data.augmentations import (
     band_amplitude_scale,
     channel_dropout,
     channel_noise,
+    dc_shift,
     gaussian_noise,
     normalize_transform_config,
     random_bandstop,
@@ -30,6 +31,7 @@ def test_window_transforms_preserve_shape_and_dtype():
         (band_amplitude_scale, {"sfreq": 32.0, "bands": {"alpha": [8.0, 12.0]}}),
         (channel_dropout, {"p": 0.25}),
         (channel_noise, {"max_channels": 2, "noise_std_ratio": 0.03}),
+        (dc_shift, {"offset_std_ratio": 0.02}),
         (random_bandstop, {"sfreq": 32.0, "width_hz": 2.0, "freq_range": [4.0, 10.0]}),
         (smooth_time_mask, {"mask_ratio": 0.10}),
         (time_mask, {"max_width": 8}),
@@ -78,6 +80,18 @@ def test_channel_noise_can_exclude_frontal_channels():
 
     np.testing.assert_array_equal(y[[0, 1, 2, 6], :], x[[0, 1, 2, 6], :])
     assert y.shape == x.shape
+
+
+def test_dc_shift_applies_channelwise_offsets():
+    rng = np.random.default_rng(0)
+    x = np.arange(32, dtype=np.float32).reshape(4, 8)
+
+    y = dc_shift(x, rng=rng, offset_std_ratio=0.1, per_channel=True)
+
+    assert y.shape == x.shape
+    offsets = y - x
+    assert np.allclose(offsets, offsets[:, :1])
+    assert not np.allclose(y, x)
 
 
 def test_apply_transforms_only_changes_train_split():
