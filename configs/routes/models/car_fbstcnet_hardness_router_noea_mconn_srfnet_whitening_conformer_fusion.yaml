@@ -1,0 +1,25 @@
+route_id: car_fbstcnet_hardness_router_noea_mconn_srfnet_whitening_conformer_fusion
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 10
+preprocessing: [car, zscore, whitening_eps3e4]
+features: []
+model:
+  name: score_fusion
+  score_node: car_fbstcnet_hardness_router_noea_mconn_srfnet_whitening_conformer_fusion
+  components:
+    - fixed_crop_car_fbstcnet_component
+    - fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component
+    - srfnet_long_component
+    - srfnet_whitening_eps3e4_component
+    - conformer_component
+adaptation: none
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "IDEA only. Cohort-blind score router: fixed-crop CAR FBSTCNet remains the query, while no-EA eps3e4 m-conn FBSTCNet, SRFNet reference, SRFNet whitening_eps3e4, and Conformer context weight increases only from score geometry such as low top-4 boundary margin and component disagreement. DEP/HC is diagnostic-only and not an inference input."

@@ -7,6 +7,8 @@ from hust_bci_er.inference.score_fusion import (
     assemble_score_route,
     assemble_score_node,
     calibrated_probability_average,
+    component_disagreement,
+    hardness_router_query_context_fusion,
     margin_adaptive_query_context_fusion,
     query_context_fusion,
     softmax_rows,
@@ -290,6 +292,54 @@ def test_car_boundary_repair_noea_m_conn_context_route_from_component_arrays():
     assert np.isfinite(confident).all()
     assert np.isfinite(uncertain).all()
     assert np.linalg.norm(uncertain - confident) > 0.0
+
+
+def test_hardness_router_increases_context_for_low_margin_or_disagreement():
+    confident_query = np.array([[8.0, 7.0, 6.0, 5.0, 1.0, 0.0, -1.0, -2.0]], dtype=float)
+    uncertain_query = np.array([[8.0, 7.0, 6.0, 5.0, 4.95, 0.0, -1.0, -2.0]], dtype=float)
+    context = [np.array([[1.0, 2.0, 3.0, 4.0, 8.0, 7.0, 6.0, 5.0]], dtype=float)]
+
+    confident = hardness_router_query_context_fusion(
+        confident_query,
+        context,
+        alpha=0.10,
+        alpha_max=0.38,
+        temperature=0.85,
+        margin_low=0.15,
+        margin_high=0.85,
+    )
+    uncertain = hardness_router_query_context_fusion(
+        uncertain_query,
+        context,
+        alpha=0.10,
+        alpha_max=0.38,
+        temperature=0.85,
+        margin_low=0.15,
+        margin_high=0.85,
+    )
+    context_z = zscore_rows(context[0])
+
+    assert np.isfinite(confident).all()
+    assert np.isfinite(uncertain).all()
+    assert component_disagreement(zscore_rows(confident_query), [context_z])[0] > 0.0
+    assert np.linalg.norm(uncertain - context_z) < np.linalg.norm(confident - context_z)
+
+
+def test_car_hardness_router_route_from_component_arrays():
+    route = score_route_by_id("car_fbstcnet_hardness_router_noea_mconn_srfnet_whitening_conformer_fusion")
+    assert route is not None
+    component_scores = {
+        "fixed_crop_car_fbstcnet_component": np.array([[8.0, 7.0, 6.0, 5.0, 4.95, 3.0, 2.0, 1.0]], dtype=float),
+        "fixed_crop_whitening_eps3e4_fbstcnet_m_conn_component": np.array([[8.0, 7.0, 5.0, 6.0, 4.0, 3.0, 2.0, 1.0]], dtype=float),
+        "srfnet_long_component": np.array([[7.0, 8.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]], dtype=float),
+        "srfnet_whitening_eps3e4_component": np.array([[7.0, 6.0, 8.0, 5.0, 4.0, 3.0, 2.0, 1.0]], dtype=float),
+        "conformer_component": np.array([[8.0, 6.0, 7.0, 5.0, 4.0, 3.0, 2.0, 1.0]], dtype=float),
+    }
+
+    scores = assemble_score_route(route, component_scores)
+
+    assert scores.shape == (1, 8)
+    assert np.isfinite(scores).all()
 
 
 def test_assemble_score_route_rows_from_component_csvs(tmp_path):

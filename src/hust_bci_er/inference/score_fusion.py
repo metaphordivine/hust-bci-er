@@ -111,6 +111,25 @@ def assemble_score_route(route: ScoreRoute, component_scores: Mapping[str, np.nd
             margin_low=margin_low,
             margin_high=margin_high,
         )
+    if route.method == "hardness_router_query_context":
+        if route.query_component is None or not route.context_components:
+            raise ValueError(f"hardness_router_query_context route is missing query/context components: {route.route_id}")
+        query = component_matrix(route.query_component, component_scores, first.shape)
+        context = [component_matrix(name, component_scores, first.shape) for name in route.context_components]
+        alpha = 0.15 if route.alpha is None else float(route.alpha)
+        alpha_max = 0.40 if route.adaptive_alpha_max is None else float(route.adaptive_alpha_max)
+        temperature = 1.0 if route.temperature is None else float(route.temperature)
+        margin_low = 0.15 if route.margin_low is None else float(route.margin_low)
+        margin_high = 0.85 if route.margin_high is None else float(route.margin_high)
+        return hardness_router_query_context_fusion(
+            query,
+            context,
+            alpha=alpha,
+            alpha_max=alpha_max,
+            temperature=temperature,
+            margin_low=margin_low,
+            margin_high=margin_high,
+        )
     raise ValueError(f"unknown score route method: {route.method}")
 
 
@@ -175,4 +194,44 @@ def margin_adaptive_query_context_fusion(
     margin = top4_boundary_margin(q)
     uncertainty = np.clip((float(margin_high) - margin) / (float(margin_high) - float(margin_low)), 0.0, 1.0)
     adaptive_alpha = float(alpha) + uncertainty * (float(alpha_max) - float(alpha))
+    return (1.0 - adaptive_alpha[:, None]) * q + adaptive_alpha[:, None] * context
+
+
+def component_disagreement(query_zscores: np.ndarray, context_zscores: list[np.ndarray]) -> np.ndarray:
+    q = np.asarray(query_zscores, dtype=np.float64)
+    if q.ndim != 2:
+        raise ValueError("query score array must be two-dimensional")
+    if not context_zscores:
+        raise ValueError("at least one context score array is required")
+    items = [q] + [np.asarray(v, dtype=np.float64) for v in context_zscores]
+    for item in items:
+        if item.shape != q.shape:
+            raise ValueError(f"context score shape mismatch: expected {q.shape}, got {item.shape}")
+    return np.stack(items, axis=0).std(axis=0).mean(axis=1)
+
+
+def hardness_router_query_context_fusion(
+    query: np.ndarray,
+    context_scores: list[np.ndarray],
+    *,
+    alpha: float,
+    alpha_max: float,
+    temperature: float,
+    margin_low: float,
+    margin_high: float,
+) -> np.ndarray:
+    if not (0.0 <= alpha <= alpha_max <= 1.0):
+        raise ValueError("adaptive alpha must satisfy 0 <= alpha <= alpha_max <= 1")
+    if margin_high <= margin_low:
+        raise ValueError("margin_high must be greater than margin_low")
+    q = zscore_rows(query)
+    context_items = [zscore_rows(v) for v in context_scores]
+    context = query_context_matrix(q, context_scores, temperature=temperature)
+
+    margin = top4_boundary_margin(q)
+    margin_uncertainty = np.clip((float(margin_high) - margin) / (float(margin_high) - float(margin_low)), 0.0, 1.0)
+    disagreement = component_disagreement(q, context_items)
+    disagreement_scale = disagreement / (disagreement + 1.0)
+    hardness = np.maximum(margin_uncertainty, disagreement_scale)
+    adaptive_alpha = float(alpha) + hardness * (float(alpha_max) - float(alpha))
     return (1.0 - adaptive_alpha[:, None]) * q + adaptive_alpha[:, None] * context
