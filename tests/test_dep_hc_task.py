@@ -9,6 +9,7 @@ import pytest
 from hust_bci_er.analysis.dep_hc_router import RouterSample, subject_threshold_diagnostic
 from hust_bci_er.tasks.dep_hc.experiment import evaluate_dep_hc_task, extract_dep_hc_task_features, write_dep_hc_task_outputs
 from hust_bci_er.tasks.dep_hc.fusion import _fusion_selection_key, _weight_candidates, evaluate_dep_hc_feature_fusion
+from hust_bci_er.tasks.dep_hc.neural import evaluate_dep_hc_neural_task
 from hust_bci_er.tasks.dep_hc.channel_graph import (
     channel_graph_adjacency,
     channel_graph_metadata,
@@ -221,6 +222,33 @@ def test_dep_hc_fusion_weight_selection_respects_objective_and_endpoints():
         threshold_objective="min_recall",
         weight=0.5,
     )
+
+
+def test_dep_hc_neural_task_smoke_uses_cohort_target():
+    pytest.importorskip("torch")
+    train = [
+        _sample("HC001", "HC"),
+        _sample("HC002", "HC"),
+        _sample("DEP001", "DEP"),
+        _sample("DEP002", "DEP"),
+    ]
+    val = [_sample("HC011", "HC"), _sample("DEP011", "DEP")]
+    eval_samples = [_sample("HC101", "HC"), _sample("DEP101", "DEP")]
+
+    result = evaluate_dep_hc_neural_task(
+        train,
+        eval_samples,
+        val_samples=val,
+        model_name="eegnet",
+        epochs=1,
+        batch_size=2,
+        seed=7,
+    )
+
+    assert result["metrics"]["task"] == "dep_hc"
+    assert result["metrics"]["model_name"] == "eegnet"
+    assert result["metrics"]["n_eval_subjects"] == 2
+    assert {"HC101", "DEP101"} == {row["subject_id"] for row in result["subject_rows"]}
 
 
 def test_write_dep_hc_task_outputs_uses_task_specific_payload(tmp_path):
