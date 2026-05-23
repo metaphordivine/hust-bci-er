@@ -141,3 +141,32 @@ def test_summarize_dep_hc_diagnostics_normalizes_fusion_order_and_zero_hc_ratio(
     aggregate = summarize_dep_hc_diagnostics.aggregate_rows(rows)
     assert len(aggregate) == 1
     assert aggregate[0]["n"] == "2"
+
+
+def test_summarize_dep_hc_diagnostics_labels_neural_models(tmp_path: Path) -> None:
+    root = tmp_path / "dep_hc_neural"
+    root.mkdir(parents=True)
+    payload = {
+        "task": "dep_hc",
+        "config": {"protocol": "p2", "split_id": "split_h123", "model_name": "deformer_lite"},
+        "metrics": {
+            "task": "dep_hc",
+            "model_name": "deformer_lite",
+            "subject_ba": 0.75,
+            "hc_subject_recall": 0.5,
+            "dep_subject_recall": 1.0,
+            "threshold_objective": "balanced_accuracy",
+            "threshold_source": "validation_subjects",
+        },
+    }
+    (root / "dep_hc_task_diagnostic.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    (root / "dep_hc_subject_metrics.csv").write_text(
+        "subject_id,cohort,subject_score_p_dep,predicted_cohort\nDEP001,DEP,0.8,DEP\n",
+        encoding="utf-8",
+    )
+
+    run = summarize_dep_hc_diagnostics.load_dep_hc_runs([root])[0]
+    row = summarize_dep_hc_diagnostics.board_row(run)
+
+    assert row["feature_or_fusion"] == "neural:deformer_lite"
+    assert row["classifier"] == "neural"

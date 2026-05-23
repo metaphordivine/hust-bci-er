@@ -137,6 +137,11 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
         fusion_weight_by_feature = json.dumps(metrics.get("fusion_weight_by_feature", {}), sort_keys=True)
         fusion_weight_source = str(metrics.get("fusion_weight_source", "validation_subjects"))
         classifier = "fusion"
+    elif metrics.get("model_name") or config.get("model_name"):
+        feature_or_fusion = f"neural:{metrics.get('model_name', config.get('model_name', ''))}"
+        fusion_weight_by_feature = ""
+        fusion_weight_source = ""
+        classifier = "neural"
     else:
         feature_or_fusion = str(metrics.get("feature_set", config.get("feature_set", "")))
         fusion_weight_by_feature = ""
