@@ -49,9 +49,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--threshold-objective",
-        choices=["balanced_accuracy", "min_recall", "fixed_0_5"],
+        choices=["balanced_accuracy", "min_recall", "fixed_0_5", "dep_recall_floor_0p8_hc"],
         default="balanced_accuracy",
         help="Validation-subject objective used to freeze the DEP threshold before evaluation.",
+    )
+    parser.add_argument(
+        "--subject-aggregation",
+        choices=["mean", "median", "trimmed_mean", "vote_frac"],
+        default="mean",
+        help="Subject-level aggregation rule for crop/window DEP probabilities.",
     )
     args = parser.parse_args(argv)
 
@@ -123,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         l2=args.l2,
         threshold_objective=args.threshold_objective,
         class_weight_mode=args.class_weight_mode,
+        subject_aggregation=args.subject_aggregation,
     )
     config = {
         "task": "dep_hc",
@@ -142,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         "label_source": "cohort field; subject/trial identifiers are split and audit metadata only",
         "threshold_objective": args.threshold_objective,
         "class_weight_mode": args.class_weight_mode,
+        "subject_aggregation": args.subject_aggregation,
         "train_subjects": sorted(train_subjects),
         "val_subjects": sorted(val_subjects),
         "test_subjects": sorted(test_subjects),

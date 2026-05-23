@@ -188,6 +188,7 @@ def evaluate_router(
     lr: float = 0.05,
     epochs: int = 600,
     l2: float = 1e-3,
+    subject_aggregation: str = "mean",
 ) -> dict[str, Any]:
     x_train = extract_router_features(train_samples, feature_set=feature_set)
     y_train = np.array([cohort_label(sample.cohort) for sample in train_samples], dtype=int)
@@ -198,7 +199,7 @@ def evaluate_router(
         x_val = extract_router_features(val_samples, feature_set=feature_set)
         y_val = np.array([cohort_label(sample.cohort) for sample in val_samples], dtype=int)
         val_p_dep = predict_dep_probability(model, x_val)
-        threshold = select_subject_threshold(val_samples, y_val, val_p_dep)
+        threshold = select_subject_threshold(val_samples, y_val, val_p_dep, aggregation=subject_aggregation)
         threshold_source = "validation_subjects"
 
     x_eval = extract_router_features(eval_samples, feature_set=feature_set)
@@ -224,14 +225,14 @@ def evaluate_router(
             }
         )
 
-    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold)
+    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold, aggregation=subject_aggregation)
     subject_truth = np.array([cohort_label(row["cohort"]) for row in subject_rows], dtype=int)
     subject_pred = np.array([cohort_label(row["predicted_cohort"]) for row in subject_rows], dtype=int)
     metrics = {
         "window_ba": balanced_accuracy_binary(y_eval, y_pred),
         "subject_ba": balanced_accuracy_binary(subject_truth, subject_pred),
         "window_brier": brier_score(y_eval, p_dep),
-        "subject_brier": brier_score(subject_truth, np.array([float(row["mean_p_dep"]) for row in subject_rows])),
+        "subject_brier": brier_score(subject_truth, np.array([float(row["subject_score_p_dep"]) for row in subject_rows])),
         "n_train_windows": len(train_samples),
         "n_eval_windows": len(eval_samples),
         "n_eval_subjects": len(subject_rows),
@@ -239,6 +240,7 @@ def evaluate_router(
         "feature_set": feature_set,
         "threshold": float(threshold),
         "threshold_source": threshold_source,
+        "subject_aggregation": subject_aggregation,
     }
     for cohort, label in COHORT_TO_LABEL.items():
         mask = subject_truth == label
@@ -252,8 +254,9 @@ def select_subject_threshold(
     p_dep: np.ndarray,
     *,
     objective: str = "balanced_accuracy",
+    aggregation: str = "mean",
 ) -> float:
-    summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective=objective)
+    summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective=objective, aggregation=aggregation)
     return float(summary["threshold"])
 
 
@@ -263,9 +266,12 @@ def subject_threshold_diagnostic(
     p_dep: np.ndarray,
     *,
     objective: str = "balanced_accuracy",
+    aggregation: str = "mean",
 ) -> dict[str, float | str]:
-    if objective not in {"balanced_accuracy", "min_recall", "fixed_0_5"}:
+    if objective not in {"balanced_accuracy", "min_recall", "fixed_0_5", "dep_recall_floor_0p8_hc"}:
         raise ValueError(f"unknown threshold objective: {objective}")
+    if aggregation not in {"mean", "median", "trimmed_mean", "vote_frac"}:
+        raise ValueError(f"unknown subject aggregation: {aggregation}")
     subject_probs: dict[str, list[float]] = {}
     subject_truth: dict[str, int] = {}
     for sample, truth, prob in zip(samples, y_true, p_dep):
@@ -273,16 +279,18 @@ def subject_threshold_diagnostic(
         subject_truth[sample.subject_id] = int(truth)
     if not subject_probs:
         return _threshold_summary(objective=objective, threshold=0.5)
-    subject_scores = np.array([float(np.mean(subject_probs[subject])) for subject in sorted(subject_probs)], dtype=np.float64)
-    labels = np.array([subject_truth[subject] for subject in sorted(subject_probs)], dtype=int)
+    subjects = sorted(subject_probs)
+    subject_scores = _subject_scores_for_threshold(subjects, subject_probs, threshold=0.5, aggregation=aggregation)
+    labels = np.array([subject_truth[subject] for subject in subjects], dtype=int)
     if objective == "fixed_0_5":
         metrics = _threshold_recall_metrics(labels, (subject_scores >= 0.5).astype(int))
-        return _threshold_summary(objective=objective, threshold=0.5, **metrics)
-    candidates = sorted(set([0.5, *subject_scores.tolist()]))
+        return _threshold_summary(objective=objective, threshold=0.5, aggregation=aggregation, **metrics)
+    candidates = sorted(set([0.5, *subject_scores.tolist(), *_threshold_boundary_candidates(subject_probs, aggregation=aggregation)]))
     best_threshold = 0.5
     best_key: tuple[float, float, float, float] | None = None
     best_metrics = _threshold_recall_metrics(labels, (subject_scores >= best_threshold).astype(int))
     for threshold in candidates:
+        subject_scores = _subject_scores_for_threshold(subjects, subject_probs, threshold=float(threshold), aggregation=aggregation)
         pred = (subject_scores >= float(threshold)).astype(int)
         metrics = _threshold_recall_metrics(labels, pred)
         key = _threshold_selection_key(metrics, objective=objective, threshold=float(threshold))
@@ -290,7 +298,7 @@ def subject_threshold_diagnostic(
             best_key = key
             best_threshold = float(threshold)
             best_metrics = metrics
-    return _threshold_summary(objective=objective, threshold=best_threshold, **best_metrics)
+    return _threshold_summary(objective=objective, threshold=best_threshold, aggregation=aggregation, **best_metrics)
 
 
 def _threshold_recall_metrics(labels: np.ndarray, pred: np.ndarray) -> dict[str, float]:
@@ -315,6 +323,8 @@ def _threshold_selection_key(metrics: Mapping[str, float], *, objective: str, th
     ba = float(metrics["balanced_accuracy"])
     min_recall = float(metrics["min_recall"])
     recall_gap = float(metrics["recall_gap"])
+    hc_recall = float(metrics["hc_recall"])
+    dep_recall = float(metrics["dep_recall"])
     if objective == "balanced_accuracy":
         primary = ba
         secondary = min_recall
@@ -323,6 +333,11 @@ def _threshold_selection_key(metrics: Mapping[str, float], *, objective: str, th
         primary = min_recall
         secondary = ba
         tertiary = -recall_gap
+    elif objective == "dep_recall_floor_0p8_hc":
+        passes_floor = float(dep_recall >= 0.8 * hc_recall)
+        primary = passes_floor
+        secondary = ba
+        tertiary = hc_recall
     elif objective == "fixed_0_5":
         primary = ba
         secondary = min_recall
@@ -336,6 +351,7 @@ def _threshold_summary(
     *,
     objective: str,
     threshold: float,
+    aggregation: str = "mean",
     balanced_accuracy: float = float("nan"),
     hc_recall: float = float("nan"),
     dep_recall: float = float("nan"),
@@ -345,6 +361,7 @@ def _threshold_summary(
     return {
         "objective": objective,
         "threshold": float(threshold),
+        "aggregation": aggregation,
         "balanced_accuracy": float(balanced_accuracy),
         "hc_recall": float(hc_recall),
         "dep_recall": float(dep_recall),
@@ -353,14 +370,69 @@ def _threshold_summary(
     }
 
 
-def aggregate_subject_rows(prediction_rows: Sequence[Mapping[str, str]], *, threshold: float = 0.5) -> list[dict[str, str]]:
+def _subject_probability_score(probabilities: Sequence[float], *, threshold: float, aggregation: str) -> float:
+    values = np.asarray(probabilities, dtype=np.float64)
+    if values.size == 0:
+        return float("nan")
+    if aggregation == "mean":
+        return float(np.mean(values))
+    if aggregation == "median":
+        return float(np.median(values))
+    if aggregation == "trimmed_mean":
+        if values.size >= 3:
+            sorted_values = np.sort(values)
+            return float(np.mean(sorted_values[1:-1]))
+        return float(np.mean(values))
+    if aggregation == "vote_frac":
+        return float(np.mean(values >= float(threshold)))
+    raise ValueError(f"unknown subject aggregation: {aggregation}")
+
+
+def _subject_scores_for_threshold(
+    subjects: Sequence[str],
+    subject_probs: Mapping[str, Sequence[float]],
+    *,
+    threshold: float,
+    aggregation: str,
+) -> np.ndarray:
+    return np.array(
+        [
+            _subject_probability_score(subject_probs[subject], threshold=threshold, aggregation=aggregation)
+            for subject in subjects
+        ],
+        dtype=np.float64,
+    )
+
+
+def _threshold_boundary_candidates(subject_probs: Mapping[str, Sequence[float]], *, aggregation: str) -> list[float]:
+    if aggregation != "vote_frac":
+        return []
+    raw_probs = [float(prob) for probs in subject_probs.values() for prob in probs]
+    vote_boundaries = {
+        float(k) / float(len(probs))
+        for probs in subject_probs.values()
+        for k in range(0, len(probs) + 1)
+        if len(probs) > 0
+    }
+    return [*raw_probs, *vote_boundaries]
+
+
+def aggregate_subject_rows(
+    prediction_rows: Sequence[Mapping[str, str]],
+    *,
+    threshold: float = 0.5,
+    aggregation: str = "mean",
+) -> list[dict[str, str]]:
+    if aggregation not in {"mean", "median", "trimmed_mean", "vote_frac"}:
+        raise ValueError(f"unknown subject aggregation: {aggregation}")
     by_subject: dict[str, list[Mapping[str, str]]] = {}
     for row in prediction_rows:
         by_subject.setdefault(str(row["subject_id"]), []).append(row)
     out: list[dict[str, str]] = []
     for subject_id, rows in sorted(by_subject.items()):
-        mean_p_dep = float(np.mean([float(row["p_dep"]) for row in rows]))
-        pred_label = int(mean_p_dep >= float(threshold))
+        probabilities = np.array([float(row["p_dep"]) for row in rows], dtype=np.float64)
+        score_p_dep = _subject_probability_score(probabilities, threshold=threshold, aggregation=aggregation)
+        pred_label = int(score_p_dep >= float(threshold))
         truth = str(rows[0]["y_true"])
         cohort = str(rows[0]["cohort"])
         out.append(
@@ -368,10 +440,12 @@ def aggregate_subject_rows(prediction_rows: Sequence[Mapping[str, str]], *, thre
                 "subject_id": subject_id,
                 "cohort": cohort,
                 "y_true": truth,
-                "mean_p_dep": f"{mean_p_dep:.12g}",
-                "mean_p_hc": f"{1.0 - mean_p_dep:.12g}",
+                "mean_p_dep": f"{float(np.mean(probabilities)):.12g}",
+                "mean_p_hc": f"{1.0 - float(np.mean(probabilities)):.12g}",
+                "subject_score_p_dep": f"{score_p_dep:.12g}",
+                "subject_aggregation": aggregation,
                 "threshold": f"{float(threshold):.12g}",
-                "confidence": f"{max(mean_p_dep, 1.0 - mean_p_dep):.12g}",
+                "confidence": f"{max(score_p_dep, 1.0 - score_p_dep):.12g}",
                 "predicted_cohort": LABEL_TO_COHORT[pred_label],
                 "correct": str(int(pred_label == int(truth))),
                 "n_windows": str(len(rows)),

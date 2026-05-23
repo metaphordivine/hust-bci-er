@@ -9,6 +9,7 @@ import pytest
 
 from hust_bci_er.analysis.dep_hc_router import (
     RouterSample,
+    _threshold_boundary_candidates,
     aggregate_subject_rows,
     balanced_accuracy_binary,
     bandpower_features,
@@ -105,6 +106,42 @@ def test_aggregate_subject_rows_uses_selected_threshold():
     assert subjects[0]["predicted_cohort"] == "HC"
     assert subjects[0]["correct"] == "0"
     assert subjects[0]["threshold"] == "0.75"
+
+
+def test_aggregate_subject_rows_supports_alternate_rules():
+    rows = [
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.95"},
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.10"},
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.20"},
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.90"},
+    ]
+
+    median = aggregate_subject_rows(rows, aggregation="median")
+    vote = aggregate_subject_rows(rows, aggregation="vote_frac")
+    trimmed = aggregate_subject_rows(rows, aggregation="trimmed_mean")
+
+    assert median[0]["subject_score_p_dep"] == "0.55"
+    assert median[0]["predicted_cohort"] == "DEP"
+    assert vote[0]["subject_score_p_dep"] == "0.5"
+    assert vote[0]["predicted_cohort"] == "DEP"
+    assert trimmed[0]["subject_aggregation"] == "trimmed_mean"
+    with pytest.raises(ValueError, match="unknown subject aggregation"):
+        aggregate_subject_rows(rows, aggregation="subject_id")
+
+
+def test_vote_frac_threshold_candidates_include_discrete_boundaries():
+    candidates = _threshold_boundary_candidates(
+        {
+            "HC001": [0.1, 0.8, 0.9],
+            "DEP001": [0.2, 0.3, 0.7],
+        },
+        aggregation="vote_frac",
+    )
+
+    assert 1.0 / 3.0 in candidates
+    assert 2.0 / 3.0 in candidates
+    assert 0.8 in candidates
+    assert _threshold_boundary_candidates({"HC001": [0.1, 0.8, 0.9]}, aggregation="mean") == []
 
 
 def test_resolve_preprocessing_overrides_default_when_cli_supplies_values():

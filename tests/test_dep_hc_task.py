@@ -134,6 +134,7 @@ def test_subject_threshold_objective_is_validation_only_summary():
     ba_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="balanced_accuracy")
     min_recall_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="min_recall")
     fixed_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="fixed_0_5")
+    floor_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="dep_recall_floor_0p8_hc")
 
     assert ba_summary["threshold"] == pytest.approx(0.5)
     assert ba_summary["balanced_accuracy"] == pytest.approx(0.75)
@@ -141,8 +142,32 @@ def test_subject_threshold_objective_is_validation_only_summary():
     assert min_recall_summary["min_recall"] == pytest.approx(0.5)
     assert fixed_summary["threshold"] == pytest.approx(0.5)
     assert fixed_summary["objective"] == "fixed_0_5"
+    assert floor_summary["objective"] == "dep_recall_floor_0p8_hc"
+    assert floor_summary["dep_recall"] >= 0.8 * floor_summary["hc_recall"]
     with pytest.raises(ValueError, match="unknown threshold objective"):
         subject_threshold_diagnostic(samples, y_true, p_dep, objective="recall_gap")
+
+
+def test_subject_threshold_diagnostic_respects_aggregation():
+    samples = [
+        _sample("HC001", "HC", crop_id=0),
+        _sample("HC001", "HC", crop_id=1),
+        _sample("HC001", "HC", crop_id=2),
+        _sample("DEP001", "DEP", crop_id=0),
+        _sample("DEP001", "DEP", crop_id=1),
+        _sample("DEP001", "DEP", crop_id=2),
+    ]
+    y_true = np.array([0, 0, 0, 1, 1, 1])
+    p_dep = np.array([0.49, 0.49, 0.99, 0.51, 0.51, 0.01])
+
+    mean_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="fixed_0_5", aggregation="mean")
+    vote_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="fixed_0_5", aggregation="vote_frac")
+
+    assert mean_summary["balanced_accuracy"] == pytest.approx(0.0)
+    assert vote_summary["balanced_accuracy"] == pytest.approx(1.0)
+    assert vote_summary["aggregation"] == "vote_frac"
+    with pytest.raises(ValueError, match="unknown subject aggregation"):
+        subject_threshold_diagnostic(samples, y_true, p_dep, aggregation="filename")
 
 
 def test_dep_hc_task_rejects_unknown_class_weight_mode():
@@ -220,6 +245,17 @@ def test_dep_hc_fusion_weight_selection_respects_objective_and_endpoints():
     assert _fusion_selection_key(high_min, threshold_objective="min_recall", weight=0.5) > _fusion_selection_key(
         high_ba,
         threshold_objective="min_recall",
+        weight=0.5,
+    )
+    floor_pass = {"balanced_accuracy": 0.7, "min_recall": 0.5, "recall_gap": 0.4, "hc_recall": 0.5, "dep_recall": 0.9}
+    floor_fail = {"balanced_accuracy": 0.9, "min_recall": 0.4, "recall_gap": 0.5, "hc_recall": 1.0, "dep_recall": 0.4}
+    assert _fusion_selection_key(
+        floor_pass,
+        threshold_objective="dep_recall_floor_0p8_hc",
+        weight=0.5,
+    ) > _fusion_selection_key(
+        floor_fail,
+        threshold_objective="dep_recall_floor_0p8_hc",
         weight=0.5,
     )
 

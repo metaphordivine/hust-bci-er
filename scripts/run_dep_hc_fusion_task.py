@@ -39,8 +39,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--epochs", type=int, default=600)
     parser.add_argument("--l2", type=float, default=1e-3)
     parser.add_argument("--class-weight-mode", choices=["balanced", "uniform"], default="balanced")
-    parser.add_argument("--threshold-objective", choices=["balanced_accuracy", "min_recall", "fixed_0_5"], default="balanced_accuracy")
+    parser.add_argument(
+        "--threshold-objective",
+        choices=["balanced_accuracy", "min_recall", "fixed_0_5", "dep_recall_floor_0p8_hc"],
+        default="balanced_accuracy",
+    )
     parser.add_argument("--weight-step", type=float, default=0.05)
+    parser.add_argument(
+        "--subject-aggregation",
+        choices=["mean", "median", "trimmed_mean", "vote_frac"],
+        default="mean",
+    )
     args = parser.parse_args(argv)
 
     if len(args.feature_set) != 2:
@@ -115,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         class_weight_mode=args.class_weight_mode,
         threshold_objective=args.threshold_objective,
         weight_step=args.weight_step,
+        subject_aggregation=args.subject_aggregation,
     )
     config = {
         "task": "dep_hc_feature_fusion",
@@ -134,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         "class_weight_mode": args.class_weight_mode,
         "threshold_objective": args.threshold_objective,
         "weight_step": args.weight_step,
+        "subject_aggregation": args.subject_aggregation,
         "label_source": "cohort field; subject/trial identifiers are split and audit metadata only",
         "train_subjects": sorted(train_subjects),
         "val_subjects": sorted(val_subjects),

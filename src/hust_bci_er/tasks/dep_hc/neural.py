@@ -39,6 +39,7 @@ def evaluate_dep_hc_neural_task(
     weight_decay: float = 1e-4,
     class_weight_mode: str = "balanced",
     threshold_objective: str = "balanced_accuracy",
+    subject_aggregation: str = "mean",
 ) -> dict[str, Any]:
     _require_torch()
     if not train_samples or not eval_samples:
@@ -82,12 +83,18 @@ def evaluate_dep_hc_neural_task(
             optimizer.step()
 
     val_p_dep = _predict_dep_probabilities(model, x_val, device=torch_device, batch_size=batch_size)
-    threshold_summary = subject_threshold_diagnostic(val_samples, y_val.numpy(), val_p_dep, objective=threshold_objective)
+    threshold_summary = subject_threshold_diagnostic(
+        val_samples,
+        y_val.numpy(),
+        val_p_dep,
+        objective=threshold_objective,
+        aggregation=subject_aggregation,
+    )
     threshold = float(threshold_summary["threshold"])
     eval_p_dep = _predict_dep_probabilities(model, x_eval, device=torch_device, batch_size=batch_size)
     y_pred = (eval_p_dep >= threshold).astype(int)
     prediction_rows = dep_hc_prediction_rows(eval_samples, y_eval.numpy(), eval_p_dep, y_pred)
-    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold)
+    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold, aggregation=subject_aggregation)
     subject_truth = np.array([cohort_label(row["cohort"]) for row in subject_rows], dtype=int)
     subject_pred = np.array([cohort_label(row["predicted_cohort"]) for row in subject_rows], dtype=int)
     metrics: dict[str, Any] = {
@@ -96,7 +103,7 @@ def evaluate_dep_hc_neural_task(
         "window_ba": balanced_accuracy_binary(y_eval.numpy(), y_pred),
         "subject_ba": balanced_accuracy_binary(subject_truth, subject_pred),
         "window_brier": brier_score(y_eval.numpy(), eval_p_dep),
-        "subject_brier": brier_score(subject_truth, np.array([float(row["mean_p_dep"]) for row in subject_rows])),
+        "subject_brier": brier_score(subject_truth, np.array([float(row["subject_score_p_dep"]) for row in subject_rows])),
         "n_train_windows": int(x_train.shape[0]),
         "n_eval_windows": int(x_eval.shape[0]),
         "n_eval_subjects": len(subject_rows),
@@ -104,13 +111,14 @@ def evaluate_dep_hc_neural_task(
         "threshold_source": "fixed_0.5" if threshold_objective == "fixed_0_5" else "validation_subjects",
         "threshold_objective": threshold_objective,
         "class_weight_mode": class_weight_mode,
+        "subject_aggregation": subject_aggregation,
         "epochs": int(epochs),
         "batch_size": int(batch_size),
     }
     for key, value in threshold_summary.items():
         if key in {"objective", "threshold"}:
             continue
-        metrics[f"validation_threshold_{key}"] = float(value)
+        metrics[f"validation_threshold_{key}"] = value if isinstance(value, str) else float(value)
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")

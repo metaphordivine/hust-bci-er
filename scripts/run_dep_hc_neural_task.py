@@ -38,7 +38,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--class-weight-mode", choices=["balanced", "uniform"], default="balanced")
-    parser.add_argument("--threshold-objective", choices=["balanced_accuracy", "min_recall", "fixed_0_5"], default="balanced_accuracy")
+    parser.add_argument(
+        "--threshold-objective",
+        choices=["balanced_accuracy", "min_recall", "fixed_0_5", "dep_recall_floor_0p8_hc"],
+        default="balanced_accuracy",
+    )
+    parser.add_argument(
+        "--subject-aggregation",
+        choices=["mean", "median", "trimmed_mean", "vote_frac"],
+        default="mean",
+    )
     args = parser.parse_args(argv)
 
     preprocessing = resolve_preprocessing(args.preprocessing)
@@ -107,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         weight_decay=args.weight_decay,
         class_weight_mode=args.class_weight_mode,
         threshold_objective=args.threshold_objective,
+        subject_aggregation=args.subject_aggregation,
     )
     config = {
         "task": "dep_hc_neural",
@@ -124,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         "model_name": args.model_name,
         "class_weight_mode": args.class_weight_mode,
         "threshold_objective": args.threshold_objective,
+        "subject_aggregation": args.subject_aggregation,
         "label_source": "cohort field; subject/trial identifiers are split and audit metadata only",
         "train_subjects": sorted(train_subjects),
         "val_subjects": sorted(val_subjects),
