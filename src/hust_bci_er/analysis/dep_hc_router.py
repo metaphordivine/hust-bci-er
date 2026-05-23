@@ -124,7 +124,10 @@ def fit_logistic_router(
     lr: float = 0.05,
     epochs: int = 600,
     l2: float = 1e-3,
+    class_weight_mode: str = "balanced",
 ) -> LogisticRouter:
+    if class_weight_mode not in {"balanced", "uniform"}:
+        raise ValueError(f"unknown class_weight_mode: {class_weight_mode}")
     features = np.asarray(x, dtype=np.float64)
     labels = np.asarray(y, dtype=np.float64).reshape(-1)
     if features.ndim != 2 or labels.ndim != 1 or features.shape[0] != labels.shape[0]:
@@ -140,7 +143,10 @@ def fit_logistic_router(
     n_neg = float(labels.shape[0] - n_pos)
     if n_pos == 0.0 or n_neg == 0.0:
         raise ValueError("training labels must contain both DEP and HC")
-    class_weight = np.where(labels > 0.5, labels.shape[0] / (2.0 * n_pos), labels.shape[0] / (2.0 * n_neg))
+    if class_weight_mode == "balanced":
+        class_weight = np.where(labels > 0.5, labels.shape[0] / (2.0 * n_pos), labels.shape[0] / (2.0 * n_neg))
+    else:
+        class_weight = np.ones_like(labels, dtype=np.float64)
     for _ in range(int(epochs)):
         logits = z @ weights + bias
         probs = 1.0 / (1.0 + np.exp(-np.clip(logits, -50.0, 50.0)))

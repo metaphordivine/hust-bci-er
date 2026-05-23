@@ -55,6 +55,7 @@ def evaluate_dep_hc_task(
     epochs: int = 600,
     l2: float = 1e-3,
     threshold_objective: str = "balanced_accuracy",
+    class_weight_mode: str = "balanced",
 ) -> dict[str, Any]:
     x_train = extract_dep_hc_task_features(
         train_samples,
@@ -63,7 +64,7 @@ def evaluate_dep_hc_task(
         channel_montage=channel_montage,
     )
     y_train = np.array([cohort_label(sample.cohort) for sample in train_samples], dtype=int)
-    model = fit_logistic_router(x_train, y_train, lr=lr, epochs=epochs, l2=l2)
+    model = fit_logistic_router(x_train, y_train, lr=lr, epochs=epochs, l2=l2, class_weight_mode=class_weight_mode)
     threshold = 0.5
     threshold_source = "fixed_0.5"
     if val_samples:
@@ -134,6 +135,7 @@ def evaluate_dep_hc_task(
         "threshold": float(threshold),
         "threshold_source": threshold_source,
         "threshold_objective": threshold_objective,
+        "class_weight_mode": class_weight_mode,
     }
     for key, value in threshold_summary.items():
         if key in {"objective", "threshold"}:
