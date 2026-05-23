@@ -20,12 +20,15 @@ Local data root: `scratch/local_data/hust_bci_er_train/训练集`.
 |---|---|---:|---:|---:|---|
 | P1 seed42 fold0 | `outputs/dep_hc_router_p1_seed42_fold0_calibrated_local` | 0.8125 | 1.0000 | 0.6250 | Strong signal, DEP-biased. |
 | P2 holdout999 | `outputs/dep_hc_router_p2_holdout999_calibrated_local` | 0.6250 | 0.7500 | 0.5000 | Generalizes weakly; not ready for hard routing. |
+| P2 holdout999, covariance-only | `outputs/dep_hc_router_p2_cov_holdout999_local` | 0.6250 | 0.7500 | 0.5000 | Matches combined features. |
+| P2 holdout999, bandpower-only | `outputs/dep_hc_router_p2_bandpower_holdout999_local` | 0.4375 | 0.5000 | 0.3750 | Frequency power alone is weak here. |
 
 ## Interpretation
 
 The router can learn a DEP/HC signal on held-out P1 subjects, but P2 shows that
 the signal is not yet stable enough to drive expert selection by itself. The
-next useful work is to add traditional feature ablations such as PSD,
-frontal-alpha asymmetry, entropy/connectivity, and a small EEGNet-lite router,
-then compare subject-level calibration and DEP/HC recall before any downstream
-expert routing.
+first ablation suggests the useful signal is mostly covariance/connectivity-like
+rather than bandpower-only. The next useful work is to add frontal-alpha
+asymmetry, entropy/connectivity variants, and a small EEGNet-lite router, then
+compare subject-level calibration and DEP/HC recall before any downstream expert
+routing.

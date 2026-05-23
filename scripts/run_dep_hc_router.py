@@ -92,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--window-sec", type=float, default=10.0)
     parser.add_argument("--n-crops", type=int, default=5)
     parser.add_argument("--preprocessing", action="append", default=["car", "zscore"], help="Preprocessing step. Can be repeated.")
+    parser.add_argument("--feature-set", choices=["cov_tangent", "bandpower", "cov_tangent_bandpower"], default="cov_tangent_bandpower")
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--epochs", type=int, default=600)
     parser.add_argument("--l2", type=float, default=1e-3)
@@ -149,7 +150,15 @@ def main(argv: list[str] | None = None) -> int:
         n_crops=args.n_crops,
         ea_transform=ea_transform,
     )
-    result = evaluate_router(train_samples, eval_samples, val_samples=val_samples, lr=args.lr, epochs=args.epochs, l2=args.l2)
+    result = evaluate_router(
+        train_samples,
+        eval_samples,
+        val_samples=val_samples,
+        feature_set=args.feature_set,
+        lr=args.lr,
+        epochs=args.epochs,
+        l2=args.l2,
+    )
     config = {
         "protocol": args.protocol,
         "split_id": split_id,
@@ -162,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         "window_sec": args.window_sec,
         "n_crops": args.n_crops,
         "preprocessing": list(args.preprocessing),
+        "feature_set": args.feature_set,
         "train_subjects": sorted(train_subjects),
         "val_subjects": sorted(val_subjects),
         "test_subjects": sorted(test_subjects),

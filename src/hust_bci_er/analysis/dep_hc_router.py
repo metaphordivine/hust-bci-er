@@ -96,13 +96,25 @@ def bandpower_features(
     return np.concatenate(out).astype(np.float64, copy=False)
 
 
-def extract_router_features(samples: Sequence[RouterSample]) -> np.ndarray:
+def extract_router_features(samples: Sequence[RouterSample], *, feature_set: str = "cov_tangent_bandpower") -> np.ndarray:
     if not samples:
         raise ValueError("at least one sample is required")
+    if feature_set not in {"cov_tangent", "bandpower", "cov_tangent_bandpower"}:
+        raise ValueError(f"unknown DEP/HC router feature_set: {feature_set}")
     return np.vstack([
-        np.concatenate([covariance_tangent_features(sample.x), bandpower_features(sample.x)])
+        router_features_for_sample(sample.x, feature_set=feature_set)
         for sample in samples
     ])
+
+
+def router_features_for_sample(x: np.ndarray, *, feature_set: str = "cov_tangent_bandpower") -> np.ndarray:
+    if feature_set == "cov_tangent":
+        return covariance_tangent_features(x)
+    if feature_set == "bandpower":
+        return bandpower_features(x)
+    if feature_set == "cov_tangent_bandpower":
+        return np.concatenate([covariance_tangent_features(x), bandpower_features(x)])
+    raise ValueError(f"unknown DEP/HC router feature_set: {feature_set}")
 
 
 def fit_logistic_router(
@@ -166,23 +178,24 @@ def evaluate_router(
     eval_samples: Sequence[RouterSample],
     *,
     val_samples: Sequence[RouterSample] | None = None,
+    feature_set: str = "cov_tangent_bandpower",
     lr: float = 0.05,
     epochs: int = 600,
     l2: float = 1e-3,
 ) -> dict[str, Any]:
-    x_train = extract_router_features(train_samples)
+    x_train = extract_router_features(train_samples, feature_set=feature_set)
     y_train = np.array([cohort_label(sample.cohort) for sample in train_samples], dtype=int)
     model = fit_logistic_router(x_train, y_train, lr=lr, epochs=epochs, l2=l2)
     threshold = 0.5
     threshold_source = "fixed_0.5"
     if val_samples:
-        x_val = extract_router_features(val_samples)
+        x_val = extract_router_features(val_samples, feature_set=feature_set)
         y_val = np.array([cohort_label(sample.cohort) for sample in val_samples], dtype=int)
         val_p_dep = predict_dep_probability(model, x_val)
         threshold = select_subject_threshold(val_samples, y_val, val_p_dep)
         threshold_source = "validation_subjects"
 
-    x_eval = extract_router_features(eval_samples)
+    x_eval = extract_router_features(eval_samples, feature_set=feature_set)
     y_eval = np.array([cohort_label(sample.cohort) for sample in eval_samples], dtype=int)
     p_dep = predict_dep_probability(model, x_eval)
     y_pred = (p_dep >= threshold).astype(int)
@@ -217,6 +230,7 @@ def evaluate_router(
         "n_eval_windows": len(eval_samples),
         "n_eval_subjects": len(subject_rows),
         "feature_dim": int(x_train.shape[1]),
+        "feature_set": feature_set,
         "threshold": float(threshold),
         "threshold_source": threshold_source,
     }

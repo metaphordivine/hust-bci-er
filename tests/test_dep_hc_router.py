@@ -13,6 +13,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     covariance_tangent_features,
     evaluate_router,
     extract_router_features,
+    router_features_for_sample,
     select_subject_threshold,
     write_router_outputs,
 )
@@ -41,6 +42,8 @@ def test_router_features_are_numeric_and_metadata_free():
     assert cov.shape == (10,)
     assert bands.shape == (20,)
     assert features.shape == (1, 30)
+    assert router_features_for_sample(sample.x, feature_set="cov_tangent").shape == (10,)
+    assert router_features_for_sample(sample.x, feature_set="bandpower").shape == (20,)
     assert np.isfinite(features).all()
 
 
@@ -58,9 +61,10 @@ def test_evaluate_router_reports_subject_level_metrics():
         _sample("DEP101", "DEP", value=1.0, crop_id=1),
     ]
 
-    result = evaluate_router(train, eval_samples, epochs=80, lr=0.1, l2=1e-4)
+    result = evaluate_router(train, eval_samples, epochs=80, lr=0.1, l2=1e-4, feature_set="cov_tangent_bandpower")
 
     assert result["metrics"]["n_eval_subjects"] == 2
+    assert result["metrics"]["feature_set"] == "cov_tangent_bandpower"
     assert result["metrics"]["threshold_source"] == "fixed_0.5"
     assert result["metrics"]["subject_ba"] >= 0.5
     assert {row["subject_id"] for row in result["subject_rows"]} == {"DEP101", "HC101"}
