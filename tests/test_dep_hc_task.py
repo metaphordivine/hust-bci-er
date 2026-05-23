@@ -14,7 +14,12 @@ from hust_bci_er.tasks.dep_hc.experiment import (
     write_dep_hc_task_outputs,
 )
 from hust_bci_er.tasks.dep_hc.fusion import _fusion_selection_key, _weight_candidates, evaluate_dep_hc_feature_fusion
-from hust_bci_er.tasks.dep_hc.neural import evaluate_dep_hc_neural_task
+from hust_bci_er.tasks.dep_hc.neural import (
+    DEP_HC_NEURAL_MODELS,
+    _build_model_kwargs,
+    _output_logits,
+    evaluate_dep_hc_neural_task,
+)
 from hust_bci_er.tasks.dep_hc.channel_graph import (
     channel_graph_adjacency,
     channel_graph_metadata,
@@ -348,6 +353,35 @@ def test_dep_hc_neural_task_smoke_uses_cohort_target():
     assert result["metrics"]["model_name"] == "eegnet"
     assert result["metrics"]["n_eval_subjects"] == 2
     assert {"HC101", "DEP101"} == {row["subject_id"] for row in result["subject_rows"]}
+
+
+def test_dep_hc_neural_task_supports_factory_backbone_dict_logits():
+    torch = pytest.importorskip("torch")
+    assert {"fbstcnet", "srfnet", "conformer_lite", "dgcnn"} <= DEP_HC_NEURAL_MODELS
+
+    logits = torch.randn(2, 2)
+    assert torch.equal(_output_logits(logits), logits)
+    assert torch.equal(_output_logits({"logits": logits, "aux": torch.ones(2)}), logits)
+    with pytest.raises(KeyError, match="logits"):
+        _output_logits({"score": torch.ones(2)})
+
+    dgcnn_kwargs = _build_model_kwargs("dgcnn")
+    assert dgcnn_kwargs["channel_montage"] == "hust_30_a2"
+    fbstcnet_kwargs = _build_model_kwargs("fbstcnet", {"variant": "C", "gamma": 123})
+    assert fbstcnet_kwargs["variant"] == "C"
+    assert fbstcnet_kwargs["gamma"] == 123
+
+
+def test_dep_hc_neural_task_rejects_unknown_model_name():
+    pytest.importorskip("torch")
+    with pytest.raises(ValueError, match="unknown DEP/HC neural model_name"):
+        evaluate_dep_hc_neural_task(
+            [_sample("HC001", "HC"), _sample("DEP001", "DEP")],
+            [_sample("HC101", "HC"), _sample("DEP101", "DEP")],
+            val_samples=[_sample("HC011", "HC"), _sample("DEP011", "DEP")],
+            model_name="subject_id",
+            epochs=1,
+        )
 
 
 def test_write_dep_hc_task_outputs_uses_task_specific_payload(tmp_path):
