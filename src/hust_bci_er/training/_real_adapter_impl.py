@@ -7,6 +7,7 @@ training -> inference -> prediction & score_matrix artifacts -> audit manifests.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -433,15 +434,36 @@ def _make_fixed_crops(
     preproc: list[str],
     ea_transform: np.ndarray | None = None,
     skip_preproc: bool = False,
+    random_offset: bool = False,
+    random_offset_sec: float = 0.0,
+    random_seed: int | None = None,
 ) -> list[dict[str, Any]]:
     """Create non-overlapping fixed crops from each source trial."""
     spec = fixed_crop_spec_from_config(
         {"source_trial_sec": source_trial_sec, "window_sec": window_sec, "n_crops": n_crops}
     )
+    window_samples = int(round(window_sec * SFREQ))
+    max_start = int(round(source_trial_sec * SFREQ)) - window_samples
+    max_offset_samples = int(round(float(random_offset_sec) * SFREQ))
     crops: list[dict[str, Any]] = []
     for trial in trials:
         x_full = _clip_trial(trial["x"].astype(np.float32), source_trial_sec)
         for crop_id, (start, stop, start_sec) in enumerate(fixed_crop_slices(x_full.shape[1], spec)):
+            if random_offset:
+                if max_offset_samples < 0:
+                    raise ValueError("random_offset_sec must be non-negative")
+                lower = max(0, int(start) - max_offset_samples)
+                upper = min(max_start, int(start) + max_offset_samples)
+                if upper > lower:
+                    jitter_seed = _fixed_crop_jitter_seed(
+                        int(0 if random_seed is None else random_seed),
+                        trial,
+                        crop_id,
+                    )
+                    rng = np.random.default_rng(jitter_seed)
+                    start = int(rng.integers(lower, upper + 1))
+                    stop = start + window_samples
+                    start_sec = start / SFREQ
             x = x_full[:, start:stop].copy()
             if not skip_preproc:
                 x = _apply_preprocessing(x, preproc, ea_transform=ea_transform)
@@ -455,6 +477,18 @@ def _make_fixed_crops(
                 "window_start_sec": start_sec,
             })
     return crops
+
+
+def _fixed_crop_jitter_seed(seed: int, trial: Mapping[str, Any], crop_id: int) -> int:
+    parts = [
+        str(int(seed)),
+        str(trial.get("subject_id", "")),
+        str(trial.get("trial_id", "")),
+        str(int(crop_id)),
+        "fixed_crop_jitter_v1",
+    ]
+    digest = hashlib.sha256("\0".join(parts).encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="little", signed=False)
 
 
 def _validate_fixed_crop_coverage(
@@ -1220,13 +1254,32 @@ def run_real_classifier_route(
     if has_sliding_aug:
         make_windows = _make_sliding_windows
         window_kwargs: dict = dict(source_trial_sec=source_trial_sec, window_sec=window_sec, stride_sec=stride_sec)
+        train_window_kwargs = dict(window_kwargs)
     elif has_fixed_crop_aug:
         make_windows = _make_fixed_crops
         window_kwargs = dict(source_trial_sec=source_trial_sec, window_sec=window_sec, n_crops=int(n_fixed_crops))
+        train_window_kwargs = dict(window_kwargs)
+        if bool(augmentation.get("train_random_crop", False) or augmentation.get("random_offset", False)):
+            train_window_kwargs.update({
+                "random_offset": True,
+                "random_offset_sec": float(augmentation.get("random_offset_sec", 0.0)),
+                "random_seed": active_seed,
+            })
     else:
         make_windows = _make_single_crops
         window_kwargs = dict(window_sec=window_sec)
-    raw_train = make_windows(train_trials, preproc=preproc, skip_preproc=True, **window_kwargs)
+        train_window_kwargs = dict(window_kwargs)
+    train_crop_jitter = (
+        {
+            "enabled": True,
+            "scope": "train_only",
+            "random_offset_sec": float(augmentation.get("random_offset_sec", 0.0)),
+            "random_seed": int(active_seed),
+        }
+        if has_fixed_crop_aug and bool(augmentation.get("train_random_crop", False) or augmentation.get("random_offset", False))
+        else {"enabled": False}
+    )
+    raw_train = make_windows(train_trials, preproc=preproc, skip_preproc=True, **train_window_kwargs)
     raw_val = make_windows(val_trials, preproc=preproc, skip_preproc=True, **window_kwargs)
     if run_mode == "candidate":
         if not test_trials:
@@ -1695,6 +1748,7 @@ def run_real_classifier_route(
             "training_resume_checkpoint": str(run_dir / "training_checkpoint.pt") if checkpoint_payload is None else None,
             "augmentation_transforms": train_transform_configs,
             "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
+            "train_crop_jitter": train_crop_jitter,
             "runtime_performance": {
                 "torch": torch_runtime_config,
                 "dataloader": dataloader_config,
@@ -1748,6 +1802,7 @@ def run_real_classifier_route(
         manifest["checkpoint_reuse"] = checkpoint_reuse
     manifest["augmentation_transforms"] = train_transform_configs
     manifest["augmentation_transform_scope"] = "train_only" if train_transform_configs else "none"
+    manifest["train_crop_jitter"] = train_crop_jitter
     manifest["declared_protocol"] = str(route_data["evaluation"]["protocol"])
     manifest["adapter_execution_protocol"] = (
         "materialized_protocol_job_split" if split_manifest_path is not None else "single_subject_holdout_split"

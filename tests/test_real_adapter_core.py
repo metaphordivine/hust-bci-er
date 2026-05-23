@@ -497,6 +497,47 @@ def test_make_fixed_crops_returns_non_overlapping_crops():
     np.testing.assert_array_equal(crops[1]["x"], x[:, 2500:5000])
 
 
+def test_make_fixed_crops_train_jitter_is_deterministic_and_bounded():
+    x = np.arange(30 * 2500 * 5, dtype=np.float32).reshape(30, 2500 * 5)
+    trials = [{
+        "x": x,
+        "y": 1,
+        "subject_id": "S01",
+        "trial_id": "S01_pos1",
+        "cohort": "HC",
+    }]
+
+    crops = _make_fixed_crops(
+        trials,
+        source_trial_sec=50,
+        window_sec=10,
+        n_crops=5,
+        preproc=[],
+        skip_preproc=True,
+        random_offset=True,
+        random_offset_sec=2.0,
+        random_seed=42,
+    )
+    repeat = _make_fixed_crops(
+        trials,
+        source_trial_sec=50,
+        window_sec=10,
+        n_crops=5,
+        preproc=[],
+        skip_preproc=True,
+        random_offset=True,
+        random_offset_sec=2.0,
+        random_seed=42,
+    )
+
+    assert [crop["window_start_sec"] for crop in crops] == [crop["window_start_sec"] for crop in repeat]
+    assert [crop["crop_id"] for crop in crops] == [0, 1, 2, 3, 4]
+    for crop in crops:
+        base_start = float(crop["crop_id"]) * 10.0
+        assert abs(float(crop["window_start_sec"]) - base_start) <= 2.0 + 1 / 250
+        assert crop["x"].shape == (30, 2500)
+
+
 def test_validate_fixed_crop_coverage_requires_source_duration():
     x = np.zeros((30, 2500 * 5), dtype=np.float32)
     trials = [{"x": x, "trial_id": "S01_pos1"}]

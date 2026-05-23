@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from hust_bci_er.models.eeg_montage import HUST_30_A2_CHANNELS, indices_for_channel_names
+
 
 TRAIN_ONLY_SPLITS = {"train"}
 
@@ -16,30 +18,116 @@ def _rng(seed: int | None) -> np.random.Generator:
     return np.random.default_rng(None if seed is None else int(seed))
 
 
-def gaussian_noise(x: np.ndarray, *, rng: np.random.Generator, std: float = 0.01) -> np.ndarray:
+def gaussian_noise(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    std: float = 0.01,
+    std_ratio: float | None = None,
+) -> np.ndarray:
     if std < 0:
         raise ValueError("gaussian_noise.std must be non-negative")
     signal = np.asarray(x, dtype=np.float32)
-    return (signal + rng.normal(0.0, std, size=signal.shape)).astype(np.float32)
+    if std_ratio is not None:
+        if std_ratio < 0:
+            raise ValueError("gaussian_noise.std_ratio must be non-negative")
+        std = float(std_ratio) * float(np.std(signal))
+    return (signal + rng.normal(0.0, float(std), size=signal.shape)).astype(np.float32)
 
 
-def channel_dropout(x: np.ndarray, *, rng: np.random.Generator, p: float = 0.1) -> np.ndarray:
+def amplitude_scale(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    scale_range: Sequence[float] = (0.9, 1.1),
+) -> np.ndarray:
+    if not isinstance(scale_range, Sequence) or len(scale_range) != 2:
+        raise ValueError("amplitude_scale.scale_range must contain [low, high]")
+    low = float(scale_range[0])
+    high = float(scale_range[1])
+    if low <= 0 or high <= 0 or low > high:
+        raise ValueError("amplitude_scale.scale_range must be positive and sorted")
+    signal = np.asarray(x, dtype=np.float32)
+    return (signal * float(rng.uniform(low, high))).astype(np.float32)
+
+
+def channel_dropout(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    p: float = 0.1,
+    max_drop_channels: int | None = None,
+    exclude_channels: Sequence[str] | None = None,
+    channel_names: Sequence[str] = HUST_30_A2_CHANNELS,
+) -> np.ndarray:
     if not 0.0 <= p < 1.0:
         raise ValueError("channel_dropout.p must be in [0, 1)")
     signal = np.asarray(x, dtype=np.float32).copy()
-    mask = rng.random(signal.shape[0]) < p
+    if max_drop_channels is not None:
+        if max_drop_channels <= 0:
+            raise ValueError("channel_dropout.max_drop_channels must be positive")
+        excluded = set(indices_for_channel_names(channel_names, exclude_channels or ()))
+        eligible = [idx for idx in range(signal.shape[0]) if idx not in excluded]
+        if not eligible:
+            return signal
+        n_drop = int(rng.integers(1, min(int(max_drop_channels), len(eligible)) + 1))
+        selected = rng.choice(np.asarray(eligible, dtype=np.int64), size=n_drop, replace=False)
+        signal[selected, :] = 0.0
+        return signal.astype(np.float32)
+    mask = rng.random(signal.shape[0]) < float(p)
     signal[mask, :] = 0.0
     return signal
 
 
-def time_mask(x: np.ndarray, *, rng: np.random.Generator, max_width: int = 25) -> np.ndarray:
-    if max_width <= 0:
-        raise ValueError("time_mask.max_width must be positive")
+def _mask_width(n_times: int, *, max_width: int | None = None, mask_ratio: float | None = None) -> int:
+    if mask_ratio is not None:
+        if not 0.0 < mask_ratio < 1.0:
+            raise ValueError("mask_ratio must be in (0, 1)")
+        return max(1, int(round(float(mask_ratio) * n_times)))
+    if max_width is None or max_width <= 0:
+        raise ValueError("max_width must be positive")
+    return int(max_width)
+
+
+def time_mask(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    max_width: int = 25,
+    mask_ratio: float | None = None,
+) -> np.ndarray:
     signal = np.asarray(x, dtype=np.float32).copy()
-    width = int(rng.integers(1, min(max_width, signal.shape[-1]) + 1))
+    width_limit = _mask_width(signal.shape[-1], max_width=max_width, mask_ratio=mask_ratio)
+    width = int(rng.integers(1, min(width_limit, signal.shape[-1]) + 1))
     start = int(rng.integers(0, signal.shape[-1] - width + 1))
     signal[:, start:start + width] = 0.0
     return signal
+
+
+def smooth_time_mask(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    mask_ratio: float = 0.05,
+    attenuation: float = 0.0,
+    edge_ratio: float = 0.2,
+) -> np.ndarray:
+    if not 0.0 <= attenuation <= 1.0:
+        raise ValueError("smooth_time_mask.attenuation must be in [0, 1]")
+    if not 0.0 <= edge_ratio < 0.5:
+        raise ValueError("smooth_time_mask.edge_ratio must be in [0, 0.5)")
+    signal = np.asarray(x, dtype=np.float32).copy()
+    width = min(_mask_width(signal.shape[-1], mask_ratio=mask_ratio), signal.shape[-1])
+    start = int(rng.integers(0, signal.shape[-1] - width + 1))
+    local = np.full(width, float(attenuation), dtype=np.float32)
+    edge = int(round(width * float(edge_ratio)))
+    if edge > 0 and width > 2 * edge:
+        ramp_down = np.linspace(1.0, float(attenuation), edge, endpoint=False, dtype=np.float32)
+        ramp_up = np.linspace(float(attenuation), 1.0, edge, endpoint=False, dtype=np.float32)
+        local[:edge] = ramp_down
+        local[-edge:] = ramp_up
+    signal[:, start:start + width] *= local[None, :]
+    return signal.astype(np.float32)
 
 
 def time_shift(x: np.ndarray, *, rng: np.random.Generator, max_shift: int = 12) -> np.ndarray:
@@ -60,8 +148,10 @@ def time_shift(x: np.ndarray, *, rng: np.random.Generator, max_shift: int = 12) 
 
 
 AUGMENTATION_TRANSFORMS = {
+    "amplitude_scale": amplitude_scale,
     "gaussian_noise": gaussian_noise,
     "channel_dropout": channel_dropout,
+    "smooth_time_mask": smooth_time_mask,
     "time_mask": time_mask,
     "time_shift": time_shift,
 }
@@ -132,7 +222,13 @@ def apply_transforms_to_windows(
         rng = _rng(_window_rng_seed(seed, item, ordinal))
         for normalized in normalized_configs:
             fn = AUGMENTATION_TRANSFORMS[normalized["name"]]
-            x = fn(x, rng=rng, **normalized["params"])
+            params = dict(normalized["params"])
+            prob = float(params.pop("prob", 1.0))
+            if not 0.0 <= prob <= 1.0:
+                raise ValueError("augmentation transform prob must be in [0, 1]")
+            if prob < 1.0 and float(rng.random()) >= prob:
+                continue
+            x = fn(x, rng=rng, **params)
         item["x"] = x.astype(np.float32)
         augmented.append(item)
     return augmented

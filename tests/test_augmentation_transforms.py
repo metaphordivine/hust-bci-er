@@ -2,10 +2,12 @@ import numpy as np
 import pytest
 
 from hust_bci_er.data.augmentations import (
+    amplitude_scale,
     apply_transforms_to_windows,
     channel_dropout,
     gaussian_noise,
     normalize_transform_config,
+    smooth_time_mask,
     time_mask,
     time_shift,
 )
@@ -21,13 +23,39 @@ def test_window_transforms_preserve_shape_and_dtype():
     x = np.ones((4, 32), dtype=np.float32)
     for fn, kwargs in [
         (gaussian_noise, {"std": 0.01}),
+        (amplitude_scale, {"scale_range": [0.9, 1.1]}),
         (channel_dropout, {"p": 0.25}),
+        (smooth_time_mask, {"mask_ratio": 0.10}),
         (time_mask, {"max_width": 8}),
         (time_shift, {"max_shift": 4}),
     ]:
         y = fn(x, rng=rng, **kwargs)
         assert y.shape == x.shape
         assert y.dtype == np.float32
+
+
+def test_transform_prob_zero_preserves_training_window():
+    windows = [{"x": np.ones((4, 32), dtype=np.float32), "y": 1}]
+    transforms = [{"name": "gaussian_noise", "std": 10.0, "prob": 0.0, "apply_to_splits": ["train"]}]
+
+    train = apply_transforms_to_windows(windows, transforms, seed=42, split="train")
+
+    np.testing.assert_allclose(train[0]["x"], windows[0]["x"])
+
+
+def test_channel_dropout_can_exclude_frontal_channels():
+    rng = np.random.default_rng(0)
+    x = np.ones((30, 16), dtype=np.float32)
+
+    y = channel_dropout(
+        x,
+        rng=rng,
+        max_drop_channels=8,
+        exclude_channels=["FP1", "FP2", "F7", "F8"],
+    )
+
+    np.testing.assert_array_equal(y[[0, 1, 2, 6], :], x[[0, 1, 2, 6], :])
+    assert np.any(np.isclose(y.sum(axis=1), 0.0))
 
 
 def test_apply_transforms_only_changes_train_split():

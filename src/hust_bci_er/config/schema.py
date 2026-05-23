@@ -262,6 +262,21 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         if not isinstance(apply_to_splits, list) or not apply_to_splits or any(split not in valid_splits for split in apply_to_splits):
             errors.append("augmentation.apply_to_splits must be a non-empty list drawn from train/val/test")
 
+    if "train_random_crop" in augmentation and not isinstance(augmentation["train_random_crop"], bool):
+        errors.append("augmentation.train_random_crop must be a boolean")
+    if "random_offset" in augmentation and not isinstance(augmentation["random_offset"], bool):
+        errors.append("augmentation.random_offset must be a boolean")
+    if (augmentation.get("train_random_crop") or augmentation.get("random_offset")) and name != "split_first_fixed_crops":
+        errors.append("augmentation train random crop is only supported for split_first_fixed_crops")
+    if augmentation.get("random_offset"):
+        offset_sec = validate_non_negative_number(
+            augmentation.get("random_offset_sec", 0.0),
+            "augmentation.random_offset_sec",
+            errors,
+        )
+        if offset_sec is not None and window_sec is not None and offset_sec >= window_sec:
+            errors.append("augmentation.random_offset_sec must be < augmentation.window_sec")
+
     validate_augmentation_transforms(augmentation, errors)
 
     validate_augmentation_search_space(data, augmentation, errors)
@@ -294,6 +309,7 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
         name = item.get("name")
         if name not in registry.AUGMENTATION_TRANSFORMS:
             errors.append(f"unknown augmentation transform: {name}")
+        validate_probability(item.get("prob", 1.0), f"{field}.prob", errors)
         splits = item.get("apply_to_splits", ["train"])
         if not isinstance(splits, list) or not splits or any(split not in {"train", "val", "test"} for split in splits):
             errors.append(f"{field}.apply_to_splits must be a non-empty list drawn from train/val/test")
@@ -302,15 +318,40 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
 
         if name == "gaussian_noise":
             validate_non_negative_number(item.get("std", 0.01), f"{field}.std", errors)
+            if "std_ratio" in item:
+                validate_non_negative_number(item.get("std_ratio"), f"{field}.std_ratio", errors)
+        elif name == "amplitude_scale":
+            scale_range = item.get("scale_range", [0.9, 1.1])
+            if not isinstance(scale_range, list) or len(scale_range) != 2:
+                errors.append(f"{field}.scale_range must be [low, high]")
+            else:
+                low = validate_positive_number(scale_range[0], f"{field}.scale_range[0]", errors)
+                high = validate_positive_number(scale_range[1], f"{field}.scale_range[1]", errors)
+                if low is not None and high is not None and low > high:
+                    errors.append(f"{field}.scale_range must be sorted")
         elif name == "channel_dropout":
             p = validate_non_negative_number(item.get("p", 0.1), f"{field}.p", errors)
             if p is not None and p >= 1.0:
                 errors.append(f"{field}.p must be < 1")
+            if "max_drop_channels" in item:
+                validate_positive_int(item.get("max_drop_channels"), f"{field}.max_drop_channels", errors)
+            if "exclude_channels" in item:
+                exclude = item.get("exclude_channels")
+                if not isinstance(exclude, list) or any(not isinstance(ch, str) or not ch for ch in exclude):
+                    errors.append(f"{field}.exclude_channels must be a list of channel names")
         elif name == "time_mask":
             max_width = validate_positive_int(item.get("max_width", 25), f"{field}.max_width", errors)
             window_samples = augmentation_window_samples(augmentation)
             if max_width is not None and window_samples is not None and max_width >= window_samples:
                 errors.append(f"{field}.max_width must be < augmentation.window_sec * 250Hz")
+            if "mask_ratio" in item:
+                validate_open_probability(item.get("mask_ratio"), f"{field}.mask_ratio", errors)
+        elif name == "smooth_time_mask":
+            validate_open_probability(item.get("mask_ratio", 0.05), f"{field}.mask_ratio", errors)
+            validate_probability(item.get("attenuation", 0.0), f"{field}.attenuation", errors)
+            edge_ratio = validate_probability(item.get("edge_ratio", 0.2), f"{field}.edge_ratio", errors)
+            if edge_ratio is not None and edge_ratio >= 0.5:
+                errors.append(f"{field}.edge_ratio must be < 0.5")
         elif name == "time_shift":
             max_shift = validate_non_negative_number(item.get("max_shift", 12), f"{field}.max_shift", errors)
             window_samples = augmentation_window_samples(augmentation)
@@ -490,6 +531,20 @@ def validate_augmentation_search_space(data: dict[str, Any], augmentation: dict[
 def validate_non_negative_number(value: Any, field: str, errors: list[str]) -> float | None:
     if not isinstance(value, (int, float)) or value < 0:
         errors.append(f"{field} must be non-negative")
+        return None
+    return float(value)
+
+
+def validate_probability(value: Any, field: str, errors: list[str]) -> float | None:
+    if not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0:
+        errors.append(f"{field} must be in [0, 1]")
+        return None
+    return float(value)
+
+
+def validate_open_probability(value: Any, field: str, errors: list[str]) -> float | None:
+    if not isinstance(value, (int, float)) or not 0.0 < float(value) < 1.0:
+        errors.append(f"{field} must be in (0, 1)")
         return None
     return float(value)
 
