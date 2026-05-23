@@ -108,11 +108,13 @@ def test_dep_hc_task_feature_matrix_and_eval():
         epochs=40,
         lr=0.1,
         l2=1e-3,
+        class_weight_mode="uniform",
     )
 
     assert features.shape[0] == 4
     assert result["metrics"]["task"] == "dep_hc"
     assert result["metrics"]["feature_set"] == "traditional_graph"
+    assert result["metrics"]["class_weight_mode"] == "uniform"
     assert result["metrics"]["n_eval_subjects"] == 2
     assert {"DEP101", "HC101"} == {row["subject_id"] for row in result["subject_rows"]}
 
@@ -136,6 +138,16 @@ def test_subject_threshold_objective_is_validation_only_summary():
     assert min_recall_summary["min_recall"] == pytest.approx(0.5)
     with pytest.raises(ValueError, match="unknown threshold objective"):
         subject_threshold_diagnostic(samples, y_true, p_dep, objective="recall_gap")
+
+
+def test_dep_hc_task_rejects_unknown_class_weight_mode():
+    with pytest.raises(ValueError, match="unknown class_weight_mode"):
+        evaluate_dep_hc_task(
+            [_sample("HC001", "HC"), _sample("DEP001", "DEP")],
+            [_sample("HC101", "HC"), _sample("DEP101", "DEP")],
+            epochs=1,
+            class_weight_mode="subject_id",
+        )
 
 
 def test_write_dep_hc_task_outputs_uses_task_specific_payload(tmp_path):
