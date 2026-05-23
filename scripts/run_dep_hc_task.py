@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--threshold-objective",
-        choices=["balanced_accuracy", "min_recall"],
+        choices=["balanced_accuracy", "min_recall", "fixed_0_5"],
         default="balanced_accuracy",
         help="Validation-subject objective used to freeze the DEP threshold before evaluation.",
     )

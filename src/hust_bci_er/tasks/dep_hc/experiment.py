@@ -78,7 +78,7 @@ def evaluate_dep_hc_task(
         val_p_dep = predict_dep_probability(model, x_val)
         threshold_summary = subject_threshold_diagnostic(val_samples, y_val, val_p_dep, objective=threshold_objective)
         threshold = float(threshold_summary["threshold"])
-        threshold_source = "validation_subjects"
+        threshold_source = "fixed_0.5" if threshold_objective == "fixed_0_5" else "validation_subjects"
     else:
         threshold_summary = {
             "objective": threshold_objective,

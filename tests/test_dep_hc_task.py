@@ -132,11 +132,14 @@ def test_subject_threshold_objective_is_validation_only_summary():
 
     ba_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="balanced_accuracy")
     min_recall_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="min_recall")
+    fixed_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="fixed_0_5")
 
     assert ba_summary["threshold"] == pytest.approx(0.5)
     assert ba_summary["balanced_accuracy"] == pytest.approx(0.75)
     assert min_recall_summary["threshold"] == pytest.approx(0.5)
     assert min_recall_summary["min_recall"] == pytest.approx(0.5)
+    assert fixed_summary["threshold"] == pytest.approx(0.5)
+    assert fixed_summary["objective"] == "fixed_0_5"
     with pytest.raises(ValueError, match="unknown threshold objective"):
         subject_threshold_diagnostic(samples, y_true, p_dep, objective="recall_gap")
 
@@ -184,6 +187,19 @@ def test_dep_hc_feature_fusion_selects_validation_weight():
     assert set(result["metrics"]["fusion_weight_by_feature"]) == {"bandpower", "time_frequency"}
     assert result["metrics"]["threshold_source"] == "validation_subjects"
 
+    fixed = evaluate_dep_hc_feature_fusion(
+        train,
+        eval_samples,
+        val_samples=val,
+        feature_sets=("bandpower", "time_frequency"),
+        sfreq=128.0,
+        epochs=5,
+        weight_step=0.5,
+        threshold_objective="fixed_0_5",
+    )
+    assert fixed["metrics"]["threshold"] == pytest.approx(0.5)
+    assert fixed["metrics"]["threshold_source"] == "fixed_0.5"
+
 
 def test_dep_hc_fusion_weight_selection_respects_objective_and_endpoints():
     assert _weight_candidates(0.4) == (0.0, 0.4, 0.8, 1.0)
@@ -193,6 +209,11 @@ def test_dep_hc_fusion_weight_selection_respects_objective_and_endpoints():
     assert _fusion_selection_key(high_ba, threshold_objective="balanced_accuracy", weight=0.5) > _fusion_selection_key(
         high_min,
         threshold_objective="balanced_accuracy",
+        weight=0.5,
+    )
+    assert _fusion_selection_key(high_ba, threshold_objective="fixed_0_5", weight=0.5) > _fusion_selection_key(
+        high_min,
+        threshold_objective="fixed_0_5",
         weight=0.5,
     )
     assert _fusion_selection_key(high_min, threshold_objective="min_recall", weight=0.5) > _fusion_selection_key(
