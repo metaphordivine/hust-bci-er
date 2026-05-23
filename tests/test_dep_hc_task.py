@@ -8,6 +8,12 @@ import pytest
 
 from hust_bci_er.analysis.dep_hc_router import RouterSample
 from hust_bci_er.tasks.dep_hc.experiment import evaluate_dep_hc_task, extract_dep_hc_task_features, write_dep_hc_task_outputs
+from hust_bci_er.tasks.dep_hc.channel_graph import (
+    channel_graph_adjacency,
+    channel_graph_metadata,
+    graph_edge_indices,
+    regional_connectivity_features,
+)
 from hust_bci_er.tasks.dep_hc.features import (
     asymmetry_features,
     connectivity_summary_features,
@@ -38,20 +44,38 @@ def test_dep_hc_task_feature_sets_are_numeric_and_metadata_free():
     x = _window("feature-smoke")
 
     traditional = dep_hc_features(x, feature_set="traditional", sfreq=128.0)
+    traditional_graph = dep_hc_features(x, feature_set="traditional_graph", sfreq=128.0)
     connectivity = connectivity_summary_features(x)
+    regional = regional_connectivity_features(x)
     asymmetry = asymmetry_features(x, sfreq=128.0)
     time_frequency = time_frequency_summary_features(x, sfreq=128.0)
 
     assert traditional.ndim == 1
     assert connectivity.shape == (30 * 29,)
+    assert regional.shape == (30,)
     assert asymmetry.shape == (13,)
     assert time_frequency.shape == (15,)
+    assert traditional_graph.shape[0] == traditional.shape[0] + regional.shape[0]
     assert np.isfinite(traditional).all()
 
 
 def test_traditional_asymmetry_requires_hust_montage():
     with pytest.raises(ValueError, match="hust_30_a2"):
         dep_hc_features(_window("bad-montage"), feature_set="traditional", channel_montage="sequential")
+
+
+def test_hust_channel_graph_uses_pdf_order_and_region_priors():
+    table = channel_graph_metadata()["channels"]
+    adjacency = channel_graph_adjacency()
+    edges = graph_edge_indices(include_self=False)
+
+    assert table[0]["name"] == "FP1"
+    assert table[-1]["name"] == "O2"
+    assert adjacency.shape == (30, 30)
+    assert np.allclose(adjacency, adjacency.T)
+    assert len(edges) > 30
+    assert adjacency[0, 1] == 1.0
+    assert adjacency[3, 5] == 1.0
 
 
 def test_dep_hc_task_feature_matrix_and_eval():
@@ -68,11 +92,11 @@ def test_dep_hc_task_feature_matrix_and_eval():
         _sample("DEP101", "DEP", crop_id=1),
     ]
 
-    features = extract_dep_hc_task_features(train, feature_set="traditional_time_frequency", sfreq=128.0)
+    features = extract_dep_hc_task_features(train, feature_set="traditional_graph", sfreq=128.0)
     result = evaluate_dep_hc_task(
         train,
         eval_samples,
-        feature_set="traditional_time_frequency",
+        feature_set="traditional_graph",
         sfreq=128.0,
         epochs=40,
         lr=0.1,
@@ -81,7 +105,7 @@ def test_dep_hc_task_feature_matrix_and_eval():
 
     assert features.shape[0] == 4
     assert result["metrics"]["task"] == "dep_hc"
-    assert result["metrics"]["feature_set"] == "traditional_time_frequency"
+    assert result["metrics"]["feature_set"] == "traditional_graph"
     assert result["metrics"]["n_eval_subjects"] == 2
     assert {"DEP101", "HC101"} == {row["subject_id"] for row in result["subject_rows"]}
 

@@ -13,6 +13,7 @@ import numpy as np
 from hust_bci_er.analysis.dep_hc_router import DEFAULT_BANDS, bandpower_features, covariance_tangent_features
 from hust_bci_er.features.connectivity import connectivity_features
 from hust_bci_er.models.eeg_montage import channel_names_for_montage, hemisphere_indices, indices_for_channel_names
+from hust_bci_er.tasks.dep_hc.channel_graph import regional_connectivity_features
 
 
 DEP_HC_FEATURE_SETS = frozenset(
@@ -22,8 +23,10 @@ DEP_HC_FEATURE_SETS = frozenset(
         "cov_tangent_bandpower",
         "traditional",
         "connectivity",
+        "graph_connectivity",
         "time_frequency",
         "traditional_time_frequency",
+        "traditional_graph",
     }
 )
 
@@ -50,6 +53,8 @@ def dep_hc_features(
         return np.concatenate([covariance_tangent_features(x), bandpower_features(x, sfreq=sfreq)])
     if feature_set == "connectivity":
         return connectivity_summary_features(x)
+    if feature_set == "graph_connectivity":
+        return regional_connectivity_features(x, channel_montage=str(channel_montage or "hust_30_a2"))
     if feature_set == "time_frequency":
         return time_frequency_summary_features(x, sfreq=sfreq)
     if feature_set == "traditional":
@@ -66,6 +71,13 @@ def dep_hc_features(
             [
                 dep_hc_features(x, feature_set="traditional", sfreq=sfreq, channel_montage=channel_montage),
                 time_frequency_summary_features(x, sfreq=sfreq),
+            ]
+        )
+    if feature_set == "traditional_graph":
+        return np.concatenate(
+            [
+                dep_hc_features(x, feature_set="traditional", sfreq=sfreq, channel_montage=channel_montage),
+                regional_connectivity_features(x, channel_montage=str(channel_montage or "hust_30_a2")),
             ]
         )
     raise ValueError(f"unknown DEP/HC task feature_set: {feature_set}")
