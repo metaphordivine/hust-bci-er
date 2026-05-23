@@ -141,6 +141,9 @@ def simulate_run(
         dep_recall=dep_recall,
         hc_precision=hc_precision,
         dep_precision=dep_precision,
+        n_subjects=len(subjects),
+        n_hc_like=len(buckets["hc_like"]),
+        n_dep_like=len(buckets["dep_like"]),
         min_run_ba=min_run_ba,
         min_recall=min_recall,
         min_bucket_precision=min_bucket_precision,
@@ -180,21 +183,21 @@ def aggregate_gate_rows(
         bas = [_to_float(row["subject_ba"]) for row in rows]
         hc = [_to_float(row["hc_recall"]) for row in rows]
         dep = [_to_float(row["dep_recall"]) for row in rows]
-        hc_prec = [_to_float(row["hc_like_precision"]) for row in rows if row["hc_like_precision"]]
-        dep_prec = [_to_float(row["dep_like_precision"]) for row in rows if row["dep_like_precision"]]
+        hc_prec = [_to_float(row["hc_like_precision"]) for row in rows]
+        dep_prec = [_to_float(row["dep_like_precision"]) for row in rows]
         routable = [_to_float(row["routable_fraction"]) for row in rows]
         failures = []
-        if _mean(bas) < min_mean_ba:
+        if not _all_finite(bas) or _mean(bas) < min_mean_ba:
             failures.append("mean_ba")
-        if min(bas) < min_run_ba:
+        if not _all_finite(bas) or _min(bas) < min_run_ba:
             failures.append("min_ba")
-        if min(hc) < min_recall:
+        if not _all_finite(hc) or _min(hc) < min_recall:
             failures.append("hc_recall")
-        if min(dep) < min_recall:
+        if not _all_finite(dep) or _min(dep) < min_recall:
             failures.append("dep_recall")
-        if hc_prec and min(hc_prec) < min_bucket_precision:
+        if not _all_finite(hc_prec) or _min(hc_prec) < min_bucket_precision:
             failures.append("hc_like_precision")
-        if dep_prec and min(dep_prec) < min_bucket_precision:
+        if not _all_finite(dep_prec) or _min(dep_prec) < min_bucket_precision:
             failures.append("dep_like_precision")
         if any(row["passes_gate"] != "true" for row in rows):
             failures.append("run_level")
@@ -223,20 +226,29 @@ def _run_failures(
     dep_recall: float,
     hc_precision: float,
     dep_precision: float,
+    n_subjects: int,
+    n_hc_like: int,
+    n_dep_like: int,
     min_run_ba: float,
     min_recall: float,
     min_bucket_precision: float,
 ) -> list[str]:
     failures: list[str] = []
-    if subject_ba < min_run_ba:
+    if n_subjects <= 0:
+        failures.append("no_subject_rows")
+    if not math.isfinite(subject_ba) or subject_ba < min_run_ba:
         failures.append("subject_ba")
-    if hc_recall < min_recall:
+    if not math.isfinite(hc_recall) or hc_recall < min_recall:
         failures.append("hc_recall")
-    if dep_recall < min_recall:
+    if not math.isfinite(dep_recall) or dep_recall < min_recall:
         failures.append("dep_recall")
-    if math.isfinite(hc_precision) and hc_precision < min_bucket_precision:
+    if n_hc_like <= 0:
+        failures.append("no_hc_like_bucket")
+    if not math.isfinite(hc_precision) or hc_precision < min_bucket_precision:
         failures.append("hc_like_precision")
-    if math.isfinite(dep_precision) and dep_precision < min_bucket_precision:
+    if n_dep_like <= 0:
+        failures.append("no_dep_like_bucket")
+    if not math.isfinite(dep_precision) or dep_precision < min_bucket_precision:
         failures.append("dep_like_precision")
     return failures
 
@@ -305,6 +317,15 @@ def write_csv(path: Path, fields: list[str], rows: list[dict[str, str]]) -> None
 def _mean(values: list[float]) -> float:
     finite = [value for value in values if math.isfinite(value)]
     return sum(finite) / len(finite) if finite else float("nan")
+
+
+def _min(values: list[float]) -> float:
+    finite = [value for value in values if math.isfinite(value)]
+    return min(finite) if finite else float("nan")
+
+
+def _all_finite(values: list[float]) -> bool:
+    return bool(values) and all(math.isfinite(value) for value in values)
 
 
 def _to_float(value: Any) -> float:
