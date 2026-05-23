@@ -54,7 +54,7 @@ def dep_hc_features(
     if feature_set == "connectivity":
         return connectivity_summary_features(x)
     if feature_set == "graph_connectivity":
-        return regional_connectivity_features(x, channel_montage=str(channel_montage or "hust_30_a2"))
+        return regional_connectivity_features(x, channel_montage=_dep_hc_channel_montage(channel_montage))
     if feature_set == "time_frequency":
         return time_frequency_summary_features(x, sfreq=sfreq)
     if feature_set == "traditional":
@@ -77,7 +77,7 @@ def dep_hc_features(
         return np.concatenate(
             [
                 dep_hc_features(x, feature_set="traditional", sfreq=sfreq, channel_montage=channel_montage),
-                regional_connectivity_features(x, channel_montage=str(channel_montage or "hust_30_a2")),
+                regional_connectivity_features(x, channel_montage=_dep_hc_channel_montage(channel_montage)),
             ]
         )
     raise ValueError(f"unknown DEP/HC task feature_set: {feature_set}")
@@ -87,6 +87,12 @@ def connectivity_summary_features(x: np.ndarray) -> np.ndarray:
     pearson = connectivity_features(x, method="pearson")
     abs_pearson = connectivity_features(x, method="abs_pearson")
     return np.concatenate([pearson, abs_pearson]).astype(np.float64, copy=False)
+
+
+def _dep_hc_channel_montage(channel_montage: str | None) -> str:
+    if channel_montage is None:
+        return "hust_30_a2"
+    return str(channel_montage)
 
 
 def asymmetry_features(
