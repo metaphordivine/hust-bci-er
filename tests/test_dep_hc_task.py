@@ -357,7 +357,17 @@ def test_dep_hc_neural_task_smoke_uses_cohort_target():
 
 def test_dep_hc_neural_task_supports_factory_backbone_dict_logits():
     torch = pytest.importorskip("torch")
-    assert {"fbstcnet", "srfnet", "conformer_lite", "dgcnn"} <= DEP_HC_NEURAL_MODELS
+    assert {
+        "cbramod",
+        "conformer_lite",
+        "dgcnn",
+        "fbcnet",
+        "fbstcnet",
+        "riemannian_tangent",
+        "srf_fbstcnet_gate",
+        "srfnet",
+        "tri_context_gate",
+    } <= DEP_HC_NEURAL_MODELS
 
     logits = torch.randn(2, 2)
     assert torch.equal(_output_logits(logits), logits)
@@ -370,6 +380,14 @@ def test_dep_hc_neural_task_supports_factory_backbone_dict_logits():
     fbstcnet_kwargs = _build_model_kwargs("fbstcnet", {"variant": "C", "gamma": 123})
     assert fbstcnet_kwargs["variant"] == "C"
     assert fbstcnet_kwargs["gamma"] == 123
+    cbramod_kwargs = _build_model_kwargs("cbramod")
+    assert cbramod_kwargs["classifier_pooling"] == "mean"
+    assert cbramod_kwargs["d_model"] == 64
+    fbcnet_kwargs = _build_model_kwargs("fbcnet")
+    assert fbcnet_kwargs["n_segments"] == 5
+    gate_kwargs = _build_model_kwargs("tri_context_gate")
+    assert gate_kwargs["gate_hidden_dim"] == 16
+    assert gate_kwargs["fbstcnet"]["variant"] == "M"
 
 
 def test_dep_hc_neural_task_rejects_unknown_model_name():
