@@ -25,6 +25,7 @@ from hust_bci_er.audit.run_manifest import (
 from hust_bci_er.config.schema import validate_route_config
 from hust_bci_er.contracts.records import PredictionRecord
 from hust_bci_er.data.augmentations import apply_transforms_to_windows, transform_configs_from_route
+from hust_bci_er.data.quality import write_window_quality_csv
 from hust_bci_er.data.windowing import fixed_crop_slices, fixed_crop_spec_from_config
 from hust_bci_er.evaluation.crop_policy import FIXED_CROP_POLICIES
 from hust_bci_er.evaluation.exact_single_crop import assignment_grid, top4_predictions
@@ -34,6 +35,12 @@ from hust_bci_er.evaluation.report import build_metric_report, write_metric_repo
 # so that importing this module does not require torch to be installed.
 from hust_bci_er.preprocessing.euclidean_alignment import apply_ea_transform, fit_ea_transform
 from hust_bci_er.preprocessing.normalization import zscore_per_channel
+from hust_bci_er.preprocessing.train_stats import (
+    apply_channel_normalization,
+    apply_robust_clip,
+    fit_channel_normalization,
+    fit_robust_clip,
+)
 from hust_bci_er.preprocessing.whitening import channel_whiten
 
 SFREQ = 250
@@ -522,6 +529,33 @@ def _fit_ea_on_windows(train_windows: list[dict[str, Any]], preproc: list[str]) 
     if "euclidean_alignment" not in _preprocessing_names(preproc):
         return None
     return fit_ea_transform([w["x"] for w in train_windows])
+
+
+def _split_items_for_train_stats(
+    *,
+    train_windows: list[dict[str, Any]],
+    val_windows: list[dict[str, Any]],
+    eval_windows: list[dict[str, Any]],
+    eval_split: str,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    items = [("train", train_windows), ("val", val_windows)]
+    if eval_windows is not val_windows:
+        items.append((eval_split, eval_windows))
+    return items
+
+
+def _requested_splits(config: Mapping[str, Any] | None) -> set[str]:
+    if not isinstance(config, Mapping):
+        return {"train", "val", "test"}
+    raw = config.get("apply_to_splits") or config.get("apply_to") or ["train", "val", "test"]
+    if isinstance(raw, str):
+        values = [raw]
+    elif isinstance(raw, Sequence):
+        values = list(raw)
+    else:
+        values = ["train", "val", "test"]
+    normalized = {"val" if str(value) == "valid" else str(value) for value in values}
+    return normalized or {"train", "val", "test"}
 
 
 class _WindowDataset:
@@ -1320,6 +1354,74 @@ def run_real_classifier_route(
     _apply_preproc_to_windows(raw_val, ea_transform)
     if raw_eval is not raw_val:
         _apply_preproc_to_windows(raw_eval, ea_transform)
+    cleaning_config = route_data.get("cleaning") if isinstance(route_data.get("cleaning"), Mapping) else None
+    normalization_config = route_data.get("normalization") if isinstance(route_data.get("normalization"), Mapping) else None
+    quality_config = route_data.get("quality_score") if isinstance(route_data.get("quality_score"), Mapping) else None
+    split_window_items = _split_items_for_train_stats(
+        train_windows=raw_train,
+        val_windows=raw_val,
+        eval_windows=raw_eval,
+        eval_split=eval_split,
+    )
+    cleaning_state: Mapping[str, Any] | None = None
+    cleaning_audits: dict[str, Any] = {}
+    if cleaning_config is not None:
+        method = str(cleaning_config.get("method", ""))
+        if method != "per_channel_robust_clip":
+            raise ValueError(f"unsupported cleaning.method: {method}")
+        if checkpoint_payload is not None:
+            if not isinstance(checkpoint_payload.get("cleaning_state"), Mapping):
+                raise ValueError("reused checkpoint is missing cleaning_state")
+            cleaning_state = dict(checkpoint_payload["cleaning_state"])
+        else:
+            cleaning_state = fit_robust_clip(
+                raw_train,
+                clip_n_mad=float(cleaning_config.get("clip_n_mad", cleaning_config.get("n_mad", 8.0))),
+                eps=float(cleaning_config.get("eps", 1e-6)),
+            )
+        apply_splits = _requested_splits(cleaning_config)
+        for split_name, windows in split_window_items:
+            if split_name in apply_splits:
+                _, audit = apply_robust_clip(windows, cleaning_state, split=split_name)
+                cleaning_audits[split_name] = audit
+
+    normalization_state: Mapping[str, Any] | None = None
+    if normalization_config is not None:
+        if str(normalization_config.get("source")) != "train_fold_only":
+            raise ValueError("normalization.source must be train_fold_only")
+        if str(normalization_config.get("scope")) != "per_channel":
+            raise ValueError("normalization.scope must be per_channel")
+        if checkpoint_payload is not None:
+            if not isinstance(checkpoint_payload.get("normalization_state"), Mapping):
+                raise ValueError("reused checkpoint is missing normalization_state")
+            normalization_state = dict(checkpoint_payload["normalization_state"])
+        else:
+            normalization_state = fit_channel_normalization(
+                raw_train,
+                method=str(normalization_config.get("method")),
+                eps=float(normalization_config.get("eps", 1e-6)),
+            )
+        apply_splits = _requested_splits(normalization_config)
+        for split_name, windows in split_window_items:
+            if split_name in apply_splits:
+                apply_channel_normalization(windows, normalization_state)
+
+    window_quality_path: Path | None = None
+    if isinstance(quality_config, Mapping) and bool(quality_config.get("enabled", True)):
+        window_quality_path = run_dir / str(quality_config.get("output", "window_quality.csv"))
+        write_window_quality_csv(window_quality_path, {name: windows for name, windows in split_window_items})
+
+    if cleaning_audits:
+        (run_dir / "cleaning_audit.json").write_text(
+            json.dumps({
+                "route_id": route_id,
+                "method": str(cleaning_config.get("method")) if isinstance(cleaning_config, Mapping) else None,
+                "stats_source": "train_fold_only",
+                "state": cleaning_state,
+                "splits": cleaning_audits,
+            }, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
     train_windows = raw_train
     val_windows = raw_val
     eval_windows = raw_eval
@@ -1623,6 +1725,10 @@ def run_real_classifier_route(
                     "input_window_sec": input_window_sec,
                     "preprocessing": preproc,
                     "augmentation": augmentation if isinstance(augmentation, Mapping) else None,
+                    "cleaning": cleaning_config,
+                    "cleaning_state": cleaning_state,
+                    "normalization": normalization_config,
+                    "normalization_state": normalization_state,
                     "ea_transform": ea_transform.tolist() if ea_transform is not None else None,
                     "model_state_dict": result.best_state_dict,
                     "best_epoch": int(result.best_epoch),
@@ -1749,6 +1855,12 @@ def run_real_classifier_route(
             "augmentation_transforms": train_transform_configs,
             "augmentation_transform_scope": "train_only" if train_transform_configs else "none",
             "train_crop_jitter": train_crop_jitter,
+            "cleaning": cleaning_config,
+            "cleaning_state": cleaning_state,
+            "cleaning_audit": cleaning_audits or None,
+            "normalization": normalization_config,
+            "normalization_state": normalization_state,
+            "window_quality_csv": str(window_quality_path) if window_quality_path is not None else None,
             "runtime_performance": {
                 "torch": torch_runtime_config,
                 "dataloader": dataloader_config,
@@ -1803,6 +1915,12 @@ def run_real_classifier_route(
     manifest["augmentation_transforms"] = train_transform_configs
     manifest["augmentation_transform_scope"] = "train_only" if train_transform_configs else "none"
     manifest["train_crop_jitter"] = train_crop_jitter
+    manifest["cleaning"] = cleaning_config
+    manifest["cleaning_state"] = cleaning_state
+    manifest["cleaning_audit"] = cleaning_audits or None
+    manifest["normalization"] = normalization_config
+    manifest["normalization_state"] = normalization_state
+    manifest["window_quality_csv"] = str(window_quality_path) if window_quality_path is not None else None
     manifest["declared_protocol"] = str(route_data["evaluation"]["protocol"])
     manifest["adapter_execution_protocol"] = (
         "materialized_protocol_job_split" if split_manifest_path is not None else "single_subject_holdout_split"

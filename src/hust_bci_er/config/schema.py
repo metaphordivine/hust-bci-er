@@ -102,6 +102,9 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
             errors.append(f"unknown feature component: {name}")
 
     validate_augmentation(data, errors)
+    validate_cleaning(data, errors)
+    validate_normalization(data, errors)
+    validate_quality_score(data, errors)
 
     name = model_name(data.get("model"))
     if name not in registry.MODELS:
@@ -357,6 +360,85 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
             window_samples = augmentation_window_samples(augmentation)
             if max_shift is not None and window_samples is not None and max_shift >= window_samples:
                 errors.append(f"{field}.max_shift must be < augmentation.window_sec * 250Hz")
+
+
+def validate_cleaning(data: dict[str, Any], errors: list[str]) -> None:
+    cleaning = data.get("cleaning")
+    if cleaning is None:
+        return
+    if not isinstance(cleaning, dict):
+        errors.append("cleaning must be a mapping")
+        return
+    method = cleaning.get("method")
+    if method != "per_channel_robust_clip":
+        errors.append(f"unknown cleaning.method: {method}")
+        return
+    if cleaning.get("stats_source") != "train_fold_only":
+        errors.append("cleaning.stats_source must be train_fold_only")
+    clip_n_mad = validate_positive_number(
+        cleaning.get("clip_n_mad", cleaning.get("n_mad", 8.0)),
+        "cleaning.clip_n_mad",
+        errors,
+    )
+    if clip_n_mad is not None and clip_n_mad < 3.0:
+        errors.append("cleaning.clip_n_mad must be >= 3.0")
+    if "eps" in cleaning:
+        validate_positive_number(cleaning["eps"], "cleaning.eps", errors)
+    validate_split_list(
+        cleaning.get("apply_to_splits", cleaning.get("apply_to", ["train", "val", "test"])),
+        "cleaning.apply_to_splits",
+        errors,
+    )
+
+
+def validate_normalization(data: dict[str, Any], errors: list[str]) -> None:
+    normalization = data.get("normalization")
+    if normalization is None:
+        return
+    if not isinstance(normalization, dict):
+        errors.append("normalization must be a mapping")
+        return
+    if normalization.get("source") != "train_fold_only":
+        errors.append("normalization.source must be train_fold_only")
+    if normalization.get("scope") != "per_channel":
+        errors.append("normalization.scope must be per_channel")
+    if normalization.get("method") not in {"mean_std", "median_MAD"}:
+        errors.append(f"unknown normalization.method: {normalization.get('method')}")
+    if "eps" in normalization:
+        validate_positive_number(normalization["eps"], "normalization.eps", errors)
+    validate_split_list(
+        normalization.get("apply_to_splits", normalization.get("apply_to", ["train", "val", "test"])),
+        "normalization.apply_to_splits",
+        errors,
+    )
+
+
+def validate_quality_score(data: dict[str, Any], errors: list[str]) -> None:
+    quality = data.get("quality_score")
+    if quality is None:
+        return
+    if not isinstance(quality, dict):
+        errors.append("quality_score must be a mapping")
+        return
+    if "enabled" in quality and not isinstance(quality["enabled"], bool):
+        errors.append("quality_score.enabled must be boolean")
+    output = quality.get("output", "window_quality.csv")
+    if not isinstance(output, str) or not output or "/" in output or "\\" in output:
+        errors.append("quality_score.output must be a simple file name")
+
+
+def validate_split_list(value: Any, field: str, errors: list[str]) -> None:
+    allowed = {"train", "val", "valid", "test"}
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        errors.append(f"{field} must be a list of split names")
+        return
+    for item in items:
+        if item not in allowed:
+            errors.append(f"{field} has unsupported split: {item}")
 
 
 def augmentation_window_samples(augmentation: dict[str, Any]) -> int | None:
