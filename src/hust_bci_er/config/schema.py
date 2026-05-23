@@ -332,6 +332,35 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
                 high = validate_positive_number(scale_range[1], f"{field}.scale_range[1]", errors)
                 if low is not None and high is not None and low > high:
                     errors.append(f"{field}.scale_range must be sorted")
+        elif name == "band_amplitude_scale":
+            sfreq = validate_positive_number(item.get("sfreq", DEFAULT_SFREQ), f"{field}.sfreq", errors)
+            scale_range = item.get("scale_range", [0.9, 1.1])
+            if not isinstance(scale_range, list) or len(scale_range) != 2:
+                errors.append(f"{field}.scale_range must be [low, high]")
+            else:
+                low = validate_positive_number(scale_range[0], f"{field}.scale_range[0]", errors)
+                high = validate_positive_number(scale_range[1], f"{field}.scale_range[1]", errors)
+                if low is not None and high is not None and low > high:
+                    errors.append(f"{field}.scale_range must be sorted")
+            bands = item.get("bands")
+            if bands is not None:
+                if not isinstance(bands, dict) or not bands:
+                    errors.append(f"{field}.bands must be a mapping")
+                else:
+                    for band_name, bounds in bands.items():
+                        if not isinstance(band_name, str) or not band_name:
+                            errors.append(f"{field}.bands keys must be non-empty strings")
+                            continue
+                        if not isinstance(bounds, list) or len(bounds) != 2:
+                            errors.append(f"{field}.bands.{band_name} must be [low, high]")
+                            continue
+                        low_hz = validate_non_negative_number(bounds[0], f"{field}.bands.{band_name}[0]", errors)
+                        high_hz = validate_positive_number(bounds[1], f"{field}.bands.{band_name}[1]", errors)
+                        if low_hz is not None and high_hz is not None:
+                            if low_hz >= high_hz:
+                                errors.append(f"{field}.bands.{band_name} must be sorted")
+                            if sfreq is not None and high_hz >= sfreq / 2.0:
+                                errors.append(f"{field}.bands.{band_name}[1] must be below Nyquist")
         elif name == "channel_dropout":
             p = validate_non_negative_number(item.get("p", 0.1), f"{field}.p", errors)
             if p is not None and p >= 1.0:

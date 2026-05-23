@@ -148,6 +148,9 @@ routes:
   - route_id: fixed_crop_car_fbstcnet_freq_mask_weak_v1
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_car_fbstcnet_band_amp_scale_weak_v1
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_car_fbstcnet_time_shift_v1
     owner: metaphordivine
     blocker: missing_real_candidate_run

@@ -4,6 +4,7 @@ import pytest
 from hust_bci_er.data.augmentations import (
     amplitude_scale,
     apply_transforms_to_windows,
+    band_amplitude_scale,
     channel_dropout,
     channel_noise,
     gaussian_noise,
@@ -26,6 +27,7 @@ def test_window_transforms_preserve_shape_and_dtype():
     for fn, kwargs in [
         (gaussian_noise, {"std": 0.01}),
         (amplitude_scale, {"scale_range": [0.9, 1.1]}),
+        (band_amplitude_scale, {"sfreq": 32.0, "bands": {"alpha": [8.0, 12.0]}}),
         (channel_dropout, {"p": 0.25}),
         (channel_noise, {"max_channels": 2, "noise_std_ratio": 0.03}),
         (random_bandstop, {"sfreq": 32.0, "width_hz": 2.0, "freq_range": [4.0, 10.0]}),
@@ -149,3 +151,22 @@ def test_random_bandstop_reduces_target_sine_energy():
     )
 
     assert float(np.mean(y * y)) < float(np.mean(x * x)) * 0.2
+
+
+def test_band_amplitude_scale_changes_selected_band_energy():
+    class FixedScaleRng:
+        def uniform(self, *args, **kwargs):
+            return 0.5
+
+    sfreq = 100.0
+    t = np.arange(100, dtype=np.float32) / sfreq
+    x = np.sin(2.0 * np.pi * 10.0 * t).astype(np.float32)[None, :]
+    y = band_amplitude_scale(
+        x,
+        rng=FixedScaleRng(),
+        sfreq=sfreq,
+        bands={"alpha": [8.0, 12.0]},
+        scale_range=[0.5, 0.5],
+    )
+
+    assert float(np.mean(y * y)) == pytest.approx(float(np.mean(x * x)) * 0.25, rel=0.05)

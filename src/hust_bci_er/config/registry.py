@@ -84,6 +84,7 @@ TORCH_BACKBONES = {
 
 AUGMENTATION_TRANSFORMS = {
     "amplitude_scale",
+    "band_amplitude_scale",
     "channel_dropout",
     "channel_noise",
     "gaussian_noise",

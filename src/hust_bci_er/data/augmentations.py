@@ -212,8 +212,45 @@ def random_bandstop(
     return np.fft.irfft(spectrum, n=n_times, axis=-1).astype(np.float32)
 
 
+def band_amplitude_scale(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    sfreq: float = 250.0,
+    bands: Mapping[str, Sequence[float]] | None = None,
+    scale_range: Sequence[float] = (0.9, 1.1),
+) -> np.ndarray:
+    if sfreq <= 0:
+        raise ValueError("band_amplitude_scale.sfreq must be positive")
+    if not isinstance(scale_range, Sequence) or len(scale_range) != 2:
+        raise ValueError("band_amplitude_scale.scale_range must contain [low, high]")
+    low_scale = float(scale_range[0])
+    high_scale = float(scale_range[1])
+    if low_scale <= 0 or high_scale <= 0 or low_scale > high_scale:
+        raise ValueError("band_amplitude_scale.scale_range must be positive and sorted")
+    band_map = bands or {"theta": (4.0, 8.0), "alpha": (8.0, 13.0), "beta": (13.0, 30.0)}
+    signal = np.asarray(x, dtype=np.float32)
+    n_times = signal.shape[-1]
+    if n_times < 2:
+        return signal.copy()
+    freqs = np.fft.rfftfreq(n_times, d=1.0 / float(sfreq))
+    spectrum = np.fft.rfft(signal.astype(np.float64), axis=-1)
+    for name, bounds in band_map.items():
+        if not isinstance(bounds, Sequence) or len(bounds) != 2:
+            raise ValueError(f"band_amplitude_scale.bands.{name} must contain [low, high]")
+        low = float(bounds[0])
+        high = float(bounds[1])
+        if low < 0 or high <= low or high >= float(sfreq) / 2.0:
+            raise ValueError(f"band_amplitude_scale.bands.{name} must be sorted below Nyquist")
+        mask = (freqs >= low) & (freqs < high)
+        if np.any(mask):
+            spectrum[..., mask] *= float(rng.uniform(low_scale, high_scale))
+    return np.fft.irfft(spectrum, n=n_times, axis=-1).astype(np.float32)
+
+
 AUGMENTATION_TRANSFORMS = {
     "amplitude_scale": amplitude_scale,
+    "band_amplitude_scale": band_amplitude_scale,
     "channel_noise": channel_noise,
     "gaussian_noise": gaussian_noise,
     "channel_dropout": channel_dropout,
