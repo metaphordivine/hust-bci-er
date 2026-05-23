@@ -141,6 +141,7 @@ def test_vote_frac_threshold_candidates_include_discrete_boundaries():
     assert 1.0 / 3.0 in candidates
     assert 2.0 / 3.0 in candidates
     assert 0.8 in candidates
+    assert _threshold_boundary_candidates({"HC001": [0.1, 0.8, 0.9]}, aggregation="mean") == []
 
 
 def test_resolve_preprocessing_overrides_default_when_cli_supplies_values():

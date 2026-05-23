@@ -405,9 +405,9 @@ def _subject_scores_for_threshold(
 
 
 def _threshold_boundary_candidates(subject_probs: Mapping[str, Sequence[float]], *, aggregation: str) -> list[float]:
-    raw_probs = [float(prob) for probs in subject_probs.values() for prob in probs]
     if aggregation != "vote_frac":
-        return raw_probs
+        return []
+    raw_probs = [float(prob) for probs in subject_probs.values() for prob in probs]
     vote_boundaries = {
         float(k) / float(len(probs))
         for probs in subject_probs.values()
