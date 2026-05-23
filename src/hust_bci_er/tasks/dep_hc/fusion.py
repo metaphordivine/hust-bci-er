@@ -35,6 +35,7 @@ def evaluate_dep_hc_feature_fusion(
     class_weight_mode: str = "balanced",
     threshold_objective: str = "balanced_accuracy",
     weight_step: float = 0.05,
+    fixed_first_weight: float | None = None,
     subject_aggregation: str = "mean",
 ) -> dict[str, Any]:
     features = tuple(str(feature_set) for feature_set in feature_sets)
@@ -91,6 +92,7 @@ def evaluate_dep_hc_feature_fusion(
         val_probs,
         threshold_objective=threshold_objective,
         weight_step=weight_step,
+        fixed_first_weight=fixed_first_weight,
         subject_aggregation=subject_aggregation,
     )
     weights = np.asarray([weight, 1.0 - weight], dtype=np.float64)
@@ -106,6 +108,7 @@ def evaluate_dep_hc_feature_fusion(
         "task": "dep_hc",
         "fusion_feature_sets": list(features),
         "fusion_weight_by_feature": {features[0]: float(weights[0]), features[1]: float(weights[1])},
+        "fusion_weight_source": "fixed" if fixed_first_weight is not None else "validation_subjects",
         "feature_dims": feature_dims,
         "window_ba": balanced_accuracy_binary(y_eval, y_pred),
         "subject_ba": balanced_accuracy_binary(subject_truth, subject_pred),
@@ -137,8 +140,24 @@ def _select_fusion_weight_and_threshold(
     *,
     threshold_objective: str,
     weight_step: float,
+    fixed_first_weight: float | None = None,
     subject_aggregation: str,
 ) -> tuple[float, dict[str, float | str]]:
+    if fixed_first_weight is not None:
+        fixed_weight = float(fixed_first_weight)
+        if fixed_weight < 0.0 or fixed_weight > 1.0:
+            raise ValueError("fixed_first_weight must be in [0, 1]")
+        weights = np.asarray([fixed_weight, 1.0 - fixed_weight], dtype=np.float64)
+        p_dep = _weighted_probabilities(probabilities, weights)
+        summary = subject_threshold_diagnostic(
+            samples,
+            y_true,
+            p_dep,
+            objective=threshold_objective,
+            aggregation=subject_aggregation,
+        )
+        return fixed_weight, summary
+
     best_weight = 0.5
     best_summary: dict[str, float | str] | None = None
     best_key: tuple[float, float, float, float] | None = None
