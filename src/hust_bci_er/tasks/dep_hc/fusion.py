@@ -139,18 +139,11 @@ def _select_fusion_weight_and_threshold(
     best_weight = 0.5
     best_summary: dict[str, float | str] | None = None
     best_key: tuple[float, float, float, float] | None = None
-    steps = int(round(1.0 / float(weight_step)))
-    for idx in range(steps + 1):
-        weight = min(1.0, max(0.0, idx * float(weight_step)))
+    for weight in _weight_candidates(weight_step):
         weights = np.asarray([weight, 1.0 - weight], dtype=np.float64)
         p_dep = _weighted_probabilities(probabilities, weights)
         summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective=threshold_objective)
-        key = (
-            float(summary["balanced_accuracy"]),
-            float(summary["min_recall"]),
-            -float(summary["recall_gap"]),
-            -abs(float(weight) - 0.5),
-        )
+        key = _fusion_selection_key(summary, threshold_objective=threshold_objective, weight=float(weight))
         if best_key is None or key > best_key:
             best_key = key
             best_weight = float(weight)
@@ -158,6 +151,37 @@ def _select_fusion_weight_and_threshold(
     if best_summary is None:
         raise RuntimeError("failed to select DEP/HC fusion weight")
     return best_weight, best_summary
+
+
+def _weight_candidates(weight_step: float) -> tuple[float, ...]:
+    values = {0.0, 1.0}
+    weight = 0.0
+    while weight < 1.0:
+        values.add(round(float(weight), 12))
+        weight += float(weight_step)
+    return tuple(sorted(values))
+
+
+def _fusion_selection_key(
+    summary: dict[str, float | str],
+    *,
+    threshold_objective: str,
+    weight: float,
+) -> tuple[float, float, float, float]:
+    ba = float(summary["balanced_accuracy"])
+    min_recall = float(summary["min_recall"])
+    recall_gap = float(summary["recall_gap"])
+    if threshold_objective == "balanced_accuracy":
+        primary = ba
+        secondary = min_recall
+        tertiary = -recall_gap
+    elif threshold_objective == "min_recall":
+        primary = min_recall
+        secondary = ba
+        tertiary = -recall_gap
+    else:
+        raise ValueError(f"unknown threshold objective: {threshold_objective}")
+    return (primary, secondary, tertiary, -abs(float(weight) - 0.5))
 
 
 def _weighted_probabilities(probabilities: Sequence[np.ndarray], weights: np.ndarray) -> np.ndarray:

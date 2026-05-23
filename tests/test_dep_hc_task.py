@@ -8,7 +8,7 @@ import pytest
 
 from hust_bci_er.analysis.dep_hc_router import RouterSample, subject_threshold_diagnostic
 from hust_bci_er.tasks.dep_hc.experiment import evaluate_dep_hc_task, extract_dep_hc_task_features, write_dep_hc_task_outputs
-from hust_bci_er.tasks.dep_hc.fusion import evaluate_dep_hc_feature_fusion
+from hust_bci_er.tasks.dep_hc.fusion import _fusion_selection_key, _weight_candidates, evaluate_dep_hc_feature_fusion
 from hust_bci_er.tasks.dep_hc.channel_graph import (
     channel_graph_adjacency,
     channel_graph_metadata,
@@ -183,6 +183,23 @@ def test_dep_hc_feature_fusion_selects_validation_weight():
     assert result["metrics"]["fusion_feature_sets"] == ["bandpower", "time_frequency"]
     assert set(result["metrics"]["fusion_weight_by_feature"]) == {"bandpower", "time_frequency"}
     assert result["metrics"]["threshold_source"] == "validation_subjects"
+
+
+def test_dep_hc_fusion_weight_selection_respects_objective_and_endpoints():
+    assert _weight_candidates(0.4) == (0.0, 0.4, 0.8, 1.0)
+    high_ba = {"balanced_accuracy": 0.9, "min_recall": 0.4, "recall_gap": 0.8}
+    high_min = {"balanced_accuracy": 0.7, "min_recall": 0.7, "recall_gap": 0.0}
+
+    assert _fusion_selection_key(high_ba, threshold_objective="balanced_accuracy", weight=0.5) > _fusion_selection_key(
+        high_min,
+        threshold_objective="balanced_accuracy",
+        weight=0.5,
+    )
+    assert _fusion_selection_key(high_min, threshold_objective="min_recall", weight=0.5) > _fusion_selection_key(
+        high_ba,
+        threshold_objective="min_recall",
+        weight=0.5,
+    )
 
 
 def test_write_dep_hc_task_outputs_uses_task_specific_payload(tmp_path):
