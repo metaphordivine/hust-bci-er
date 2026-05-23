@@ -79,6 +79,31 @@ def channel_dropout(
     return signal
 
 
+def channel_noise(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    max_channels: int = 2,
+    noise_std_ratio: float = 0.03,
+    exclude_channels: Sequence[str] | None = None,
+    channel_names: Sequence[str] = HUST_30_A2_CHANNELS,
+) -> np.ndarray:
+    if max_channels <= 0:
+        raise ValueError("channel_noise.max_channels must be positive")
+    if noise_std_ratio < 0:
+        raise ValueError("channel_noise.noise_std_ratio must be non-negative")
+    signal = np.asarray(x, dtype=np.float32).copy()
+    excluded = set(indices_for_channel_names(channel_names, exclude_channels or ()))
+    eligible = [idx for idx in range(signal.shape[0]) if idx not in excluded]
+    if not eligible or noise_std_ratio == 0:
+        return signal
+    n_channels = int(rng.integers(1, min(int(max_channels), len(eligible)) + 1))
+    selected = rng.choice(np.asarray(eligible, dtype=np.int64), size=n_channels, replace=False)
+    noise_std = float(noise_std_ratio) * max(float(np.std(signal)), 1e-12)
+    signal[selected, :] += rng.normal(0.0, noise_std, size=(n_channels, signal.shape[-1])).astype(np.float32)
+    return signal.astype(np.float32)
+
+
 def _mask_width(n_times: int, *, max_width: int | None = None, mask_ratio: float | None = None) -> int:
     if mask_ratio is not None:
         if not 0.0 < mask_ratio < 1.0:
@@ -189,6 +214,7 @@ def random_bandstop(
 
 AUGMENTATION_TRANSFORMS = {
     "amplitude_scale": amplitude_scale,
+    "channel_noise": channel_noise,
     "gaussian_noise": gaussian_noise,
     "channel_dropout": channel_dropout,
     "smooth_time_mask": smooth_time_mask,

@@ -142,6 +142,9 @@ routes:
   - route_id: fixed_crop_car_fbstcnet_nonfrontal_channel_dropout_v1
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_car_fbstcnet_channel_noise_v1
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_car_fbstcnet_freq_mask_weak_v1
     owner: metaphordivine
     blocker: missing_real_candidate_run

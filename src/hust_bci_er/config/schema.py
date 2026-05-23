@@ -342,6 +342,13 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
                 exclude = item.get("exclude_channels")
                 if not isinstance(exclude, list) or any(not isinstance(ch, str) or not ch for ch in exclude):
                     errors.append(f"{field}.exclude_channels must be a list of channel names")
+        elif name == "channel_noise":
+            validate_positive_int(item.get("max_channels", 2), f"{field}.max_channels", errors)
+            validate_non_negative_number(item.get("noise_std_ratio", 0.03), f"{field}.noise_std_ratio", errors)
+            if "exclude_channels" in item:
+                exclude = item.get("exclude_channels")
+                if not isinstance(exclude, list) or any(not isinstance(ch, str) or not ch for ch in exclude):
+                    errors.append(f"{field}.exclude_channels must be a list of channel names")
         elif name == "time_mask":
             max_width = validate_positive_int(item.get("max_width", 25), f"{field}.max_width", errors)
             window_samples = augmentation_window_samples(augmentation)

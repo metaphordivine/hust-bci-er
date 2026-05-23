@@ -5,6 +5,7 @@ from hust_bci_er.data.augmentations import (
     amplitude_scale,
     apply_transforms_to_windows,
     channel_dropout,
+    channel_noise,
     gaussian_noise,
     normalize_transform_config,
     random_bandstop,
@@ -26,6 +27,7 @@ def test_window_transforms_preserve_shape_and_dtype():
         (gaussian_noise, {"std": 0.01}),
         (amplitude_scale, {"scale_range": [0.9, 1.1]}),
         (channel_dropout, {"p": 0.25}),
+        (channel_noise, {"max_channels": 2, "noise_std_ratio": 0.03}),
         (random_bandstop, {"sfreq": 32.0, "width_hz": 2.0, "freq_range": [4.0, 10.0]}),
         (smooth_time_mask, {"mask_ratio": 0.10}),
         (time_mask, {"max_width": 8}),
@@ -58,6 +60,22 @@ def test_channel_dropout_can_exclude_frontal_channels():
 
     np.testing.assert_array_equal(y[[0, 1, 2, 6], :], x[[0, 1, 2, 6], :])
     assert np.any(np.isclose(y.sum(axis=1), 0.0))
+
+
+def test_channel_noise_can_exclude_frontal_channels():
+    rng = np.random.default_rng(0)
+    x = np.ones((30, 16), dtype=np.float32)
+
+    y = channel_noise(
+        x,
+        rng=rng,
+        max_channels=8,
+        noise_std_ratio=0.1,
+        exclude_channels=["FP1", "FP2", "F7", "F8"],
+    )
+
+    np.testing.assert_array_equal(y[[0, 1, 2, 6], :], x[[0, 1, 2, 6], :])
+    assert y.shape == x.shape
 
 
 def test_apply_transforms_only_changes_train_split():
