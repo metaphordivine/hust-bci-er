@@ -218,7 +218,7 @@ def evaluate_router(
             }
         )
 
-    subject_rows = aggregate_subject_rows(prediction_rows)
+    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold)
     subject_truth = np.array([cohort_label(row["cohort"]) for row in subject_rows], dtype=int)
     subject_pred = np.array([cohort_label(row["predicted_cohort"]) for row in subject_rows], dtype=int)
     metrics = {
@@ -262,14 +262,14 @@ def select_subject_threshold(samples: Sequence[RouterSample], y_true: np.ndarray
     return best_threshold
 
 
-def aggregate_subject_rows(prediction_rows: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
+def aggregate_subject_rows(prediction_rows: Sequence[Mapping[str, str]], *, threshold: float = 0.5) -> list[dict[str, str]]:
     by_subject: dict[str, list[Mapping[str, str]]] = {}
     for row in prediction_rows:
         by_subject.setdefault(str(row["subject_id"]), []).append(row)
     out: list[dict[str, str]] = []
     for subject_id, rows in sorted(by_subject.items()):
         mean_p_dep = float(np.mean([float(row["p_dep"]) for row in rows]))
-        pred_label = int(mean_p_dep >= 0.5)
+        pred_label = int(mean_p_dep >= float(threshold))
         truth = str(rows[0]["y_true"])
         cohort = str(rows[0]["cohort"])
         out.append(
@@ -279,6 +279,7 @@ def aggregate_subject_rows(prediction_rows: Sequence[Mapping[str, str]]) -> list
                 "y_true": truth,
                 "mean_p_dep": f"{mean_p_dep:.12g}",
                 "mean_p_hc": f"{1.0 - mean_p_dep:.12g}",
+                "threshold": f"{float(threshold):.12g}",
                 "confidence": f"{max(mean_p_dep, 1.0 - mean_p_dep):.12g}",
                 "predicted_cohort": LABEL_TO_COHORT[pred_label],
                 "correct": str(int(pred_label == int(truth))),

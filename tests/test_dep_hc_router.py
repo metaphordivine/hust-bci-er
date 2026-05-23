@@ -5,6 +5,7 @@ import json
 import zlib
 
 import numpy as np
+import pytest
 
 from hust_bci_er.analysis.dep_hc_router import (
     RouterSample,
@@ -18,6 +19,8 @@ from hust_bci_er.analysis.dep_hc_router import (
     select_subject_threshold,
     write_router_outputs,
 )
+from scripts.run_dep_hc_router import resolve_preprocessing
+from scripts import run_dep_hc_router
 
 
 def _sample(subject: str, cohort: str, *, value: float, crop_id: int = 0) -> RouterSample:
@@ -86,8 +89,33 @@ def test_aggregate_subject_rows_uses_mean_probability():
 
     by_id = {row["subject_id"]: row for row in subjects}
     assert by_id["DEP001"]["predicted_cohort"] == "DEP"
+    assert by_id["DEP001"]["threshold"] == "0.5"
     assert by_id["DEP001"]["n_windows"] == "2"
     assert by_id["HC001"]["predicted_cohort"] == "HC"
+
+
+def test_aggregate_subject_rows_uses_selected_threshold():
+    rows = [
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.8"},
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.6"},
+    ]
+
+    subjects = aggregate_subject_rows(rows, threshold=0.75)
+
+    assert subjects[0]["predicted_cohort"] == "HC"
+    assert subjects[0]["correct"] == "0"
+    assert subjects[0]["threshold"] == "0.75"
+
+
+def test_resolve_preprocessing_overrides_default_when_cli_supplies_values():
+    assert resolve_preprocessing(None) == ["car", "zscore"]
+    assert resolve_preprocessing(["bandpass"]) == ["bandpass"]
+    assert resolve_preprocessing(["bandpass", "zscore"]) == ["bandpass", "zscore"]
+
+
+def test_run_dep_hc_router_rejects_unknown_preprocessing(tmp_path):
+    with pytest.raises(ValueError, match="unknown preprocessing step"):
+        run_dep_hc_router.main(["--out-dir", str(tmp_path), "--preprocessing", "zscroe"])
 
 
 def test_select_subject_threshold_uses_validation_subjects():

@@ -21,6 +21,13 @@ from hust_bci_er.evaluation.protocols.subject_splits import p1_subject_split, p2
 from hust_bci_er.training import _real_adapter_impl as real_adapter  # noqa: E402
 
 
+DEFAULT_PREPROCESSING: tuple[str, ...] = ("car", "zscore")
+
+
+def resolve_preprocessing(values: list[str] | None) -> list[str]:
+    return list(values) if values is not None else list(DEFAULT_PREPROCESSING)
+
+
 def _subjects_for_protocol(
     trial_rows: list[dict[str, Any]],
     *,
@@ -91,12 +98,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-trial-sec", type=float, default=50.0)
     parser.add_argument("--window-sec", type=float, default=10.0)
     parser.add_argument("--n-crops", type=int, default=5)
-    parser.add_argument("--preprocessing", action="append", default=["car", "zscore"], help="Preprocessing step. Can be repeated.")
+    parser.add_argument("--preprocessing", action="append", default=None, help="Preprocessing step. Can be repeated. Overrides the default car+zscore pipeline when supplied.")
     parser.add_argument("--feature-set", choices=["cov_tangent", "bandpower", "cov_tangent_bandpower"], default="cov_tangent_bandpower")
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--epochs", type=int, default=600)
     parser.add_argument("--l2", type=float, default=1e-3)
     args = parser.parse_args(argv)
+
+    preprocessing = resolve_preprocessing(args.preprocessing)
+    real_adapter._validate_adapter_preprocessing(preprocessing)
 
     data_root = real_adapter._resolve_data_root(args.data_root)
     trials = real_adapter._load_mat_trials(data_root)
@@ -122,13 +132,13 @@ def main(argv: list[str] | None = None) -> int:
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
-        preproc=list(args.preprocessing),
+        preproc=preprocessing,
         skip_preproc=True,
     )
-    ea_transform = real_adapter._fit_ea_on_windows(raw_train, list(args.preprocessing))
+    ea_transform = real_adapter._fit_ea_on_windows(raw_train, preprocessing)
     train_samples = _make_samples(
         train_trials,
-        preprocessing=list(args.preprocessing),
+        preprocessing=preprocessing,
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
@@ -136,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     val_samples = _make_samples(
         val_trials,
-        preprocessing=list(args.preprocessing),
+        preprocessing=preprocessing,
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
@@ -144,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     eval_samples = _make_samples(
         eval_trials,
-        preprocessing=list(args.preprocessing),
+        preprocessing=preprocessing,
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
@@ -170,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         "source_trial_sec": args.source_trial_sec,
         "window_sec": args.window_sec,
         "n_crops": args.n_crops,
-        "preprocessing": list(args.preprocessing),
+        "preprocessing": preprocessing,
         "feature_set": args.feature_set,
         "train_subjects": sorted(train_subjects),
         "val_subjects": sorted(val_subjects),
