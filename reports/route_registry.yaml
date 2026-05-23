@@ -136,6 +136,9 @@ routes:
   - route_id: fixed_crop_car_fbstcnet_robust_clip_train_mad8_v1
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_car_fbstcnet_nonfrontal_channel_dropout_v1
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_car_fbstcnet
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
