@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import json
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -124,3 +127,42 @@ def evaluate_dep_hc_task(
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
     return {"model": model, "metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
 
+
+def write_dep_hc_task_outputs(result: dict[str, Any], out_dir: Path, *, config: dict[str, Any]) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prediction_rows = list(result["prediction_rows"])
+    subject_rows = list(result["subject_rows"])
+    if prediction_rows:
+        with (out_dir / "dep_hc_predictions.csv").open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(prediction_rows[0]))
+            writer.writeheader()
+            writer.writerows(prediction_rows)
+    if subject_rows:
+        with (out_dir / "dep_hc_subject_metrics.csv").open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(subject_rows[0]))
+            writer.writeheader()
+            writer.writerows(subject_rows)
+    payload = {"task": "dep_hc", "config": dict(config), "metrics": result["metrics"]}
+    (out_dir / "dep_hc_task_diagnostic.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    (out_dir / "dep_hc_task_diagnostic.md").write_text(render_dep_hc_task_markdown(payload), encoding="utf-8")
+
+
+def render_dep_hc_task_markdown(payload: dict[str, Any]) -> str:
+    metrics = payload.get("metrics", {})
+    lines = [
+        "# DEP/HC Task Diagnostic",
+        "",
+        "This is an independent DEP/HC cohort-classification task, not an emotion Top-4 route.",
+        "Subject identifiers are used for split membership and reporting only.",
+        "",
+        "## Metrics",
+        "",
+    ]
+    for key in sorted(metrics):
+        value = metrics[key]
+        if isinstance(value, float):
+            lines.append(f"- `{key}`: {value:.6f}")
+        else:
+            lines.append(f"- `{key}`: {value}")
+    lines.append("")
+    return "\n".join(lines)

@@ -15,8 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from hust_bci_er.analysis.dep_hc_router import write_router_outputs  # noqa: E402
-from hust_bci_er.tasks.dep_hc.experiment import evaluate_dep_hc_task  # noqa: E402
+from hust_bci_er.tasks.dep_hc.experiment import evaluate_dep_hc_task, write_dep_hc_task_outputs  # noqa: E402
 from hust_bci_er.tasks.dep_hc.features import DEP_HC_FEATURE_SETS  # noqa: E402
 from hust_bci_er.training import _real_adapter_impl as real_adapter  # noqa: E402
 from scripts.run_dep_hc_router import _make_samples, _subjects_for_protocol, resolve_preprocessing  # noqa: E402
@@ -46,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
 
     preprocessing = resolve_preprocessing(args.preprocessing)
     real_adapter._validate_adapter_preprocessing(preprocessing)
+    if args.feature_set in {"traditional", "traditional_time_frequency"} and args.channel_montage != "hust_30_a2":
+        parser.error("--feature-set traditional* requires --channel-montage hust_30_a2")
     data_root = real_adapter._resolve_data_root(args.data_root)
     trials = real_adapter._load_mat_trials(data_root)
     trial_rows = [
@@ -129,11 +130,10 @@ def main(argv: list[str] | None = None) -> int:
         "val_subjects": sorted(val_subjects),
         "test_subjects": sorted(test_subjects),
     }
-    write_router_outputs(result, args.out_dir, config=config)
+    write_dep_hc_task_outputs(result, args.out_dir, config=config)
     print(json.dumps({"out_dir": str(args.out_dir.resolve()), "metrics": result["metrics"]}, ensure_ascii=False))
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

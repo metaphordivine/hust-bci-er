@@ -87,6 +87,8 @@ def asymmetry_features(
     arr = np.asarray(x, dtype=np.float64)
     if arr.ndim != 2:
         raise ValueError("EEG sample must be shaped [channels, time]")
+    if channel_montage != "hust_30_a2":
+        raise ValueError("DEP/HC asymmetry features require channel_montage='hust_30_a2'")
     names = channel_names_for_montage(channel_montage, arr.shape[0])
     powers = _band_log_power_by_channel(arr, sfreq=sfreq, bands=bands)
     band_lookup = {name: idx for idx, (name, _low, _high) in enumerate(bands)}
@@ -147,4 +149,3 @@ def _band_log_power_by_channel(
         else:
             out.append(np.full(arr.shape[0], np.log(float(eps)), dtype=np.float64))
     return np.stack(out, axis=1)
-
