@@ -41,6 +41,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--epochs", type=int, default=600)
     parser.add_argument("--l2", type=float, default=1e-3)
+    parser.add_argument(
+        "--threshold-objective",
+        choices=["balanced_accuracy", "min_recall"],
+        default="balanced_accuracy",
+        help="Validation-subject objective used to freeze the DEP threshold before evaluation.",
+    )
     args = parser.parse_args(argv)
 
     preprocessing = resolve_preprocessing(args.preprocessing)
@@ -109,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         lr=args.lr,
         epochs=args.epochs,
         l2=args.l2,
+        threshold_objective=args.threshold_objective,
     )
     config = {
         "task": "dep_hc",
@@ -126,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         "feature_set": args.feature_set,
         "channel_montage": args.channel_montage,
         "label_source": "cohort field; subject/trial identifiers are split and audit metadata only",
+        "threshold_objective": args.threshold_objective,
         "train_subjects": sorted(train_subjects),
         "val_subjects": sorted(val_subjects),
         "test_subjects": sorted(test_subjects),

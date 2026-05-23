@@ -6,7 +6,7 @@ import json
 import numpy as np
 import pytest
 
-from hust_bci_er.analysis.dep_hc_router import RouterSample
+from hust_bci_er.analysis.dep_hc_router import RouterSample, subject_threshold_diagnostic
 from hust_bci_er.tasks.dep_hc.experiment import evaluate_dep_hc_task, extract_dep_hc_task_features, write_dep_hc_task_outputs
 from hust_bci_er.tasks.dep_hc.channel_graph import (
     channel_graph_adjacency,
@@ -115,6 +115,27 @@ def test_dep_hc_task_feature_matrix_and_eval():
     assert result["metrics"]["feature_set"] == "traditional_graph"
     assert result["metrics"]["n_eval_subjects"] == 2
     assert {"DEP101", "HC101"} == {row["subject_id"] for row in result["subject_rows"]}
+
+
+def test_subject_threshold_objective_is_validation_only_summary():
+    samples = [
+        _sample("HC001", "HC"),
+        _sample("HC002", "HC"),
+        _sample("DEP001", "DEP"),
+        _sample("DEP002", "DEP"),
+    ]
+    y_true = np.array([0, 0, 1, 1])
+    p_dep = np.array([0.40, 0.62, 0.58, 0.70])
+
+    ba_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="balanced_accuracy")
+    min_recall_summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective="min_recall")
+
+    assert ba_summary["threshold"] == pytest.approx(0.5)
+    assert ba_summary["balanced_accuracy"] == pytest.approx(0.75)
+    assert min_recall_summary["threshold"] == pytest.approx(0.5)
+    assert min_recall_summary["min_recall"] == pytest.approx(0.5)
+    with pytest.raises(ValueError, match="unknown threshold objective"):
+        subject_threshold_diagnostic(samples, y_true, p_dep, objective="recall_gap")
 
 
 def test_write_dep_hc_task_outputs_uses_task_specific_payload(tmp_path):

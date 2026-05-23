@@ -19,7 +19,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     cohort_label,
     fit_logistic_router,
     predict_dep_probability,
-    select_subject_threshold,
+    subject_threshold_diagnostic,
 )
 from hust_bci_er.tasks.dep_hc.features import DEP_HC_FEATURE_SETS, dep_hc_features
 
@@ -54,6 +54,7 @@ def evaluate_dep_hc_task(
     lr: float = 0.05,
     epochs: int = 600,
     l2: float = 1e-3,
+    threshold_objective: str = "balanced_accuracy",
 ) -> dict[str, Any]:
     x_train = extract_dep_hc_task_features(
         train_samples,
@@ -74,8 +75,19 @@ def evaluate_dep_hc_task(
         )
         y_val = np.array([cohort_label(sample.cohort) for sample in val_samples], dtype=int)
         val_p_dep = predict_dep_probability(model, x_val)
-        threshold = select_subject_threshold(val_samples, y_val, val_p_dep)
+        threshold_summary = subject_threshold_diagnostic(val_samples, y_val, val_p_dep, objective=threshold_objective)
+        threshold = float(threshold_summary["threshold"])
         threshold_source = "validation_subjects"
+    else:
+        threshold_summary = {
+            "objective": threshold_objective,
+            "threshold": float(threshold),
+            "balanced_accuracy": float("nan"),
+            "hc_recall": float("nan"),
+            "dep_recall": float("nan"),
+            "min_recall": float("nan"),
+            "recall_gap": float("nan"),
+        }
 
     x_eval = extract_dep_hc_task_features(
         eval_samples,
@@ -121,7 +133,12 @@ def evaluate_dep_hc_task(
         "feature_set": feature_set,
         "threshold": float(threshold),
         "threshold_source": threshold_source,
+        "threshold_objective": threshold_objective,
     }
+    for key, value in threshold_summary.items():
+        if key in {"objective", "threshold"}:
+            continue
+        metrics[f"validation_threshold_{key}"] = float(value)
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
