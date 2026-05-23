@@ -245,6 +245,7 @@ def test_dep_hc_feature_fusion_selects_validation_weight():
     assert result["metrics"]["task"] == "dep_hc"
     assert result["metrics"]["fusion_feature_sets"] == ["bandpower", "time_frequency"]
     assert set(result["metrics"]["fusion_weight_by_feature"]) == {"bandpower", "time_frequency"}
+    assert result["metrics"]["fusion_weight_source"] == "validation_subjects"
     assert result["metrics"]["threshold_source"] == "validation_subjects"
 
     fixed = evaluate_dep_hc_feature_fusion(
@@ -259,6 +260,34 @@ def test_dep_hc_feature_fusion_selects_validation_weight():
     )
     assert fixed["metrics"]["threshold"] == pytest.approx(0.5)
     assert fixed["metrics"]["threshold_source"] == "fixed_0.5"
+
+    fixed_weight = evaluate_dep_hc_feature_fusion(
+        train,
+        eval_samples,
+        val_samples=val,
+        feature_sets=("bandpower", "time_frequency"),
+        sfreq=128.0,
+        epochs=5,
+        weight_step=0.5,
+        fixed_first_weight=0.25,
+    )
+    assert fixed_weight["metrics"]["fusion_weight_by_feature"] == {
+        "bandpower": pytest.approx(0.25),
+        "time_frequency": pytest.approx(0.75),
+    }
+    assert fixed_weight["metrics"]["fusion_weight_source"] == "fixed"
+    assert fixed_weight["metrics"]["threshold_source"] == "validation_subjects"
+
+    with pytest.raises(ValueError, match="fixed_first_weight"):
+        evaluate_dep_hc_feature_fusion(
+            train,
+            eval_samples,
+            val_samples=val,
+            feature_sets=("bandpower", "time_frequency"),
+            sfreq=128.0,
+            epochs=5,
+            fixed_first_weight=1.25,
+        )
 
 
 def test_dep_hc_fusion_weight_selection_respects_objective_and_endpoints():

@@ -46,6 +46,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--weight-step", type=float, default=0.05)
     parser.add_argument(
+        "--fixed-first-weight",
+        type=float,
+        default=None,
+        help="Use a fixed weight for the first feature set instead of validation-selected weight search.",
+    )
+    parser.add_argument(
         "--subject-aggregation",
         choices=["mean", "median", "trimmed_mean", "vote_frac"],
         default="mean",
@@ -124,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         class_weight_mode=args.class_weight_mode,
         threshold_objective=args.threshold_objective,
         weight_step=args.weight_step,
+        fixed_first_weight=args.fixed_first_weight,
         subject_aggregation=args.subject_aggregation,
     )
     config = {
@@ -144,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         "class_weight_mode": args.class_weight_mode,
         "threshold_objective": args.threshold_objective,
         "weight_step": args.weight_step,
+        "fixed_first_weight": args.fixed_first_weight,
         "subject_aggregation": args.subject_aggregation,
         "label_source": "cohort field; subject/trial identifiers are split and audit metadata only",
         "train_subjects": sorted(train_subjects),
