@@ -285,8 +285,7 @@ def subject_threshold_diagnostic(
     if objective == "fixed_0_5":
         metrics = _threshold_recall_metrics(labels, (subject_scores >= 0.5).astype(int))
         return _threshold_summary(objective=objective, threshold=0.5, aggregation=aggregation, **metrics)
-    raw_probs = [prob for probs in subject_probs.values() for prob in probs]
-    candidates = sorted(set([0.5, *subject_scores.tolist(), *raw_probs]))
+    candidates = sorted(set([0.5, *subject_scores.tolist(), *_threshold_boundary_candidates(subject_probs, aggregation=aggregation)]))
     best_threshold = 0.5
     best_key: tuple[float, float, float, float] | None = None
     best_metrics = _threshold_recall_metrics(labels, (subject_scores >= best_threshold).astype(int))
@@ -403,6 +402,19 @@ def _subject_scores_for_threshold(
         ],
         dtype=np.float64,
     )
+
+
+def _threshold_boundary_candidates(subject_probs: Mapping[str, Sequence[float]], *, aggregation: str) -> list[float]:
+    raw_probs = [float(prob) for probs in subject_probs.values() for prob in probs]
+    if aggregation != "vote_frac":
+        return raw_probs
+    vote_boundaries = {
+        float(k) / float(len(probs))
+        for probs in subject_probs.values()
+        for k in range(0, len(probs) + 1)
+        if len(probs) > 0
+    }
+    return [*raw_probs, *vote_boundaries]
 
 
 def aggregate_subject_rows(

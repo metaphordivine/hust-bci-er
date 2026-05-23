@@ -9,6 +9,7 @@ import pytest
 
 from hust_bci_er.analysis.dep_hc_router import (
     RouterSample,
+    _threshold_boundary_candidates,
     aggregate_subject_rows,
     balanced_accuracy_binary,
     bandpower_features,
@@ -126,6 +127,20 @@ def test_aggregate_subject_rows_supports_alternate_rules():
     assert trimmed[0]["subject_aggregation"] == "trimmed_mean"
     with pytest.raises(ValueError, match="unknown subject aggregation"):
         aggregate_subject_rows(rows, aggregation="subject_id")
+
+
+def test_vote_frac_threshold_candidates_include_discrete_boundaries():
+    candidates = _threshold_boundary_candidates(
+        {
+            "HC001": [0.1, 0.8, 0.9],
+            "DEP001": [0.2, 0.3, 0.7],
+        },
+        aggregation="vote_frac",
+    )
+
+    assert 1.0 / 3.0 in candidates
+    assert 2.0 / 3.0 in candidates
+    assert 0.8 in candidates
 
 
 def test_resolve_preprocessing_overrides_default_when_cli_supplies_values():
