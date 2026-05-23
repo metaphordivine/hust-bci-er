@@ -240,26 +240,104 @@ def evaluate_router(
     return {"model": model, "metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
 
 
-def select_subject_threshold(samples: Sequence[RouterSample], y_true: np.ndarray, p_dep: np.ndarray) -> float:
+def select_subject_threshold(
+    samples: Sequence[RouterSample],
+    y_true: np.ndarray,
+    p_dep: np.ndarray,
+    *,
+    objective: str = "balanced_accuracy",
+) -> float:
+    summary = subject_threshold_diagnostic(samples, y_true, p_dep, objective=objective)
+    return float(summary["threshold"])
+
+
+def subject_threshold_diagnostic(
+    samples: Sequence[RouterSample],
+    y_true: np.ndarray,
+    p_dep: np.ndarray,
+    *,
+    objective: str = "balanced_accuracy",
+) -> dict[str, float | str]:
+    if objective not in {"balanced_accuracy", "min_recall"}:
+        raise ValueError(f"unknown threshold objective: {objective}")
     subject_probs: dict[str, list[float]] = {}
     subject_truth: dict[str, int] = {}
     for sample, truth, prob in zip(samples, y_true, p_dep):
         subject_probs.setdefault(sample.subject_id, []).append(float(prob))
         subject_truth[sample.subject_id] = int(truth)
     if not subject_probs:
-        return 0.5
+        return _threshold_summary(objective=objective, threshold=0.5)
     subject_scores = np.array([float(np.mean(subject_probs[subject])) for subject in sorted(subject_probs)], dtype=np.float64)
     labels = np.array([subject_truth[subject] for subject in sorted(subject_probs)], dtype=int)
     candidates = sorted(set([0.5, *subject_scores.tolist()]))
     best_threshold = 0.5
-    best_score = -1.0
+    best_key: tuple[float, float, float, float] | None = None
+    best_metrics = _threshold_recall_metrics(labels, (subject_scores >= best_threshold).astype(int))
     for threshold in candidates:
         pred = (subject_scores >= float(threshold)).astype(int)
-        score = balanced_accuracy_binary(labels, pred)
-        if score > best_score or (score == best_score and abs(float(threshold) - 0.5) < abs(best_threshold - 0.5)):
-            best_score = score
+        metrics = _threshold_recall_metrics(labels, pred)
+        key = _threshold_selection_key(metrics, objective=objective, threshold=float(threshold))
+        if best_key is None or key > best_key:
+            best_key = key
             best_threshold = float(threshold)
-    return best_threshold
+            best_metrics = metrics
+    return _threshold_summary(objective=objective, threshold=best_threshold, **best_metrics)
+
+
+def _threshold_recall_metrics(labels: np.ndarray, pred: np.ndarray) -> dict[str, float]:
+    hc_mask = labels == 0
+    dep_mask = labels == 1
+    hc_recall = float(np.mean(pred[hc_mask] == 0)) if np.any(hc_mask) else float("nan")
+    dep_recall = float(np.mean(pred[dep_mask] == 1)) if np.any(dep_mask) else float("nan")
+    valid_recalls = [value for value in (hc_recall, dep_recall) if not math.isnan(value)]
+    balanced_accuracy = float(np.mean(valid_recalls)) if valid_recalls else float("nan")
+    min_recall = float(np.min(valid_recalls)) if valid_recalls else float("nan")
+    recall_gap = float(abs(dep_recall - hc_recall)) if len(valid_recalls) == 2 else float("nan")
+    return {
+        "balanced_accuracy": balanced_accuracy,
+        "hc_recall": hc_recall,
+        "dep_recall": dep_recall,
+        "min_recall": min_recall,
+        "recall_gap": recall_gap,
+    }
+
+
+def _threshold_selection_key(metrics: Mapping[str, float], *, objective: str, threshold: float) -> tuple[float, float, float, float]:
+    ba = float(metrics["balanced_accuracy"])
+    min_recall = float(metrics["min_recall"])
+    recall_gap = float(metrics["recall_gap"])
+    if objective == "balanced_accuracy":
+        primary = ba
+        secondary = min_recall
+        tertiary = -recall_gap
+    elif objective == "min_recall":
+        primary = min_recall
+        secondary = ba
+        tertiary = -recall_gap
+    else:
+        raise ValueError(f"unknown threshold objective: {objective}")
+    return (primary, secondary, tertiary, -abs(float(threshold) - 0.5))
+
+
+def _threshold_summary(
+    *,
+    objective: str,
+    threshold: float,
+    balanced_accuracy: float = float("nan"),
+    hc_recall: float = float("nan"),
+    dep_recall: float = float("nan"),
+    min_recall: float = float("nan"),
+    recall_gap: float = float("nan"),
+) -> dict[str, float | str]:
+    return {
+        "objective": objective,
+        "threshold": float(threshold),
+        "balanced_accuracy": float(balanced_accuracy),
+        "hc_recall": float(hc_recall),
+        "dep_recall": float(dep_recall),
+        "min_recall": float(min_recall),
+        "recall_gap": float(recall_gap),
+    }
 
 
 def aggregate_subject_rows(prediction_rows: Sequence[Mapping[str, str]], *, threshold: float = 0.5) -> list[dict[str, str]]:
