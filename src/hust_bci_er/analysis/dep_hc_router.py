@@ -264,7 +264,7 @@ def subject_threshold_diagnostic(
     *,
     objective: str = "balanced_accuracy",
 ) -> dict[str, float | str]:
-    if objective not in {"balanced_accuracy", "min_recall"}:
+    if objective not in {"balanced_accuracy", "min_recall", "fixed_0_5"}:
         raise ValueError(f"unknown threshold objective: {objective}")
     subject_probs: dict[str, list[float]] = {}
     subject_truth: dict[str, int] = {}
@@ -275,6 +275,9 @@ def subject_threshold_diagnostic(
         return _threshold_summary(objective=objective, threshold=0.5)
     subject_scores = np.array([float(np.mean(subject_probs[subject])) for subject in sorted(subject_probs)], dtype=np.float64)
     labels = np.array([subject_truth[subject] for subject in sorted(subject_probs)], dtype=int)
+    if objective == "fixed_0_5":
+        metrics = _threshold_recall_metrics(labels, (subject_scores >= 0.5).astype(int))
+        return _threshold_summary(objective=objective, threshold=0.5, **metrics)
     candidates = sorted(set([0.5, *subject_scores.tolist()]))
     best_threshold = 0.5
     best_key: tuple[float, float, float, float] | None = None
@@ -319,6 +322,10 @@ def _threshold_selection_key(metrics: Mapping[str, float], *, objective: str, th
     elif objective == "min_recall":
         primary = min_recall
         secondary = ba
+        tertiary = -recall_gap
+    elif objective == "fixed_0_5":
+        primary = ba
+        secondary = min_recall
         tertiary = -recall_gap
     else:
         raise ValueError(f"unknown threshold objective: {objective}")

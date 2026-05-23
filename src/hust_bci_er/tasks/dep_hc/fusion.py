@@ -114,7 +114,7 @@ def evaluate_dep_hc_feature_fusion(
         "n_eval_windows": len(eval_samples),
         "n_eval_subjects": len(subject_rows),
         "threshold": threshold,
-        "threshold_source": "validation_subjects",
+        "threshold_source": "fixed_0.5" if threshold_objective == "fixed_0_5" else "validation_subjects",
         "threshold_objective": threshold_objective,
         "class_weight_mode": class_weight_mode,
     }
@@ -171,7 +171,7 @@ def _fusion_selection_key(
     ba = float(summary["balanced_accuracy"])
     min_recall = float(summary["min_recall"])
     recall_gap = float(summary["recall_gap"])
-    if threshold_objective == "balanced_accuracy":
+    if threshold_objective in {"balanced_accuracy", "fixed_0_5"}:
         primary = ba
         secondary = min_recall
         tertiary = -recall_gap

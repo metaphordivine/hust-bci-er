@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--epochs", type=int, default=600)
     parser.add_argument("--l2", type=float, default=1e-3)
     parser.add_argument("--class-weight-mode", choices=["balanced", "uniform"], default="balanced")
-    parser.add_argument("--threshold-objective", choices=["balanced_accuracy", "min_recall"], default="balanced_accuracy")
+    parser.add_argument("--threshold-objective", choices=["balanced_accuracy", "min_recall", "fixed_0_5"], default="balanced_accuracy")
     parser.add_argument("--weight-step", type=float, default=0.05)
     args = parser.parse_args(argv)
 
