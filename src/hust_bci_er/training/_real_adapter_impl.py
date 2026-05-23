@@ -995,6 +995,24 @@ def _adaptation_manifest(adaptation: Any) -> str | dict[str, Any]:
     return name
 
 
+def _canonical_config_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_config_value(value[key]) for key in sorted(value, key=str)}
+    if isinstance(value, tuple):
+        return [_canonical_config_value(item) for item in value]
+    if isinstance(value, list):
+        return [_canonical_config_value(item) for item in value]
+    return value
+
+
+def _optional_config_manifest(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return _canonical_config_value(value)
+    return value
+
+
 def _torch_load_checkpoint(path: Path) -> Mapping[str, Any]:
     import torch
 
@@ -1031,6 +1049,9 @@ def _validate_reuse_checkpoint(
     adaptation: Any = None,
     n_times: int,
     preproc: Sequence[Any],
+    augmentation: Mapping[str, Any] | None = None,
+    cleaning_config: Mapping[str, Any] | None = None,
+    normalization_config: Mapping[str, Any] | None = None,
     run_mode: str,
     reuse_checkpoint_context: Mapping[str, Any] | None = None,
 ) -> None:
@@ -1065,6 +1086,12 @@ def _validate_reuse_checkpoint(
         mismatches.append("n_times")
     if list(payload.get("preprocessing") or []) != list(preproc):
         mismatches.append("preprocessing")
+    if _optional_config_manifest(payload.get("augmentation")) != _optional_config_manifest(augmentation):
+        mismatches.append("augmentation")
+    if _optional_config_manifest(payload.get("cleaning")) != _optional_config_manifest(cleaning_config):
+        mismatches.append("cleaning")
+    if _optional_config_manifest(payload.get("normalization")) != _optional_config_manifest(normalization_config):
+        mismatches.append("normalization")
     if mismatches:
         raise ValueError("reuse checkpoint does not match this protocol job: " + ", ".join(mismatches))
     if run_mode == "candidate" and bool(payload.get("training_epochs_overridden")):
@@ -1586,6 +1613,9 @@ def run_real_classifier_route(
             adaptation=adaptation_config,
             n_times=n_times,
             preproc=preproc,
+            augmentation=augmentation if isinstance(augmentation, Mapping) else None,
+            cleaning_config=cleaning_config,
+            normalization_config=normalization_config,
             run_mode=run_mode,
             reuse_checkpoint_context=reuse_checkpoint_context,
         )
