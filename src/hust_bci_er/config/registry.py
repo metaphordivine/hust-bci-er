@@ -78,6 +78,7 @@ TORCH_BACKBONES = {
     "fbstcnet",
     "riemannian_tangent",
     "srf_fbstcnet_gate",
+    "tri_context_gate",
     "tsception",
 }
 

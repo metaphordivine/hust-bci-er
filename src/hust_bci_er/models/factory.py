@@ -15,6 +15,7 @@ from .backbones.riemannian_tangent import build_riemannian_tangent
 from .backbones.shallow_conv_net import build_shallow_conv_net
 from .backbones.srf_fbstcnet_gate import build_srf_fbstcnet_gate
 from .backbones.srfnet import build_srfnet
+from .backbones.tri_context_gate import build_tri_context_gate
 from .backbones.tsception import build_tsception
 from .graph.dgcnn import build_dgcnn
 from .graph.graph_conformer import build_dual_graph_conformer
@@ -33,6 +34,7 @@ BUILDERS = {
     "fbstcnet": build_fbstcnet,
     "riemannian_tangent": build_riemannian_tangent,
     "srf_fbstcnet_gate": build_srf_fbstcnet_gate,
+    "tri_context_gate": build_tri_context_gate,
     "tsception": build_tsception,
 }
 

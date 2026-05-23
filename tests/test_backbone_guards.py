@@ -21,6 +21,7 @@ from hust_bci_er.models.backbones.fbstcnet import (
 )
 from hust_bci_er.models.backbones.riemannian_tangent import RiemannianTangentNet
 from hust_bci_er.models.backbones.srf_fbstcnet_gate import SRFFBSTCNetGate
+from hust_bci_er.models.backbones.tri_context_gate import TriContextGate
 from hust_bci_er.models.factory import build_model
 from hust_bci_er.models.eeg_montage import HUST_30_A2_CHANNELS, HUST_30_A2_REGIONS
 from hust_bci_er.models.graph.dgcnn import DGCNN
@@ -422,6 +423,104 @@ def test_build_model_builds_srf_fbstcnet_gate():
             "pool_size": 8,
             "pool_stride": 4,
             "gamma": 32,
+        },
+        gate_hidden_dim=8,
+        gate_dropout=0.0,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256))
+    assert tuple(out.shape) == (2, 2)
+
+
+def test_tri_context_gate_forward_shape_and_weights():
+    model = TriContextGate(
+        n_channels=30,
+        n_times=256,
+        srf={
+            "emb_size": 8,
+            "depth": 1,
+            "num_heads": 2,
+            "patch_size": 32,
+            "dropout": 0.1,
+            "feature_dim": 8,
+            "fft_dropout": 0.1,
+            "fusion_hidden_dim": 8,
+        },
+        fbstcnet={
+            "sfreq": 250,
+            "variant": "M",
+            "n_bands": 3,
+            "F1": 4,
+            "F2": 4,
+            "st_alpha": 0.05,
+            "alpha1": 3,
+            "alpha2": 1,
+            "pool_size": 8,
+            "pool_stride": 4,
+            "power_drop_prob": 0.1,
+            "gamma": 32,
+        },
+        conformer={
+            "emb_size": 8,
+            "depth": 1,
+            "num_heads": 2,
+            "dropout": 0.1,
+            "conv_dropout": 0.1,
+        },
+        gate_hidden_dim=8,
+        gate_dropout=0.0,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 30, 256), return_components=True)
+
+    assert tuple(out["logits"].shape) == (2, 2)
+    assert tuple(out["component_weights"].shape) == (2, 3)
+    assert torch.allclose(out["component_weights"].sum(dim=1), torch.ones(2), atol=1e-6)
+    assert torch.isfinite(out["logits"]).all()
+
+
+def test_tri_context_gate_rejects_invalid_gate_config():
+    with pytest.raises(ValueError, match="binary classification"):
+        TriContextGate(n_channels=30, n_times=256, n_classes=3)
+    with pytest.raises(ValueError, match="fusion_temperature"):
+        TriContextGate(n_channels=30, n_times=256, fusion_temperature=0.0)
+
+
+def test_build_model_builds_tri_context_gate():
+    model = build_model(
+        "tri_context_gate",
+        n_channels=30,
+        n_times=256,
+        n_classes=2,
+        srf={
+            "emb_size": 8,
+            "depth": 1,
+            "num_heads": 2,
+            "feature_dim": 8,
+            "fft_dropout": 0.1,
+            "fusion_hidden_dim": 8,
+        },
+        fbstcnet={
+            "sfreq": 250,
+            "variant": "M",
+            "n_bands": 3,
+            "F1": 4,
+            "F2": 4,
+            "st_alpha": 0.05,
+            "alpha1": 3,
+            "alpha2": 1,
+            "pool_size": 8,
+            "pool_stride": 4,
+            "gamma": 32,
+        },
+        conformer={
+            "emb_size": 8,
+            "depth": 1,
+            "num_heads": 2,
+            "dropout": 0.1,
+            "conv_dropout": 0.1,
         },
         gate_hidden_dim=8,
         gate_dropout=0.0,

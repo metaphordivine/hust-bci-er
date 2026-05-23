@@ -44,6 +44,7 @@
 - `shallow_conv_net`
 - `srf_fbstcnet_gate`
 - `srfnet`
+- `tri_context_gate`
 - `tsception`
 
 ## Sklearn Models
