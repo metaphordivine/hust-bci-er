@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from hust_bci_er.tasks.dep_hc.experiment import evaluate_dep_hc_task, write_dep_hc_task_outputs  # noqa: E402
+from hust_bci_er.tasks.dep_hc.experiment import DEP_HC_CLASSIFIERS, evaluate_dep_hc_task, write_dep_hc_task_outputs  # noqa: E402
 from hust_bci_er.tasks.dep_hc.features import DEP_HC_FEATURE_SETS  # noqa: E402
 from hust_bci_er.training import _real_adapter_impl as real_adapter  # noqa: E402
 from scripts.run_dep_hc_router import _make_samples, _subjects_for_protocol, resolve_preprocessing  # noqa: E402
@@ -41,6 +41,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--epochs", type=int, default=600)
     parser.add_argument("--l2", type=float, default=1e-3)
+    parser.add_argument(
+        "--classifier",
+        choices=sorted(DEP_HC_CLASSIFIERS),
+        default="logistic",
+        help="DEP/HC classifier backend for the selected feature set.",
+    )
+    parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
         "--class-weight-mode",
         choices=["balanced", "uniform"],
@@ -130,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
         threshold_objective=args.threshold_objective,
         class_weight_mode=args.class_weight_mode,
         subject_aggregation=args.subject_aggregation,
+        classifier=args.classifier,
+        random_state=args.random_state,
     )
     config = {
         "task": "dep_hc",
@@ -145,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
         "n_crops": args.n_crops,
         "preprocessing": preprocessing,
         "feature_set": args.feature_set,
+        "classifier": args.classifier,
+        "random_state": args.random_state,
         "channel_montage": args.channel_montage,
         "label_source": "cohort field; subject/trial identifiers are split and audit metadata only",
         "threshold_objective": args.threshold_objective,

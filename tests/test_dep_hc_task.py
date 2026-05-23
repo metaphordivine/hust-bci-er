@@ -7,7 +7,12 @@ import numpy as np
 import pytest
 
 from hust_bci_er.analysis.dep_hc_router import RouterSample, subject_threshold_diagnostic
-from hust_bci_er.tasks.dep_hc.experiment import evaluate_dep_hc_task, extract_dep_hc_task_features, write_dep_hc_task_outputs
+from hust_bci_er.tasks.dep_hc.experiment import (
+    evaluate_dep_hc_task,
+    extract_dep_hc_task_features,
+    fit_dep_hc_classifier,
+    write_dep_hc_task_outputs,
+)
 from hust_bci_er.tasks.dep_hc.fusion import _fusion_selection_key, _weight_candidates, evaluate_dep_hc_feature_fusion
 from hust_bci_er.tasks.dep_hc.neural import evaluate_dep_hc_neural_task
 from hust_bci_er.tasks.dep_hc.channel_graph import (
@@ -116,6 +121,7 @@ def test_dep_hc_task_feature_matrix_and_eval():
     assert features.shape[0] == 4
     assert result["metrics"]["task"] == "dep_hc"
     assert result["metrics"]["feature_set"] == "traditional_graph"
+    assert result["metrics"]["classifier"] == "logistic"
     assert result["metrics"]["class_weight_mode"] == "uniform"
     assert result["metrics"]["n_eval_subjects"] == 2
     assert {"DEP101", "HC101"} == {row["subject_id"] for row in result["subject_rows"]}
@@ -178,6 +184,34 @@ def test_dep_hc_task_rejects_unknown_class_weight_mode():
             epochs=1,
             class_weight_mode="subject_id",
         )
+
+
+def test_dep_hc_task_rejects_unknown_classifier():
+    with pytest.raises(ValueError, match="unknown DEP/HC classifier"):
+        fit_dep_hc_classifier(np.zeros((4, 2)), np.array([0, 0, 1, 1]), classifier="subject_id")
+
+
+def test_dep_hc_task_sklearn_classifier_smoke():
+    pytest.importorskip("sklearn")
+    train = [
+        _sample("HC001", "HC"),
+        _sample("HC002", "HC"),
+        _sample("DEP001", "DEP"),
+        _sample("DEP002", "DEP"),
+    ]
+    eval_samples = [_sample("HC101", "HC"), _sample("DEP101", "DEP")]
+
+    result = evaluate_dep_hc_task(
+        train,
+        eval_samples,
+        feature_set="bandpower",
+        sfreq=128.0,
+        classifier="linear_svm",
+        class_weight_mode="uniform",
+    )
+
+    assert result["metrics"]["classifier"] == "linear_svm"
+    assert result["metrics"]["n_eval_subjects"] == 2
 
 
 def test_dep_hc_feature_fusion_selects_validation_weight():
