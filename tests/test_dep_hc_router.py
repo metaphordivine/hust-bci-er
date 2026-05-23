@@ -107,6 +107,27 @@ def test_aggregate_subject_rows_uses_selected_threshold():
     assert subjects[0]["threshold"] == "0.75"
 
 
+def test_aggregate_subject_rows_supports_alternate_rules():
+    rows = [
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.95"},
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.10"},
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.20"},
+        {"subject_id": "DEP001", "cohort": "DEP", "y_true": "1", "p_dep": "0.90"},
+    ]
+
+    median = aggregate_subject_rows(rows, aggregation="median")
+    vote = aggregate_subject_rows(rows, aggregation="vote_frac")
+    trimmed = aggregate_subject_rows(rows, aggregation="trimmed_mean")
+
+    assert median[0]["subject_score_p_dep"] == "0.55"
+    assert median[0]["predicted_cohort"] == "DEP"
+    assert vote[0]["subject_score_p_dep"] == "0.5"
+    assert vote[0]["predicted_cohort"] == "DEP"
+    assert trimmed[0]["subject_aggregation"] == "trimmed_mean"
+    with pytest.raises(ValueError, match="unknown subject aggregation"):
+        aggregate_subject_rows(rows, aggregation="subject_id")
+
+
 def test_resolve_preprocessing_overrides_default_when_cli_supplies_values():
     assert resolve_preprocessing(None) == ["car", "zscore"]
     assert resolve_preprocessing(["bandpass"]) == ["bandpass"]

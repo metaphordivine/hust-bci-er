@@ -35,6 +35,7 @@ def evaluate_dep_hc_feature_fusion(
     class_weight_mode: str = "balanced",
     threshold_objective: str = "balanced_accuracy",
     weight_step: float = 0.05,
+    subject_aggregation: str = "mean",
 ) -> dict[str, Any]:
     features = tuple(str(feature_set) for feature_set in feature_sets)
     if len(features) != 2:
@@ -97,7 +98,7 @@ def evaluate_dep_hc_feature_fusion(
     y_pred = (p_dep >= threshold).astype(int)
 
     prediction_rows = dep_hc_prediction_rows(eval_samples, y_eval, p_dep, y_pred)
-    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold)
+    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold, aggregation=subject_aggregation)
     subject_truth = np.array([cohort_label(row["cohort"]) for row in subject_rows], dtype=int)
     subject_pred = np.array([cohort_label(row["predicted_cohort"]) for row in subject_rows], dtype=int)
     metrics: dict[str, Any] = {
@@ -108,7 +109,7 @@ def evaluate_dep_hc_feature_fusion(
         "window_ba": balanced_accuracy_binary(y_eval, y_pred),
         "subject_ba": balanced_accuracy_binary(subject_truth, subject_pred),
         "window_brier": brier_score(y_eval, p_dep),
-        "subject_brier": brier_score(subject_truth, np.array([float(row["mean_p_dep"]) for row in subject_rows])),
+        "subject_brier": brier_score(subject_truth, np.array([float(row["subject_score_p_dep"]) for row in subject_rows])),
         "n_train_windows": len(train_samples),
         "n_eval_windows": len(eval_samples),
         "n_eval_subjects": len(subject_rows),
@@ -116,6 +117,7 @@ def evaluate_dep_hc_feature_fusion(
         "threshold_source": "fixed_0.5" if threshold_objective == "fixed_0_5" else "validation_subjects",
         "threshold_objective": threshold_objective,
         "class_weight_mode": class_weight_mode,
+        "subject_aggregation": subject_aggregation,
     }
     for key, value in threshold_summary.items():
         if key in {"objective", "threshold"}:
@@ -178,6 +180,12 @@ def _fusion_selection_key(
         primary = min_recall
         secondary = ba
         tertiary = -recall_gap
+    elif threshold_objective == "dep_recall_floor_0p8_hc":
+        hc_recall = float(summary["hc_recall"])
+        dep_recall = float(summary["dep_recall"])
+        primary = float(dep_recall >= 0.8 * hc_recall)
+        secondary = ba
+        tertiary = hc_recall
     else:
         raise ValueError(f"unknown threshold objective: {threshold_objective}")
     return (primary, secondary, tertiary, -abs(float(weight) - 0.5))

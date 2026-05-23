@@ -82,6 +82,7 @@ def evaluate_dep_hc_task(
     l2: float = 1e-3,
     threshold_objective: str = "balanced_accuracy",
     class_weight_mode: str = "balanced",
+    subject_aggregation: str = "mean",
 ) -> dict[str, Any]:
     x_train = extract_dep_hc_task_features(
         train_samples,
@@ -128,7 +129,7 @@ def evaluate_dep_hc_task(
 
     prediction_rows = dep_hc_prediction_rows(eval_samples, y_eval, p_dep, y_pred)
 
-    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold)
+    subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold, aggregation=subject_aggregation)
     subject_truth = np.array([cohort_label(row["cohort"]) for row in subject_rows], dtype=int)
     subject_pred = np.array([cohort_label(row["predicted_cohort"]) for row in subject_rows], dtype=int)
     metrics = {
@@ -136,7 +137,7 @@ def evaluate_dep_hc_task(
         "window_ba": balanced_accuracy_binary(y_eval, y_pred),
         "subject_ba": balanced_accuracy_binary(subject_truth, subject_pred),
         "window_brier": brier_score(y_eval, p_dep),
-        "subject_brier": brier_score(subject_truth, np.array([float(row["mean_p_dep"]) for row in subject_rows])),
+        "subject_brier": brier_score(subject_truth, np.array([float(row["subject_score_p_dep"]) for row in subject_rows])),
         "n_train_windows": len(train_samples),
         "n_eval_windows": len(eval_samples),
         "n_eval_subjects": len(subject_rows),
@@ -146,6 +147,7 @@ def evaluate_dep_hc_task(
         "threshold_source": threshold_source,
         "threshold_objective": threshold_objective,
         "class_weight_mode": class_weight_mode,
+        "subject_aggregation": subject_aggregation,
     }
     for key, value in threshold_summary.items():
         if key in {"objective", "threshold"}:
