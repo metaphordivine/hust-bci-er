@@ -54,9 +54,8 @@ def graph_edge_indices(
     include_homologous: bool = True,
     include_self: bool = False,
 ) -> tuple[tuple[int, int], ...]:
+    _require_hust_montage(channel_montage)
     names = channel_names_for_montage(channel_montage, len(HUST_30_A2_CHANNELS))
-    if tuple(names) != HUST_30_A2_CHANNELS:
-        raise ValueError("DEP/HC channel graph priors require the HUST 30-channel A2 montage")
     edges: set[tuple[int, int]] = set()
     if include_region_chain:
         for region in HUST_30_A2_REGIONS:
@@ -93,6 +92,7 @@ def channel_graph_adjacency(
 
 
 def regional_connectivity_features(x: np.ndarray, *, channel_montage: str = "hust_30_a2") -> np.ndarray:
+    _require_hust_montage(channel_montage)
     arr = np.asarray(x, dtype=np.float64)
     if arr.ndim != 2:
         raise ValueError("EEG sample must be shaped [channels, time]")
@@ -141,6 +141,12 @@ def _region_lookup() -> Mapping[str, str]:
     return out
 
 
+def _require_hust_montage(channel_montage: str) -> None:
+    names = channel_names_for_montage(channel_montage, len(HUST_30_A2_CHANNELS))
+    if tuple(names) != HUST_30_A2_CHANNELS:
+        raise ValueError("DEP/HC channel graph priors require the HUST 30-channel A2 montage")
+
+
 def _undirected_edge(left: int, right: int) -> tuple[int, int]:
     return (left, right) if left <= right else (right, left)
 
@@ -150,4 +156,3 @@ def _upper_triangle_without_diagonal(matrix: np.ndarray) -> np.ndarray:
         return np.asarray([], dtype=np.float64)
     rows, cols = np.triu_indices(min(matrix.shape[0], matrix.shape[1]), k=1)
     return np.asarray(matrix[rows, cols], dtype=np.float64)
-

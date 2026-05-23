@@ -64,6 +64,11 @@ def test_traditional_asymmetry_requires_hust_montage():
         dep_hc_features(_window("bad-montage"), feature_set="traditional", channel_montage="sequential")
 
 
+def test_graph_connectivity_requires_hust_montage():
+    with pytest.raises(ValueError, match="HUST 30-channel A2"):
+        dep_hc_features(_window("bad-graph-montage"), feature_set="graph_connectivity", channel_montage="sequential")
+
+
 def test_hust_channel_graph_uses_pdf_order_and_region_priors():
     table = channel_graph_metadata()["channels"]
     adjacency = channel_graph_adjacency()
