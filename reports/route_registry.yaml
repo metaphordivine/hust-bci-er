@@ -199,6 +199,9 @@ routes:
   - route_id: fixed_crop_whitening_eps3e4_fbstcnet_m_conn_light
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_whitening_eps3e4_tri_context_gate
+    owner: metaphordivine
+    blocker: missing_lightweight_screen
   - route_id: fbstcnet_as_query_srfnet_context_fusion
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
