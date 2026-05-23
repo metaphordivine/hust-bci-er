@@ -1,0 +1,67 @@
+route_id: fixed_crop_car_fbstcnet_freq_mask_weak_v1
+status: IDEA
+dataset_version: train_v1
+split_id: p1_seed42_fold0
+seed: 42
+input_window_sec: 10
+preprocessing: [car]
+features: []
+augmentation:
+  name: split_first_fixed_crops
+  split_first: true
+  source_trial_sec: 50
+  window_sec: 10
+  n_crops: 5
+  apply_to_splits: [train, val, test]
+  transforms:
+    - name: random_bandstop
+      prob: 0.2
+      sfreq: 250.0
+      width_hz: 1.0
+      freq_range: [4.0, 40.0]
+      attenuation: 0.0
+      apply_to_splits: [train]
+  aggregate_to_trial:
+    method: mean_score
+    tie_break: mean_score
+model:
+  name: fbstcnet
+  sfreq: 250
+  variant: M
+  n_bands: 12
+  filterbank_type: cheby2
+  filter_order: 4
+  stopband_ripple: 30.0
+  transition_bandwidth: 2.0
+  F1: 32
+  F2: 64
+  st_alpha: 0.1
+  alpha1: 20
+  alpha2: 5
+  pool_size: 100
+  pool_stride: 10
+  power_drop_prob: 0.35
+  gamma: 300
+adaptation: none
+training:
+  trainer: torch_classifier
+  job_adapter: torch_classifier
+  epochs: 80
+  batch_size: 16
+  optimizer:
+    name: adamw
+    lr: 0.0005
+    weight_decay: 0.005
+  loss: cross_entropy
+  grad_clip_norm: 1.0
+  early_stopping:
+    monitor: val_loss
+    mode: min
+    patience: 20
+inference:
+  top4: true
+  crop_policy: exact_single_crop
+evaluation:
+  protocol: p1_repeated_group_kfold
+  primary_metric: exact_single_crop_expected_BA
+notes: "Train-only weak random 1Hz bandstop in 4-40Hz to improve frequency robustness without touching validation/test."

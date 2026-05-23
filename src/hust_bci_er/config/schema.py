@@ -360,6 +360,23 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
             window_samples = augmentation_window_samples(augmentation)
             if max_shift is not None and window_samples is not None and max_shift >= window_samples:
                 errors.append(f"{field}.max_shift must be < augmentation.window_sec * 250Hz")
+        elif name == "random_bandstop":
+            sfreq = validate_positive_number(item.get("sfreq", DEFAULT_SFREQ), f"{field}.sfreq", errors)
+            width_hz = validate_positive_number(item.get("width_hz", 1.0), f"{field}.width_hz", errors)
+            validate_probability(item.get("attenuation", 0.0), f"{field}.attenuation", errors)
+            freq_range = item.get("freq_range", [4.0, 40.0])
+            if not isinstance(freq_range, list) or len(freq_range) != 2:
+                errors.append(f"{field}.freq_range must be [low, high]")
+            else:
+                low = validate_non_negative_number(freq_range[0], f"{field}.freq_range[0]", errors)
+                high = validate_positive_number(freq_range[1], f"{field}.freq_range[1]", errors)
+                if low is not None and high is not None:
+                    if low > high:
+                        errors.append(f"{field}.freq_range must be sorted")
+                    if sfreq is not None and high >= sfreq / 2.0:
+                        errors.append(f"{field}.freq_range[1] must be below Nyquist")
+                    if width_hz is not None and width_hz > max(high - low, 1e-9) + 2.0:
+                        errors.append(f"{field}.width_hz is too wide for freq_range")
 
 
 def validate_cleaning(data: dict[str, Any], errors: list[str]) -> None:

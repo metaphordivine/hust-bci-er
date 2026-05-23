@@ -147,11 +147,52 @@ def time_shift(x: np.ndarray, *, rng: np.random.Generator, max_shift: int = 12) 
     return shifted.astype(np.float32)
 
 
+def random_bandstop(
+    x: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    sfreq: float = 250.0,
+    width_hz: float = 1.0,
+    freq_range: Sequence[float] = (4.0, 40.0),
+    attenuation: float = 0.0,
+) -> np.ndarray:
+    if sfreq <= 0:
+        raise ValueError("random_bandstop.sfreq must be positive")
+    if width_hz <= 0:
+        raise ValueError("random_bandstop.width_hz must be positive")
+    if not 0.0 <= attenuation <= 1.0:
+        raise ValueError("random_bandstop.attenuation must be in [0, 1]")
+    if not isinstance(freq_range, Sequence) or len(freq_range) != 2:
+        raise ValueError("random_bandstop.freq_range must contain [low, high]")
+    low = float(freq_range[0])
+    high = float(freq_range[1])
+    if low < 0 or high < low:
+        raise ValueError("random_bandstop.freq_range must be non-negative and sorted")
+    nyquist = float(sfreq) / 2.0
+    if high >= nyquist:
+        raise ValueError("random_bandstop.freq_range high must be below Nyquist")
+
+    signal = np.asarray(x, dtype=np.float32)
+    n_times = signal.shape[-1]
+    if n_times < 2:
+        return signal.copy()
+    center = float(rng.uniform(low, high))
+    half_width = float(width_hz) / 2.0
+    freqs = np.fft.rfftfreq(n_times, d=1.0 / float(sfreq))
+    mask = (freqs >= center - half_width) & (freqs <= center + half_width)
+    if not np.any(mask):
+        return signal.copy()
+    spectrum = np.fft.rfft(signal.astype(np.float64), axis=-1)
+    spectrum[..., mask] *= float(attenuation)
+    return np.fft.irfft(spectrum, n=n_times, axis=-1).astype(np.float32)
+
+
 AUGMENTATION_TRANSFORMS = {
     "amplitude_scale": amplitude_scale,
     "gaussian_noise": gaussian_noise,
     "channel_dropout": channel_dropout,
     "smooth_time_mask": smooth_time_mask,
+    "random_bandstop": random_bandstop,
     "time_mask": time_mask,
     "time_shift": time_shift,
 }

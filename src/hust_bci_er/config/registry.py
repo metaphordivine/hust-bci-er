@@ -86,6 +86,7 @@ AUGMENTATION_TRANSFORMS = {
     "amplitude_scale",
     "channel_dropout",
     "gaussian_noise",
+    "random_bandstop",
     "smooth_time_mask",
     "time_mask",
     "time_shift",

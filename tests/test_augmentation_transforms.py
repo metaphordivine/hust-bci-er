@@ -7,6 +7,7 @@ from hust_bci_er.data.augmentations import (
     channel_dropout,
     gaussian_noise,
     normalize_transform_config,
+    random_bandstop,
     smooth_time_mask,
     time_mask,
     time_shift,
@@ -25,6 +26,7 @@ def test_window_transforms_preserve_shape_and_dtype():
         (gaussian_noise, {"std": 0.01}),
         (amplitude_scale, {"scale_range": [0.9, 1.1]}),
         (channel_dropout, {"p": 0.25}),
+        (random_bandstop, {"sfreq": 32.0, "width_hz": 2.0, "freq_range": [4.0, 10.0]}),
         (smooth_time_mask, {"mask_ratio": 0.10}),
         (time_mask, {"max_width": 8}),
         (time_shift, {"max_shift": 4}),
@@ -109,3 +111,23 @@ def test_time_shift_uses_zero_padding_not_wraparound():
     x = np.arange(8, dtype=np.float32).reshape(1, 8)
     y = time_shift(x, rng=FixedShiftRng(), max_shift=2)
     np.testing.assert_array_equal(y, np.array([[0, 0, 1, 2, 3, 4, 5, 6]], dtype=np.float32))
+
+
+def test_random_bandstop_reduces_target_sine_energy():
+    class FixedBandRng:
+        def uniform(self, *args, **kwargs):
+            return 10.0
+
+    sfreq = 100.0
+    t = np.arange(100, dtype=np.float32) / sfreq
+    x = np.sin(2.0 * np.pi * 10.0 * t).astype(np.float32)[None, :]
+    y = random_bandstop(
+        x,
+        rng=FixedBandRng(),
+        sfreq=sfreq,
+        width_hz=2.0,
+        freq_range=[10.0, 10.0],
+        attenuation=0.0,
+    )
+
+    assert float(np.mean(y * y)) < float(np.mean(x * x)) * 0.2
