@@ -227,11 +227,62 @@ def evaluate_dep_hc_neural_task(
 
 def _build_model_kwargs(model_name: str, overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
     kwargs = dict(_DIAGNOSTIC_MODEL_KWARGS.get(str(model_name), {}))
+    explicit_keys: set[str] = set()
     if model_name in _HUST_MONTAGE_MODELS:
         kwargs.setdefault("channel_montage", "hust_30_a2")
     if overrides:
-        kwargs.update(dict(overrides))
+        override_dict = dict(overrides)
+        explicit_keys = {str(key) for key in override_dict}
+        kwargs.update(override_dict)
+    if model_name == "cbramod":
+        _normalize_cbramod_patch_kwargs(kwargs, explicit_keys=explicit_keys)
     return kwargs
+
+
+def _normalize_cbramod_patch_kwargs(kwargs: dict[str, Any], *, explicit_keys: set[str]) -> None:
+    """Keep route-derived CBraMod patch settings internally consistent."""
+
+    patch_size = int(kwargs.get("patch_size", 200))
+    d_model = int(kwargs.get("d_model", 200))
+    temporal_width = _cbramod_temporal_width(patch_size)
+    if "conv_out_channels" not in explicit_keys:
+        if d_model % temporal_width != 0:
+            raise ValueError(
+                "CBraMod route conversion cannot infer conv_out_channels because "
+                f"d_model={d_model} is not divisible by temporal_width={temporal_width}"
+            )
+        kwargs["conv_out_channels"] = d_model // temporal_width
+    else:
+        conv_out_channels = int(kwargs["conv_out_channels"])
+        if conv_out_channels * temporal_width != d_model:
+            raise ValueError(
+                "CBraMod patch embedding requires conv_out_channels * temporal_width "
+                f"to equal d_model, got {conv_out_channels * temporal_width} vs {d_model}"
+            )
+
+    conv_out_channels = int(kwargs["conv_out_channels"])
+    group_norm_groups = int(kwargs.get("group_norm_groups", 5))
+    if conv_out_channels % group_norm_groups != 0:
+        if "group_norm_groups" in explicit_keys:
+            raise ValueError(
+                "CBraMod requires conv_out_channels divisible by group_norm_groups, "
+                f"got conv_out_channels={conv_out_channels} and group_norm_groups={group_norm_groups}"
+            )
+        kwargs["group_norm_groups"] = _preferred_group_norm_groups(conv_out_channels)
+
+
+def _cbramod_temporal_width(patch_size: int) -> int:
+    width = int(patch_size)
+    for kernel_size, stride, padding in ((49, 25, 24), (3, 1, 1), (3, 1, 1)):
+        width = ((width + 2 * padding - kernel_size) // stride) + 1
+    return width
+
+
+def _preferred_group_norm_groups(channels: int) -> int:
+    for candidate in (5, 4, 3, 2, 1):
+        if int(channels) % candidate == 0:
+            return candidate
+    return 1
 
 
 def _jsonable_model_kwargs(kwargs: Mapping[str, Any]) -> dict[str, Any]:

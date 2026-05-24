@@ -383,6 +383,12 @@ def test_dep_hc_neural_task_supports_factory_backbone_dict_logits():
     cbramod_kwargs = _build_model_kwargs("cbramod")
     assert cbramod_kwargs["classifier_pooling"] == "mean"
     assert cbramod_kwargs["d_model"] == 64
+    route_cbramod_kwargs = _build_model_kwargs("cbramod", {"patch_size": 250, "d_model": 250, "nhead": 10})
+    assert route_cbramod_kwargs["conv_out_channels"] == 25
+    assert route_cbramod_kwargs["group_norm_groups"] == 5
+    from hust_bci_er.models.factory import build_model
+
+    build_model("cbramod", n_channels=30, n_times=2500, n_classes=2, **route_cbramod_kwargs)
     fbcnet_kwargs = _build_model_kwargs("fbcnet")
     assert fbcnet_kwargs["n_segments"] == 5
     gate_kwargs = _build_model_kwargs("tri_context_gate")
