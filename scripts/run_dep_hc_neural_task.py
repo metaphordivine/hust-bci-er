@@ -29,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--holdout-seed", type=int, default=999)
     parser.add_argument("--source-trial-sec", type=float, default=50.0)
     parser.add_argument("--window-sec", type=float, default=10.0)
+    parser.add_argument("--stride-sec", type=float, default=None)
     parser.add_argument("--n-crops", type=int, default=5)
     parser.add_argument("--preprocessing", action="append", default=None)
     parser.add_argument("--model-name", choices=sorted(DEP_HC_NEURAL_MODELS), default="eegnet")
@@ -76,14 +77,24 @@ def main(argv: list[str] | None = None) -> int:
     train_trials = [trial for trial in trials if trial["subject_id"] in train_subjects]
     val_trials = [trial for trial in trials if trial["subject_id"] in val_subjects]
     eval_trials = [trial for trial in trials if trial["subject_id"] in test_subjects]
-    raw_train = real_adapter._make_fixed_crops(
-        train_trials,
-        source_trial_sec=args.source_trial_sec,
-        window_sec=args.window_sec,
-        n_crops=args.n_crops,
-        preproc=preprocessing,
-        skip_preproc=True,
-    )
+    if args.stride_sec is None:
+        raw_train = real_adapter._make_fixed_crops(
+            train_trials,
+            source_trial_sec=args.source_trial_sec,
+            window_sec=args.window_sec,
+            n_crops=args.n_crops,
+            preproc=preprocessing,
+            skip_preproc=True,
+        )
+    else:
+        raw_train = real_adapter._make_sliding_windows(
+            train_trials,
+            source_trial_sec=args.source_trial_sec,
+            window_sec=args.window_sec,
+            stride_sec=args.stride_sec,
+            preproc=preprocessing,
+            skip_preproc=True,
+        )
     ea_transform = real_adapter._fit_ea_on_windows(raw_train, preprocessing)
     train_samples = _make_samples(
         train_trials,
@@ -91,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
+        stride_sec=args.stride_sec,
         ea_transform=ea_transform,
     )
     val_samples = _make_samples(
@@ -99,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
+        stride_sec=args.stride_sec,
         ea_transform=ea_transform,
     )
     eval_samples = _make_samples(
@@ -107,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
+        stride_sec=args.stride_sec,
         ea_transform=ea_transform,
     )
     result = evaluate_dep_hc_neural_task(
@@ -136,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         "holdout_seed": args.holdout_seed,
         "source_trial_sec": args.source_trial_sec,
         "window_sec": args.window_sec,
+        "stride_sec": args.stride_sec,
         "n_crops": args.n_crops,
         "preprocessing": preprocessing,
         "model_name": args.model_name,

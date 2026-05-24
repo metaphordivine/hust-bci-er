@@ -36,6 +36,10 @@ FIELDS = [
     "threshold_objective",
     "subject_aggregation",
     "model_kwargs_json",
+    "source_trial_sec",
+    "window_sec",
+    "stride_sec",
+    "n_crops",
     "preprocessing",
 ]
 
@@ -53,6 +57,10 @@ class RouteJob:
     threshold_objective: str
     subject_aggregation: str
     model_kwargs_json: str
+    source_trial_sec: float
+    window_sec: float
+    stride_sec: float | None
+    n_crops: int
     preprocessing: str
 
     def row(self) -> dict[str, str]:
@@ -68,6 +76,10 @@ class RouteJob:
             "threshold_objective": self.threshold_objective,
             "subject_aggregation": self.subject_aggregation,
             "model_kwargs_json": self.model_kwargs_json,
+            "source_trial_sec": _format_float(self.source_trial_sec),
+            "window_sec": _format_float(self.window_sec),
+            "stride_sec": _format_optional_float(self.stride_sec),
+            "n_crops": str(self.n_crops),
             "preprocessing": self.preprocessing,
         }
 
@@ -151,6 +163,7 @@ def plan_jobs_for_route(
     training = route_data.get("training") or {}
     if not isinstance(training, dict):
         training = {}
+    source_trial_sec, window_sec, stride_sec, n_crops = _route_window_plan(route_data)
     epochs = int(epochs_override if epochs_override is not None else training.get("epochs", 5))
     batch_size = int(batch_size_override if batch_size_override is not None else training.get("batch_size", 32))
     if epochs <= 0:
@@ -175,6 +188,10 @@ def plan_jobs_for_route(
                 threshold_objective=threshold_objective,
                 subject_aggregation=subject_aggregation,
                 model_kwargs_json=model_kwargs_json,
+                source_trial_sec=source_trial_sec,
+                window_sec=window_sec,
+                stride_sec=stride_sec,
+                n_crops=n_crops,
                 preprocessing=preprocessing_token,
             )
         )
@@ -192,10 +209,41 @@ def plan_jobs_for_route(
                 threshold_objective=threshold_objective,
                 subject_aggregation=subject_aggregation,
                 model_kwargs_json=model_kwargs_json,
+                source_trial_sec=source_trial_sec,
+                window_sec=window_sec,
+                stride_sec=stride_sec,
+                n_crops=n_crops,
                 preprocessing=preprocessing_token,
             )
         )
     return jobs
+
+
+def _route_window_plan(route_data: dict[str, Any]) -> tuple[float, float, float | None, int]:
+    augmentation = route_data.get("augmentation") or {}
+    if not isinstance(augmentation, dict):
+        augmentation = {}
+    source_trial_sec = float(augmentation.get("source_trial_sec", 50.0))
+    window_sec = float(augmentation.get("window_sec", route_data.get("input_window_sec", 10.0)))
+    stride_sec: float | None = None
+    if "n_crops" in augmentation:
+        n_crops = int(augmentation["n_crops"])
+    elif "stride_sec" in augmentation:
+        stride_sec = float(augmentation["stride_sec"])
+        if stride_sec <= 0:
+            raise ValueError("sliding-window route stride_sec must be positive")
+        n_crops = int((source_trial_sec - window_sec) // stride_sec) + 1
+    else:
+        n_crops = 5
+    if source_trial_sec <= 0:
+        raise ValueError("source_trial_sec must be positive")
+    if window_sec <= 0:
+        raise ValueError("window_sec must be positive")
+    if n_crops <= 0:
+        raise ValueError("n_crops must be positive")
+    if window_sec > source_trial_sec:
+        raise ValueError("window_sec cannot exceed source_trial_sec")
+    return source_trial_sec, window_sec, stride_sec, n_crops
 
 
 def write_tsv(path: Path, jobs: list[RouteJob]) -> None:
@@ -212,6 +260,14 @@ def _tsv_cell(value: str) -> str:
     if "\t" in value or "\n" in value or "\r" in value:
         raise ValueError(f"TSV cell contains a forbidden control character: {value!r}")
     return value
+
+
+def _format_float(value: float) -> str:
+    return f"{float(value):g}"
+
+
+def _format_optional_float(value: float | None) -> str:
+    return "default" if value is None else _format_float(value)
 
 
 def _slug(value: str) -> str:

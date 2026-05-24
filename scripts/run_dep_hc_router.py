@@ -61,17 +61,29 @@ def _make_samples(
     source_trial_sec: float,
     window_sec: float,
     n_crops: int,
+    stride_sec: float | None = None,
     ea_transform,
 ) -> list[RouterSample]:
-    windows = real_adapter._make_fixed_crops(
-        trials,
-        source_trial_sec=source_trial_sec,
-        window_sec=window_sec,
-        n_crops=n_crops,
-        preproc=preprocessing,
-        ea_transform=ea_transform,
-        skip_preproc=False,
-    )
+    if stride_sec is None:
+        windows = real_adapter._make_fixed_crops(
+            trials,
+            source_trial_sec=source_trial_sec,
+            window_sec=window_sec,
+            n_crops=n_crops,
+            preproc=preprocessing,
+            ea_transform=ea_transform,
+            skip_preproc=False,
+        )
+    else:
+        windows = real_adapter._make_sliding_windows(
+            trials,
+            source_trial_sec=source_trial_sec,
+            window_sec=window_sec,
+            stride_sec=stride_sec,
+            preproc=preprocessing,
+            ea_transform=ea_transform,
+            skip_preproc=False,
+        )
     return [
         RouterSample(
             x=window["x"],

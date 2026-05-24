@@ -396,6 +396,33 @@ def test_dep_hc_neural_task_supports_factory_backbone_dict_logits():
     assert gate_kwargs["fbstcnet"]["variant"] == "M"
 
 
+def test_dep_hc_sample_maker_supports_sliding_windows():
+    from scripts.run_dep_hc_router import _make_samples
+
+    trial = {
+        "x": _window("sliding-source", scale=1.0).repeat(10, axis=1)[:, :2500],
+        "y": 0,
+        "subject_id": "HC001",
+        "cohort": "HC",
+        "trial_id": "HC001_neu1",
+    }
+
+    samples = _make_samples(
+        [trial],
+        preprocessing=[],
+        source_trial_sec=10,
+        window_sec=6,
+        n_crops=5,
+        stride_sec=1,
+        ea_transform=None,
+    )
+
+    assert len(samples) == 5
+    assert [sample.crop_id for sample in samples] == [0, 1, 2, 3, 4]
+    assert [sample.window_start_sec for sample in samples] == [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert {sample.x.shape for sample in samples} == {(30, 1500)}
+
+
 def test_dep_hc_neural_task_rejects_unknown_model_name():
     pytest.importorskip("torch")
     with pytest.raises(ValueError, match="unknown DEP/HC neural model_name"):
