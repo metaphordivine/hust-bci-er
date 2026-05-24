@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import zlib
+import csv
 import json
+import zlib
 
 import numpy as np
 import pytest
@@ -41,7 +42,7 @@ from hust_bci_er.tasks.dep_hc.features import (
     time_frequency_summary_features,
 )
 from scripts.run_dep_hc_router import resolve_preprocessing
-from scripts import run_dep_hc_neural_task
+from scripts import run_dep_hc_neural_task, run_dep_hc_score_fusion_task
 
 
 def _window(seed_text: str, *, scale: float = 1.0) -> np.ndarray:
@@ -442,6 +443,87 @@ def test_dep_hc_score_fusion_validates_selection_component_names():
             val_component_prediction_rows={"a": rows, "typo": rows},
             threshold_objective="balanced_accuracy",
         )
+
+
+def test_dep_hc_score_fusion_task_writes_jsonable_split_config(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    _write_score_component_run(component_a, hc_p_dep="0.20", dep_p_dep="0.70")
+    _write_score_component_run(component_b, hc_p_dep="0.30", dep_p_dep="0.80")
+    out_dir = tmp_path / "fusion"
+
+    assert (
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(out_dir),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"traditional={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads((out_dir / "dep_hc_task_diagnostic.json").read_text(encoding="utf-8"))
+    config = payload["config"]
+    assert config["protocol"] == "p2"
+    assert config["split_id"] == "dep_hc_router_p2_holdout123_train42"
+    assert config["holdout_seed"] == 123
+    assert config["component_roots"] == {
+        "deformer": str(component_a),
+        "traditional": str(component_b),
+    }
+    assert config["selection_component_roots"] == {}
+
+
+def _write_score_component_run(root, *, hc_p_dep: str, dep_p_dep: str) -> None:
+    root.mkdir()
+    rows = [
+        {
+            "subject_id": "HC101",
+            "trial_id": "HC101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "HC",
+            "y_true": "0",
+            "p_dep": hc_p_dep,
+        },
+        {
+            "subject_id": "DEP101",
+            "trial_id": "DEP101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "DEP",
+            "y_true": "1",
+            "p_dep": dep_p_dep,
+        },
+    ]
+    with (root / "dep_hc_predictions.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    (root / "dep_hc_task_diagnostic.json").write_text(
+        json.dumps(
+            {
+                "task": "dep_hc",
+                "config": {
+                    "protocol": "p2",
+                    "split_id": "dep_hc_router_p2_holdout123_train42",
+                    "seed": 42,
+                    "n_holdout_subjects": 12,
+                    "holdout_seed": 123,
+                },
+                "metrics": {},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_dep_hc_neural_task_smoke_uses_cohort_target():

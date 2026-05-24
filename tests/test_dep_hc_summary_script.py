@@ -244,3 +244,13 @@ def test_robust_recommendation_rows_do_not_promote_missing_recall_gap() -> None:
     robust = summarize_dep_hc_diagnostics.robust_recommendation_rows([missing_gap, complete])
 
     assert robust[0]["feature_or_fusion"] == "complete"
+
+
+def test_holdout_seed_from_config_supports_existing_split_id_format() -> None:
+    assert (
+        summarize_dep_hc_diagnostics._holdout_seed_from_config(
+            {"split_id": "dep_hc_router_p2_holdout123_train42"}
+        )
+        == "123"
+    )
+    assert summarize_dep_hc_diagnostics._holdout_seed_from_config({"split_id": "split_h456"}) == "456"

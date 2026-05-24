@@ -453,7 +453,7 @@ def _holdout_seed_from_config(config: dict[str, Any]) -> str:
     raw = config.get("holdout_seed", "")
     if raw not in {"", None}:
         return str(raw)
-    match = re.search(r"(?:^|_)h(\d+)(?:$|_)", str(config.get("split_id", "")))
+    match = re.search(r"(?:^|_)(?:h|holdout)(\d+)(?:$|_)", str(config.get("split_id", "")))
     return match.group(1) if match else ""
 
 

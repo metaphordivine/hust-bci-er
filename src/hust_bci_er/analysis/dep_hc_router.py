@@ -22,6 +22,7 @@ from hust_bci_er.evaluation.exact_single_crop import assignment_grid
 
 COHORT_TO_LABEL = {"HC": 0, "DEP": 1}
 LABEL_TO_COHORT = {value: key for key, value in COHORT_TO_LABEL.items()}
+DEFAULT_MAX_CROP_COMBO_ASSIGNMENTS = 500_000
 DEFAULT_BANDS: tuple[tuple[str, float, float], ...] = (
     ("delta", 1.0, 4.0),
     ("theta", 4.0, 8.0),
@@ -473,6 +474,7 @@ def crop_combo_subject_metrics(
     aggregation: str = "mean",
     n_trials: int = 8,
     n_crops: int = 5,
+    max_assignments: int = DEFAULT_MAX_CROP_COMBO_ASSIGNMENTS,
 ) -> dict[str, Any]:
     """Evaluate held-out 10s crop assignments from 50s x 5-crop predictions.
 
@@ -486,6 +488,8 @@ def crop_combo_subject_metrics(
         raise ValueError(f"unknown subject aggregation: {aggregation}")
     if n_trials <= 0 or n_crops <= 0:
         raise ValueError("n_trials and n_crops must be positive")
+    if max_assignments <= 0:
+        raise ValueError("max_assignments must be positive")
 
     subject_trials: dict[str, dict[str, dict[int, float]]] = {}
     subject_truth: dict[str, int] = {}
@@ -526,6 +530,20 @@ def crop_combo_subject_metrics(
             "crop_combo_expected_crops": int(n_crops),
             "crop_combo_complete_subjects": 0,
             "crop_combo_incomplete_subjects": int(incomplete_subjects),
+        }
+
+    n_assignments = int(n_crops) ** int(n_trials)
+    if n_assignments > int(max_assignments):
+        return {
+            "crop_combo_status": "skipped_too_many_assignments",
+            "crop_combo_n_assignments": int(n_assignments),
+            "crop_combo_max_assignments": int(max_assignments),
+            "crop_combo_expected_trials": int(n_trials),
+            "crop_combo_expected_crops": int(n_crops),
+            "crop_combo_complete_subjects": int(len(complete_subjects)),
+            "crop_combo_incomplete_subjects": int(incomplete_subjects),
+            "crop_combo_aggregation": aggregation,
+            "crop_combo_threshold": float(threshold),
         }
 
     grid = assignment_grid(int(n_trials), int(n_crops))

@@ -54,12 +54,21 @@ def main(argv: list[str] | None = None) -> int:
         choices=["mean", "median", "trimmed_mean", "vote_frac"],
         default="vote_frac",
     )
+    parser.add_argument("--protocol", choices=["p1", "p2"], default=None)
+    parser.add_argument("--split-id", default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--fold", type=int, default=None)
+    parser.add_argument("--n-folds", type=int, default=None)
+    parser.add_argument("--n-holdout-subjects", type=int, default=None)
+    parser.add_argument("--holdout-seed", type=int, default=None)
     args = parser.parse_args(argv)
 
-    components = _read_named_prediction_dirs(args.component_run_dir)
+    component_roots = _named_roots(args.component_run_dir)
+    selection_component_roots = _named_roots(args.selection_component_run_dir or [])
+    components = _read_named_prediction_dirs(component_roots)
     selection_components = (
-        _read_named_prediction_dirs(args.selection_component_run_dir)
-        if args.selection_component_run_dir
+        _read_named_prediction_dirs(selection_component_roots)
+        if selection_component_roots
         else None
     )
     weights = _parse_named_floats(args.component_weight)
@@ -72,10 +81,12 @@ def main(argv: list[str] | None = None) -> int:
         select_two_way_weight=args.select_two_way_weight,
         weight_step=args.weight_step,
     )
+    split_metadata = _split_metadata_for_output(args, component_roots)
     config = {
         "task": "dep_hc_score_fusion",
-        "component_roots": _named_roots(args.component_run_dir),
-        "selection_component_roots": _named_roots(args.selection_component_run_dir or []),
+        **split_metadata,
+        "component_roots": _string_roots(component_roots),
+        "selection_component_roots": _string_roots(selection_component_roots),
         "threshold_objective": args.threshold_objective,
         "subject_aggregation": args.subject_aggregation,
         "weight_step": args.weight_step,
@@ -87,8 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _read_named_prediction_dirs(values: list[str]) -> dict[str, list[dict[str, str]]]:
-    roots = _named_roots(values)
+def _read_named_prediction_dirs(roots: dict[str, Path]) -> dict[str, list[dict[str, str]]]:
     return {name: _read_prediction_rows(path / "dep_hc_predictions.csv") for name, path in roots.items()}
 
 
@@ -115,6 +125,63 @@ def _read_prediction_rows(path: Path) -> list[dict[str, str]]:
         raise SystemExit(f"missing component predictions: {path}")
     with path.open(newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+def _string_roots(roots: dict[str, Path]) -> dict[str, str]:
+    return {name: str(path) for name, path in roots.items()}
+
+
+def _split_metadata_for_output(args: argparse.Namespace, component_roots: dict[str, Path]) -> dict[str, object]:
+    metadata = _common_component_metadata(component_roots)
+    overrides = {
+        "protocol": args.protocol,
+        "split_id": args.split_id,
+        "seed": args.seed,
+        "fold": args.fold,
+        "n_folds": args.n_folds,
+        "n_holdout_subjects": args.n_holdout_subjects,
+        "holdout_seed": args.holdout_seed,
+    }
+    metadata.update({key: value for key, value in overrides.items() if value is not None})
+    if not metadata.get("protocol"):
+        raise SystemExit(
+            "score fusion requires split metadata; provide --protocol/--split-id or use component runs "
+            "with dep_hc_task_diagnostic.json"
+        )
+    return metadata
+
+
+def _common_component_metadata(component_roots: dict[str, Path]) -> dict[str, object]:
+    keys = ("protocol", "split_id", "seed", "fold", "n_folds", "n_holdout_subjects", "holdout_seed")
+    values_by_key: dict[str, set[object]] = {key: set() for key in keys}
+    for name, root in component_roots.items():
+        path = root / "dep_hc_task_diagnostic.json"
+        if not path.exists():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        config = payload.get("config", {})
+        if not isinstance(config, dict):
+            raise SystemExit(f"component diagnostic config must be an object: {name}={path}")
+        for key in keys:
+            value = _metadata_value(key, config.get(key))
+            if value in {"", None}:
+                continue
+            values_by_key[key].add(value)
+    metadata: dict[str, object] = {}
+    for key, values in values_by_key.items():
+        if len(values) > 1:
+            raise SystemExit(f"component split metadata mismatch for {key}: {sorted(map(str, values))}")
+        if values:
+            metadata[key] = next(iter(values))
+    return metadata
+
+
+def _metadata_value(key: str, value: object) -> object:
+    if value is None or value == "":
+        return None
+    if key in {"seed", "fold", "n_folds", "n_holdout_subjects", "holdout_seed"}:
+        return int(value)
+    return str(value)
 
 
 def _parse_named_floats(values: list[str] | None) -> dict[str, float] | None:

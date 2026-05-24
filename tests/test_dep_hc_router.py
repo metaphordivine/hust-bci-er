@@ -153,6 +153,30 @@ def test_crop_combo_subject_metrics_enumerates_heldout_10s_assignments():
     assert metrics["crop_combo_best_ba"] == pytest.approx(1.0)
 
 
+def test_crop_combo_subject_metrics_skips_explosive_assignment_grid():
+    rows = []
+    for subject_id, cohort, y_true, p_dep in [("HC001", "HC", "0", "0.1"), ("DEP001", "DEP", "1", "0.9")]:
+        for trial_idx in range(8):
+            for crop_id in range(41):
+                rows.append(
+                    {
+                        "subject_id": subject_id,
+                        "trial_id": f"t{trial_idx}",
+                        "crop_id": str(crop_id),
+                        "cohort": cohort,
+                        "y_true": y_true,
+                        "p_dep": p_dep,
+                    }
+                )
+
+    metrics = crop_combo_subject_metrics(rows, threshold=0.5, aggregation="mean", n_trials=8, n_crops=41)
+
+    assert metrics["crop_combo_status"] == "skipped_too_many_assignments"
+    assert metrics["crop_combo_n_assignments"] == 41**8
+    assert metrics["crop_combo_max_assignments"] == 500_000
+    assert metrics["crop_combo_complete_subjects"] == 2
+
+
 def test_infer_crop_combo_shape_uses_materialized_prediction_rows():
     rows = []
     for subject_id, cohort, y_true in [("HC001", "HC", "0"), ("DEP001", "DEP", "1")]:
