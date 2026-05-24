@@ -173,6 +173,11 @@ def test_resolve_preprocessing_overrides_default_when_cli_supplies_values():
     assert resolve_preprocessing(["bandpass", "zscore"]) == ["bandpass", "zscore"]
     assert resolve_preprocessing(["car,zscore"]) == ["car", "zscore"]
     assert resolve_preprocessing(["car, zscore", "bandpass"]) == ["car", "zscore", "bandpass"]
+    assert resolve_preprocessing(['["car","zscore"]']) == ["car", "zscore"]
+    assert resolve_preprocessing(['[{"name":"bandpass","low_hz":1.0,"high_hz":40.0},"zscore"]']) == [
+        {"name": "bandpass", "low_hz": 1.0, "high_hz": 40.0},
+        "zscore",
+    ]
 
 
 def test_run_dep_hc_router_rejects_unknown_preprocessing(tmp_path):

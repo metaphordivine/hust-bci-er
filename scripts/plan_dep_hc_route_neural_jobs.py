@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
+from hust_bci_er.config.schema import preprocessing_component_name, sliding_window_count  # noqa: E402
 from hust_bci_er.tasks.dep_hc.neural import DEP_HC_NEURAL_MODELS  # noqa: E402
-from hust_bci_er.config.schema import sliding_window_count  # noqa: E402
 
 
 FIELDS = [
@@ -159,8 +159,12 @@ def plan_jobs_for_route(
     if not isinstance(preprocessing, list):
         raise ValueError(f"route preprocessing must be a list: {route_config}")
     drop_preprocessing = {"euclidean_alignment"} if drop_preprocessing is None else set(drop_preprocessing)
-    converted_preprocessing = [str(step) for step in preprocessing if str(step) not in drop_preprocessing]
-    preprocessing_token = ",".join(converted_preprocessing) if converted_preprocessing else "none"
+    converted_preprocessing = [
+        step
+        for step in preprocessing
+        if str(preprocessing_component_name(step) or step) not in drop_preprocessing
+    ]
+    preprocessing_token = _serialize_preprocessing(converted_preprocessing)
     training = route_data.get("training") or {}
     if not isinstance(training, dict):
         training = {}
@@ -261,6 +265,14 @@ def _tsv_cell(value: str) -> str:
     if "\t" in value or "\n" in value or "\r" in value:
         raise ValueError(f"TSV cell contains a forbidden control character: {value!r}")
     return value
+
+
+def _serialize_preprocessing(preprocessing: list[Any]) -> str:
+    if not preprocessing:
+        return "none"
+    if len(preprocessing) == 1 and isinstance(preprocessing[0], str):
+        return preprocessing[0]
+    return json.dumps(preprocessing, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _format_float(value: float) -> str:

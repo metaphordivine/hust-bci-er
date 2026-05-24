@@ -51,7 +51,7 @@ def test_plan_dep_hc_route_neural_jobs_preserves_route_model_and_preprocessing(t
         "screen_fixed_crop_ea_deformer_p1_f3",
     ]
     assert {job.model for job in jobs} == {"deformer_lite"}
-    assert {job.preprocessing for job in jobs} == {"car,zscore"}
+    assert {job.preprocessing for job in jobs} == {'["car","zscore"]'}
     assert {job.source_trial_sec for job in jobs} == {50.0}
     assert {job.window_sec for job in jobs} == {10.0}
     assert {job.stride_sec for job in jobs} == {None}
@@ -98,6 +98,33 @@ def test_plan_dep_hc_route_neural_jobs_writes_tsv(tmp_path: Path) -> None:
     assert rows[0]["n_crops"] == "5"
     assert rows[0]["model_kwargs_json"].startswith("{")
     assert b"\r" not in out.read_bytes()
+
+
+def test_plan_dep_hc_route_neural_jobs_preserves_parameterized_preprocessing(tmp_path: Path) -> None:
+    route = _write_route(tmp_path / "route.yaml")
+    payload = yaml.safe_load(route.read_text(encoding="utf-8"))
+    payload["preprocessing"] = [
+        "euclidean_alignment",
+        {"name": "bandpass", "low_hz": 1.0, "high_hz": 40.0},
+        "zscore",
+    ]
+    route.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    jobs = plan_jobs_for_route(
+        route,
+        run_prefix="screen",
+        seed=42,
+        p1_folds=[0],
+        p2_holdout_seeds=[123],
+        epochs_override=None,
+        batch_size_override=None,
+        threshold_objective="balanced_accuracy",
+        subject_aggregation="mean",
+        drop_preprocessing={"euclidean_alignment"},
+    )
+
+    parsed = json.loads(jobs[0].preprocessing)
+    assert parsed == [{"high_hz": 40.0, "low_hz": 1.0, "name": "bandpass"}, "zscore"]
 
 
 def test_plan_dep_hc_route_neural_jobs_converts_sliding_window_contract(tmp_path: Path) -> None:

@@ -24,16 +24,24 @@ from hust_bci_er.training import _real_adapter_impl as real_adapter  # noqa: E40
 DEFAULT_PREPROCESSING: tuple[str, ...] = ("car", "zscore")
 
 
-def resolve_preprocessing(values: list[str] | None) -> list[str]:
+def resolve_preprocessing(values: list[str] | None) -> list[Any]:
     if values is None:
         return list(DEFAULT_PREPROCESSING)
-    normalized = [
-        step
-        for value in values
-        for step in (part.strip() for part in str(value).split(","))
-        if step
-    ]
-    if any(value.lower() in {"none", "raw"} for value in normalized):
+    normalized: list[Any] = []
+    for value in values:
+        token = str(value).strip()
+        if not token:
+            continue
+        if token.startswith(("[", "{")):
+            parsed = json.loads(token)
+            if isinstance(parsed, list):
+                normalized.extend(parsed)
+            else:
+                normalized.append(parsed)
+            continue
+        normalized.extend(part.strip() for part in token.split(",") if part.strip())
+    names = [str(item.get("name", "")) if isinstance(item, dict) else str(item) for item in normalized]
+    if any(value.lower() in {"none", "raw"} for value in names):
         if len(normalized) != 1:
             raise ValueError("--preprocessing none cannot be combined with other preprocessing steps")
         return []
