@@ -17,6 +17,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     balanced_accuracy_binary,
     brier_score,
     cohort_label,
+    crop_combo_subject_metrics,
     fit_logistic_router,
     predict_dep_probability,
     subject_threshold_diagnostic,
@@ -176,6 +177,7 @@ def evaluate_dep_hc_task(
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
+    metrics.update(crop_combo_subject_metrics(prediction_rows, threshold=threshold, aggregation=subject_aggregation))
     return {"model": model, "metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
 
 

@@ -17,6 +17,8 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from hust_bci_er.evaluation.exact_single_crop import assignment_grid
+
 
 COHORT_TO_LABEL = {"HC": 0, "DEP": 1}
 LABEL_TO_COHORT = {value: key for key, value in COHORT_TO_LABEL.items()}
@@ -245,6 +247,7 @@ def evaluate_router(
     for cohort, label in COHORT_TO_LABEL.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
+    metrics.update(crop_combo_subject_metrics(prediction_rows, threshold=threshold, aggregation=subject_aggregation))
     return {"model": model, "metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
 
 
@@ -452,6 +455,158 @@ def aggregate_subject_rows(
             }
         )
     return out
+
+
+def crop_combo_subject_metrics(
+    prediction_rows: Sequence[Mapping[str, str]],
+    *,
+    threshold: float = 0.5,
+    aggregation: str = "mean",
+    n_trials: int = 8,
+    n_crops: int = 5,
+) -> dict[str, Any]:
+    """Evaluate held-out 10s crop assignments from 50s x 5-crop predictions.
+
+    The hidden/test DEP-HC unit is a 10s segment, but the local training set has
+    50s trials. For diagnostics that evaluate 10s behavior from 50s local
+    trials, enumerate one crop choice for each of the eight trials and apply the
+    same assignment to every held-out subject.
+    """
+
+    if aggregation not in {"mean", "median", "trimmed_mean", "vote_frac"}:
+        raise ValueError(f"unknown subject aggregation: {aggregation}")
+    if n_trials <= 0 or n_crops <= 0:
+        raise ValueError("n_trials and n_crops must be positive")
+
+    subject_trials: dict[str, dict[str, dict[int, float]]] = {}
+    subject_truth: dict[str, int] = {}
+    for row in prediction_rows:
+        subject_id = str(row["subject_id"])
+        trial_id = str(row["trial_id"])
+        crop_id = int(row["crop_id"])
+        subject_trials.setdefault(subject_id, {}).setdefault(trial_id, {})[crop_id] = float(row["p_dep"])
+        subject_truth[subject_id] = int(row["y_true"])
+
+    matrices: list[np.ndarray] = []
+    labels: list[int] = []
+    complete_subjects: list[str] = []
+    incomplete_subjects = 0
+    expected_crop_ids = tuple(range(int(n_crops)))
+    for subject_id in sorted(subject_trials):
+        trials = subject_trials[subject_id]
+        trial_ids = sorted(trials)
+        if len(trial_ids) != int(n_trials):
+            incomplete_subjects += 1
+            continue
+        if any(tuple(sorted(trials[trial_id])) != expected_crop_ids for trial_id in trial_ids):
+            incomplete_subjects += 1
+            continue
+        matrices.append(
+            np.asarray(
+                [[trials[trial_id][crop_id] for crop_id in expected_crop_ids] for trial_id in trial_ids],
+                dtype=np.float64,
+            )
+        )
+        labels.append(subject_truth[subject_id])
+        complete_subjects.append(subject_id)
+
+    if not matrices:
+        return {
+            "crop_combo_status": "skipped_incomplete",
+            "crop_combo_expected_trials": int(n_trials),
+            "crop_combo_expected_crops": int(n_crops),
+            "crop_combo_complete_subjects": 0,
+            "crop_combo_incomplete_subjects": int(incomplete_subjects),
+        }
+
+    grid = assignment_grid(int(n_trials), int(n_crops))
+    predictions = np.empty((grid.shape[0], len(matrices)), dtype=np.int8)
+    for subject_idx, matrix in enumerate(matrices):
+        selected = matrix[np.arange(int(n_trials)), grid]
+        subject_scores = _assignment_subject_scores(selected, threshold=threshold, aggregation=aggregation)
+        predictions[:, subject_idx] = (subject_scores >= float(threshold)).astype(np.int8)
+
+    labels_arr = np.asarray(labels, dtype=np.int8)
+    hc_recall = _assignment_recall(predictions, labels_arr, label=0)
+    dep_recall = _assignment_recall(predictions, labels_arr, label=1)
+    recalls = [values for values in (hc_recall, dep_recall) if values is not None]
+    ba = np.mean(np.vstack(recalls), axis=0) if recalls else np.full(grid.shape[0], np.nan, dtype=np.float64)
+    min_recall = np.minimum(
+        hc_recall if hc_recall is not None else np.full(grid.shape[0], np.nan),
+        dep_recall if dep_recall is not None else np.full(grid.shape[0], np.nan),
+    )
+    recall_gap = (
+        np.abs(dep_recall - hc_recall)
+        if hc_recall is not None and dep_recall is not None
+        else np.full(grid.shape[0], np.nan, dtype=np.float64)
+    )
+    return {
+        "crop_combo_status": "computed",
+        "crop_combo_expected_ba": _nanmean(ba),
+        "crop_combo_worst_ba": _nanmin(ba),
+        "crop_combo_best_ba": _nanmax(ba),
+        "crop_combo_std_ba": _nanstd(ba),
+        "crop_combo_expected_hc_recall": _nanmean(hc_recall),
+        "crop_combo_worst_hc_recall": _nanmin(hc_recall),
+        "crop_combo_expected_dep_recall": _nanmean(dep_recall),
+        "crop_combo_worst_dep_recall": _nanmin(dep_recall),
+        "crop_combo_expected_min_recall": _nanmean(min_recall),
+        "crop_combo_worst_min_recall": _nanmin(min_recall),
+        "crop_combo_expected_recall_gap": _nanmean(recall_gap),
+        "crop_combo_n_assignments": int(grid.shape[0]),
+        "crop_combo_complete_subjects": int(len(complete_subjects)),
+        "crop_combo_incomplete_subjects": int(incomplete_subjects),
+        "crop_combo_expected_trials": int(n_trials),
+        "crop_combo_expected_crops": int(n_crops),
+        "crop_combo_aggregation": aggregation,
+        "crop_combo_threshold": float(threshold),
+    }
+
+
+def _assignment_subject_scores(selected: np.ndarray, *, threshold: float, aggregation: str) -> np.ndarray:
+    if aggregation == "mean":
+        return np.mean(selected, axis=1)
+    if aggregation == "median":
+        return np.median(selected, axis=1)
+    if aggregation == "trimmed_mean":
+        if selected.shape[1] >= 3:
+            sorted_selected = np.sort(selected, axis=1)
+            return np.mean(sorted_selected[:, 1:-1], axis=1)
+        return np.mean(selected, axis=1)
+    if aggregation == "vote_frac":
+        return np.mean(selected >= float(threshold), axis=1)
+    raise ValueError(f"unknown subject aggregation: {aggregation}")
+
+
+def _assignment_recall(predictions: np.ndarray, labels: np.ndarray, *, label: int) -> np.ndarray | None:
+    mask = labels == int(label)
+    if not np.any(mask):
+        return None
+    return np.mean(predictions[:, mask] == int(label), axis=1)
+
+
+def _nanmean(values: np.ndarray | None) -> float:
+    if values is None:
+        return float("nan")
+    return float(np.nanmean(values))
+
+
+def _nanmin(values: np.ndarray | None) -> float:
+    if values is None:
+        return float("nan")
+    return float(np.nanmin(values))
+
+
+def _nanmax(values: np.ndarray | None) -> float:
+    if values is None:
+        return float("nan")
+    return float(np.nanmax(values))
+
+
+def _nanstd(values: np.ndarray | None) -> float:
+    if values is None:
+        return float("nan")
+    return float(np.nanstd(values))
 
 
 def write_router_outputs(result: Mapping[str, Any], out_dir: Path, *, config: Mapping[str, Any]) -> None:

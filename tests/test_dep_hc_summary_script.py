@@ -95,7 +95,7 @@ def test_summarize_dep_hc_diagnostics_writes_board_and_hard_subjects(tmp_path: P
     assert "single" in hard_rows[0]["runs"]
     markdown = (out_dir / "board.md").read_text(encoding="utf-8")
     assert "## Aggregate Summary" in markdown
-    assert "| p2 | traditional+time_frequency | fixed | 1 | 0.7500 | 0.7500 | 0.5000 | 1.0000 |" in markdown
+    assert "| p2 | traditional+time_frequency | fixed_0_5/mean | fixed | holdouts=123 | 1 | 0.7500 | 0.7500 | 0.5000 | 1.0000 |" in markdown
 
 
 def test_summarize_dep_hc_diagnostics_glob_only_expands_diagnostic_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

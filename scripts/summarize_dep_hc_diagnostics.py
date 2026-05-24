@@ -11,6 +11,7 @@ import csv
 import glob
 import json
 import math
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -24,7 +25,11 @@ sys.path.insert(0, str(ROOT / "src"))
 BOARD_FIELDS = [
     "run_id",
     "protocol",
+    "eval_scope",
     "split_id",
+    "seed",
+    "fold",
+    "holdout_seed",
     "feature_or_fusion",
     "classifier",
     "threshold_objective",
@@ -32,6 +37,16 @@ BOARD_FIELDS = [
     "fusion_weight_source",
     "fusion_weight_by_feature",
     "subject_aggregation",
+    "primary_ba",
+    "primary_hc_recall",
+    "primary_dep_recall",
+    "primary_dep_vs_hc_ratio",
+    "primary_metric_source",
+    "crop_combo_status",
+    "crop_combo_expected_ba",
+    "crop_combo_worst_ba",
+    "crop_combo_expected_hc_recall",
+    "crop_combo_expected_dep_recall",
     "subject_ba",
     "hc_subject_recall",
     "dep_subject_recall",
@@ -147,16 +162,32 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
         fusion_weight_by_feature = ""
         fusion_weight_source = ""
         classifier = str(metrics.get("classifier", config.get("classifier", "")))
+    combo_status = str(metrics.get("crop_combo_status", ""))
+    has_combo = combo_status == "computed" and math.isfinite(_float_metric(metrics, "crop_combo_expected_ba"))
+    primary_ba = _float_metric(metrics, "crop_combo_expected_ba") if has_combo else _float_metric(metrics, "subject_ba")
+    primary_hc = _float_metric(metrics, "crop_combo_expected_hc_recall") if has_combo else _float_metric(metrics, "hc_subject_recall")
+    primary_dep = _float_metric(metrics, "crop_combo_expected_dep_recall") if has_combo else _float_metric(metrics, "dep_subject_recall")
+    primary_source = "crop_combo_expected" if has_combo else "legacy_subject_aggregate"
     hc = _float_metric(metrics, "hc_subject_recall")
     dep = _float_metric(metrics, "dep_subject_recall")
     if math.isfinite(hc) and math.isfinite(dep):
         ratio = dep / hc if hc != 0.0 else float("inf")
     else:
         ratio = float("nan")
+    if math.isfinite(primary_hc) and math.isfinite(primary_dep):
+        primary_ratio = primary_dep / primary_hc if primary_hc != 0.0 else float("inf")
+    else:
+        primary_ratio = float("nan")
+    split_id = str(config.get("split_id", ""))
+    holdout_seed = _holdout_seed_from_config(config)
     return {
         "run_id": root.name,
         "protocol": str(config.get("protocol", "")),
-        "split_id": str(config.get("split_id", "")),
+        "eval_scope": _eval_scope(config),
+        "split_id": split_id,
+        "seed": str(config.get("seed", "")),
+        "fold": str(config.get("fold", "")),
+        "holdout_seed": holdout_seed,
         "feature_or_fusion": feature_or_fusion,
         "classifier": classifier,
         "threshold_objective": str(metrics.get("threshold_objective", config.get("threshold_objective", ""))),
@@ -164,6 +195,16 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
         "fusion_weight_source": fusion_weight_source,
         "fusion_weight_by_feature": fusion_weight_by_feature,
         "subject_aggregation": str(metrics.get("subject_aggregation", config.get("subject_aggregation", ""))),
+        "primary_ba": _format_float(primary_ba),
+        "primary_hc_recall": _format_float(primary_hc),
+        "primary_dep_recall": _format_float(primary_dep),
+        "primary_dep_vs_hc_ratio": _format_float(primary_ratio),
+        "primary_metric_source": primary_source,
+        "crop_combo_status": combo_status,
+        "crop_combo_expected_ba": _format_float(_float_metric(metrics, "crop_combo_expected_ba")),
+        "crop_combo_worst_ba": _format_float(_float_metric(metrics, "crop_combo_worst_ba")),
+        "crop_combo_expected_hc_recall": _format_float(_float_metric(metrics, "crop_combo_expected_hc_recall")),
+        "crop_combo_expected_dep_recall": _format_float(_float_metric(metrics, "crop_combo_expected_dep_recall")),
         "subject_ba": _format_float(_float_metric(metrics, "subject_ba")),
         "hc_subject_recall": _format_float(hc),
         "dep_subject_recall": _format_float(dep),
@@ -216,15 +257,17 @@ def render_markdown(board_rows: list[dict[str, str]], hard_rows: list[dict[str, 
         "# DEP/HC Diagnostic Baseline Board",
         "",
         "This report is diagnostic-only. It does not change route status and is not candidate evidence.",
+        "Primary comparison uses `crop_combo_expected_*` when available; legacy all-crop subject metrics are kept for audit only.",
         "",
         "## Aggregate Summary",
         "",
-        "| protocol | feature/fusion | weight source | n | mean BA | min BA | mean HC recall | mean DEP recall |",
-        "|---|---|---|---:|---:|---:|---:|---:|",
+        "| scope | feature/fusion | threshold/agg | weight source | split coverage | n | mean primary BA | min primary BA | mean HC recall | mean DEP recall |",
+        "|---|---|---|---|---|---:|---:|---:|---:|---:|",
     ]
     for row in aggregate_rows(board_rows):
         lines.append(
-            "| {protocol} | {feature_or_fusion} | {fusion_weight_source} | {n} | {mean_subject_ba} | {min_subject_ba} | {mean_hc_recall} | {mean_dep_recall} |".format(
+            "| {eval_scope} | {feature_or_fusion} | {threshold_objective}/{subject_aggregation} | {fusion_weight_source} | "
+            "{split_coverage} | {n} | {mean_primary_ba} | {min_primary_ba} | {mean_hc_recall} | {mean_dep_recall} |".format(
                 **row
             )
         )
@@ -233,16 +276,15 @@ def render_markdown(board_rows: list[dict[str, str]], hard_rows: list[dict[str, 
             "",
         "## Baseline Runs",
         "",
-        "| run | protocol | feature/fusion | threshold | weight source | subject BA | HC recall | DEP recall | DEP/HC |",
-        "|---|---|---|---|---|---:|---:|---:|---:|",
+        "| run | scope | split | feature/fusion | threshold | metric source | primary BA | worst combo BA | HC recall | DEP recall | DEP/HC | legacy subject BA |",
+        "|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
-    for row in sorted(board_rows, key=lambda item: (item["protocol"], item["feature_or_fusion"], item["run_id"])):
+    for row in sorted(board_rows, key=lambda item: (item["eval_scope"], item["feature_or_fusion"], item["run_id"])):
         lines.append(
-            "| {run_id} | {protocol} | {feature_or_fusion} | {threshold_objective}/{threshold_source} | "
-            "{fusion_weight_source} | {subject_ba} | {hc_subject_recall} | {dep_subject_recall} | {dep_vs_hc_ratio} |".format(
-                **row
-            )
+            "| {run_id} | {eval_scope} | {split} | {feature_or_fusion} | {threshold_objective}/{threshold_source} | "
+            "{primary_metric_source} | {primary_ba} | {crop_combo_worst_ba} | {primary_hc_recall} | "
+            "{primary_dep_recall} | {primary_dep_vs_hc_ratio} | {subject_ba} |".format(**{**row, "split": _row_split_label(row)})
         )
     lines.extend(
         [
@@ -273,31 +315,77 @@ def render_markdown(board_rows: list[dict[str, str]], hard_rows: list[dict[str, 
 
 
 def aggregate_rows(board_rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    grouped: dict[tuple[str, str, str], list[dict[str, str]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str, str], list[dict[str, str]]] = defaultdict(list)
     for row in board_rows:
-        key = (row["protocol"], row["feature_or_fusion"], row["fusion_weight_source"])
+        key = (
+            row["eval_scope"],
+            row["feature_or_fusion"],
+            row["fusion_weight_source"],
+            row["threshold_objective"],
+            row["subject_aggregation"],
+        )
         grouped[key].append(row)
     out: list[dict[str, str]] = []
-    for (protocol, feature_or_fusion, fusion_weight_source), rows in sorted(grouped.items()):
-        bas = [_parse_optional_float(row["subject_ba"]) for row in rows]
-        hc = [_parse_optional_float(row["hc_subject_recall"]) for row in rows]
-        dep = [_parse_optional_float(row["dep_subject_recall"]) for row in rows]
+    for (eval_scope, feature_or_fusion, fusion_weight_source, threshold_objective, subject_aggregation), rows in sorted(grouped.items()):
+        bas = [_parse_optional_float(row["primary_ba"]) for row in rows]
+        hc = [_parse_optional_float(row["primary_hc_recall"]) for row in rows]
+        dep = [_parse_optional_float(row["primary_dep_recall"]) for row in rows]
         bas = [value for value in bas if math.isfinite(value)]
         hc = [value for value in hc if math.isfinite(value)]
         dep = [value for value in dep if math.isfinite(value)]
         out.append(
             {
-                "protocol": protocol,
+                "eval_scope": eval_scope,
                 "feature_or_fusion": feature_or_fusion,
                 "fusion_weight_source": fusion_weight_source,
+                "threshold_objective": threshold_objective,
+                "subject_aggregation": subject_aggregation,
+                "split_coverage": _split_coverage(eval_scope, rows),
                 "n": str(len(rows)),
-                "mean_subject_ba": _format_float(sum(bas) / len(bas) if bas else float("nan")),
-                "min_subject_ba": _format_float(min(bas) if bas else float("nan")),
+                "mean_primary_ba": _format_float(sum(bas) / len(bas) if bas else float("nan")),
+                "min_primary_ba": _format_float(min(bas) if bas else float("nan")),
                 "mean_hc_recall": _format_float(sum(hc) / len(hc) if hc else float("nan")),
                 "mean_dep_recall": _format_float(sum(dep) / len(dep) if dep else float("nan")),
             }
         )
     return out
+
+
+def _eval_scope(config: dict[str, Any]) -> str:
+    protocol = str(config.get("protocol", ""))
+    if protocol == "p1":
+        return "p1_full"
+    if protocol == "p2":
+        return "p2"
+    return protocol
+
+
+def _row_split_label(row: dict[str, str]) -> str:
+    if row["eval_scope"] == "p1_full":
+        return f"seed{row['seed']}_fold{row['fold']}"
+    if row["eval_scope"] == "p2":
+        return f"holdout{row['holdout_seed']}" if row["holdout_seed"] else row["split_id"]
+    return row["split_id"]
+
+
+def _split_coverage(eval_scope: str, rows: list[dict[str, str]]) -> str:
+    if eval_scope == "p1_full":
+        folds = sorted({row["fold"] for row in rows if row["fold"] != ""}, key=lambda value: int(value))
+        seeds = sorted({row["seed"] for row in rows if row["seed"] != ""}, key=lambda value: int(value))
+        complete = "complete" if {"0", "1", "2", "3", "4"}.issubset(set(folds)) else "partial"
+        return f"{complete}; seeds={','.join(seeds) or '-'}; folds={','.join(folds) or '-'}"
+    if eval_scope == "p2":
+        holdouts = sorted({row["holdout_seed"] for row in rows if row["holdout_seed"] not in {"", "0"}}, key=lambda value: int(value))
+        return f"holdouts={','.join(holdouts) or '-'}"
+    return "-"
+
+
+def _holdout_seed_from_config(config: dict[str, Any]) -> str:
+    raw = config.get("holdout_seed", "")
+    if raw not in {"", None}:
+        return str(raw)
+    match = re.search(r"(?:^|_)h(\d+)(?:$|_)", str(config.get("split_id", "")))
+    return match.group(1) if match else ""
 
 
 def _float_metric(metrics: dict[str, Any], key: str) -> float:

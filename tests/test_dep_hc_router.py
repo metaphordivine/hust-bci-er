@@ -14,6 +14,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     balanced_accuracy_binary,
     bandpower_features,
     covariance_tangent_features,
+    crop_combo_subject_metrics,
     evaluate_router,
     extract_router_features,
     router_features_for_sample,
@@ -127,6 +128,28 @@ def test_aggregate_subject_rows_supports_alternate_rules():
     assert trimmed[0]["subject_aggregation"] == "trimmed_mean"
     with pytest.raises(ValueError, match="unknown subject aggregation"):
         aggregate_subject_rows(rows, aggregation="subject_id")
+
+
+def test_crop_combo_subject_metrics_enumerates_heldout_10s_assignments():
+    rows = [
+        {"subject_id": "HC001", "trial_id": "t0", "crop_id": "0", "cohort": "HC", "y_true": "0", "p_dep": "0.1"},
+        {"subject_id": "HC001", "trial_id": "t0", "crop_id": "1", "cohort": "HC", "y_true": "0", "p_dep": "0.9"},
+        {"subject_id": "HC001", "trial_id": "t1", "crop_id": "0", "cohort": "HC", "y_true": "0", "p_dep": "0.1"},
+        {"subject_id": "HC001", "trial_id": "t1", "crop_id": "1", "cohort": "HC", "y_true": "0", "p_dep": "0.1"},
+        {"subject_id": "DEP001", "trial_id": "t0", "crop_id": "0", "cohort": "DEP", "y_true": "1", "p_dep": "0.9"},
+        {"subject_id": "DEP001", "trial_id": "t0", "crop_id": "1", "cohort": "DEP", "y_true": "1", "p_dep": "0.9"},
+        {"subject_id": "DEP001", "trial_id": "t1", "crop_id": "0", "cohort": "DEP", "y_true": "1", "p_dep": "0.1"},
+        {"subject_id": "DEP001", "trial_id": "t1", "crop_id": "1", "cohort": "DEP", "y_true": "1", "p_dep": "0.9"},
+    ]
+
+    metrics = crop_combo_subject_metrics(rows, threshold=0.5, aggregation="mean", n_trials=2, n_crops=2)
+
+    assert metrics["crop_combo_status"] == "computed"
+    assert metrics["crop_combo_n_assignments"] == 4
+    assert metrics["crop_combo_complete_subjects"] == 2
+    assert metrics["crop_combo_expected_ba"] == pytest.approx(0.75)
+    assert metrics["crop_combo_worst_ba"] == pytest.approx(0.5)
+    assert metrics["crop_combo_best_ba"] == pytest.approx(1.0)
 
 
 def test_vote_frac_threshold_candidates_include_discrete_boundaries():
