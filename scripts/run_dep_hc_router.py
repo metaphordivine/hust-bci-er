@@ -25,7 +25,14 @@ DEFAULT_PREPROCESSING: tuple[str, ...] = ("car", "zscore")
 
 
 def resolve_preprocessing(values: list[str] | None) -> list[str]:
-    return list(values) if values is not None else list(DEFAULT_PREPROCESSING)
+    if values is None:
+        return list(DEFAULT_PREPROCESSING)
+    normalized = [str(value).strip() for value in values if str(value).strip()]
+    if any(value.lower() in {"none", "raw"} for value in normalized):
+        if len(normalized) != 1:
+            raise ValueError("--preprocessing none cannot be combined with other preprocessing steps")
+        return []
+    return normalized
 
 
 def _subjects_for_protocol(
@@ -110,7 +117,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-trial-sec", type=float, default=50.0)
     parser.add_argument("--window-sec", type=float, default=10.0)
     parser.add_argument("--n-crops", type=int, default=5)
-    parser.add_argument("--preprocessing", action="append", default=None, help="Preprocessing step. Can be repeated. Overrides the default car+zscore pipeline when supplied.")
+    parser.add_argument(
+        "--preprocessing",
+        action="append",
+        default=None,
+        help="Preprocessing step. Can be repeated. Use 'none' for raw windows; omitted means default car+zscore.",
+    )
     parser.add_argument("--feature-set", choices=["cov_tangent", "bandpower", "cov_tangent_bandpower"], default="cov_tangent_bandpower")
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--epochs", type=int, default=600)

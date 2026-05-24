@@ -148,6 +148,25 @@ def test_plan_dep_hc_route_neural_jobs_drops_ea_by_default(tmp_path: Path) -> No
     assert {job.preprocessing for job in jobs} == {"zscore"}
 
 
+def test_plan_dep_hc_route_neural_jobs_marks_empty_preprocessing_as_none(tmp_path: Path) -> None:
+    route = _write_route(tmp_path / "route.yaml")
+
+    jobs = plan_jobs_for_route(
+        route,
+        run_prefix="screen",
+        seed=42,
+        p1_folds=[0],
+        p2_holdout_seeds=[123],
+        epochs_override=None,
+        batch_size_override=None,
+        threshold_objective="balanced_accuracy",
+        subject_aggregation="mean",
+        drop_preprocessing={"euclidean_alignment", "zscore"},
+    )
+
+    assert {job.preprocessing for job in jobs} == {"none"}
+
+
 def test_plan_dep_hc_route_neural_jobs_rejects_unsupported_model(tmp_path: Path) -> None:
     route = _write_route(tmp_path / "route.yaml")
     payload = yaml.safe_load(route.read_text(encoding="utf-8"))

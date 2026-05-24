@@ -32,6 +32,7 @@ from hust_bci_er.tasks.dep_hc.features import (
     dep_hc_features,
     time_frequency_summary_features,
 )
+from scripts.run_dep_hc_router import resolve_preprocessing
 
 
 def _window(seed_text: str, *, scale: float = 1.0) -> np.ndarray:
@@ -50,6 +51,14 @@ def _sample(subject: str, cohort: str, *, crop_id: int = 0) -> RouterSample:
         window_start_sec=float(crop_id),
         cohort=cohort,
     )
+
+
+def test_resolve_preprocessing_supports_explicit_raw_windows():
+    assert resolve_preprocessing(None) == ["car", "zscore"]
+    assert resolve_preprocessing(["none"]) == []
+    assert resolve_preprocessing(["raw"]) == []
+    with pytest.raises(ValueError, match="cannot be combined"):
+        resolve_preprocessing(["none", "zscore"])
 
 
 def test_dep_hc_task_feature_sets_are_numeric_and_metadata_free():

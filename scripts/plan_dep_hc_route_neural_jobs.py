@@ -159,7 +159,7 @@ def plan_jobs_for_route(
         raise ValueError(f"route preprocessing must be a list: {route_config}")
     drop_preprocessing = {"euclidean_alignment"} if drop_preprocessing is None else set(drop_preprocessing)
     converted_preprocessing = [str(step) for step in preprocessing if str(step) not in drop_preprocessing]
-    preprocessing_token = ",".join(converted_preprocessing) if converted_preprocessing else "default"
+    preprocessing_token = ",".join(converted_preprocessing) if converted_preprocessing else "none"
     training = route_data.get("training") or {}
     if not isinstance(training, dict):
         training = {}
