@@ -140,7 +140,7 @@ def generate_board() -> str:
         lines.append(
             f"| `{route_id}` | {owner} | {state} | {status} | {summary_status} | {audit_decision} | {latest_gate} | `{metric}` | `{dataset}` | `{split}` | `{model}` | `{adapter_name}` | `{protocol}` | {summary_state} | {blocker} |"
         )
-        score_items = score_ledger_items(summary, fields) if summary.exists() else []
+        score_items = score_ledger_items(summary, fields) if summary_state == "present" and summary.exists() else []
         score_items.extend(remote_score_items.get(route_id, []))
         score_items = unique_preserve_order(score_items)
         if score_items:
@@ -163,6 +163,8 @@ def generate_board() -> str:
 def board_state(config_status: str, summary_state: str, fields: dict[str, str], *, has_remote_scores: bool = False) -> str:
     audit_decision = str(fields.get("audit_decision", "")).strip()
     audit_upper = audit_decision.upper()
+    if audit_upper.startswith("BLOCKED"):
+        return "BLOCKED"
     if summary_state == "missing_required":
         if has_remote_scores:
             return "REMOTE_SCORES_PRESENT"
@@ -175,8 +177,6 @@ def board_state(config_status: str, summary_state: str, fields: dict[str, str], 
         return "DIAGNOSTIC_ONLY"
     if "PASS" in audit_upper:
         return "AUDIT_PASS"
-    if audit_upper.startswith("BLOCKED"):
-        return "BLOCKED"
     if audit_upper.startswith(PENDING_AUDIT_PREFIXES):
         return "PENDING"
     return str(fields.get("route_status") or config_status or "")
@@ -188,6 +188,8 @@ def route_blocker(summary_state: str, fields: dict[str, str], registry_entry: di
     decision = str(fields.get("decision", "")).strip()
     risk_notes = str(fields.get("risk notes", "")).strip()
     registry_blocker = str(registry_entry.get("blocker") or "").strip()
+    if audit_upper.startswith("BLOCKED"):
+        return clean_score_text(decision or risk_notes or registry_blocker or audit_decision)
     if summary_state == "missing_required":
         if has_remote_scores:
             return "summary_refresh_pending"
@@ -198,8 +200,6 @@ def route_blocker(summary_state: str, fields: dict[str, str], registry_entry: di
         return audit_decision or "pending_placeholder"
     if "DIAGNOSTIC_ONLY" in audit_upper or "diagnostic" in decision.lower():
         return "diagnostic_only"
-    if audit_upper.startswith("BLOCKED"):
-        return clean_score_text(decision or risk_notes or registry_blocker)
     if "PASS" in audit_upper:
         return ""
     return clean_score_text(registry_blocker or risk_notes)

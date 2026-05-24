@@ -10,7 +10,7 @@ Scope: cleaned ledger of score-bearing evaluation artifacts that are already rep
 
 ## Discovery
 
-- Tracked report files scanned: 266
+- Tracked report files scanned: 270
 - Tracked outputs/scratch files scanned: 0
 - Route-level rows in clean summary: 93
 - Detail score records: 1336

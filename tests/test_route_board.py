@@ -31,11 +31,27 @@ def test_remote_protocol_scores_update_board_state_without_promoting_route():
     assert "remote_protocol_score_ledger_20260523:B:P2" in board
 
 
+def test_remote_protocol_scores_do_not_hide_blocked_placeholder_routes():
+    board = generate_board()
+    row = next(line for line in board.splitlines() if line.startswith("| `fixed_crop_ea_whitening_eps1e3_fbstcnet_m_conn_light` |"))
+    assert "| BLOCKED | IDEA | IDEA | BLOCKED |  |" in row
+    assert "| pending_placeholder | pending real evidence |" in row
+
+
 def test_route_score_ledger_includes_committed_remote_protocol_scores():
     board = generate_board()
     ledger = board.split("## Route Score Ledger", 1)[1]
-    assert "| `fixed_crop_whitening_eps3e4_fbstcnet_m_conn_light` | REMOTE_SCORES_PRESENT |" in ledger
+    assert "| `fixed_crop_ea_whitening_eps3e4_fbstcnet` | REMOTE_SCORES_PRESENT |" in ledger
     assert "remote_protocol_score_ledger_20260523" in ledger
+
+
+def test_pending_placeholder_summary_scores_are_not_committed_to_score_ledger():
+    board = generate_board()
+    ledger = board.split("## Route Score Ledger", 1)[1]
+    ledger_row = next(line for line in ledger.splitlines() if line.startswith("| `fixed_crop_ea_dgcnn` |"))
+    assert "remote_protocol_score_ledger_20260523" in ledger_row
+    assert "primary_metric_value=" not in ledger_row
+    assert "aggregate_metric_" not in ledger_row
 
 
 def test_score_bullet_extraction_skips_governance_text():
