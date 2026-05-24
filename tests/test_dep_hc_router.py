@@ -22,7 +22,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     select_subject_threshold,
     write_router_outputs,
 )
-from scripts.run_dep_hc_router import resolve_preprocessing
+from scripts.run_dep_hc_router import _subjects_for_protocol, resolve_preprocessing
 from scripts import run_dep_hc_router
 
 
@@ -240,6 +240,54 @@ def test_resolve_preprocessing_overrides_default_when_cli_supplies_values():
 def test_run_dep_hc_router_rejects_unknown_preprocessing(tmp_path):
     with pytest.raises(ValueError, match="unknown preprocessing step"):
         run_dep_hc_router.main(["--out-dir", str(tmp_path), "--preprocessing", "zscroe"])
+
+
+def test_subject_protocol_supports_p3_inner_and_outer_without_outer_leakage():
+    trial_rows = [
+        {"subject_id": f"{cohort}{1000 + idx}", "trial_id": f"{cohort}{1000 + idx}_t0", "cohort": cohort}
+        for cohort in ("HC", "DEP")
+        for idx in range(6)
+    ]
+
+    train, val, test, split_id, metadata = _subjects_for_protocol(
+        trial_rows,
+        protocol="p3",
+        seed=42,
+        fold=0,
+        n_folds=5,
+        n_holdout_subjects=12,
+        holdout_seed=999,
+        outer_fold=1,
+        inner_fold=2,
+        outer_folds=3,
+        inner_folds=3,
+        outer_seed=42,
+        inner_seed=123,
+    )
+
+    assert metadata["eval_scope"] == "p3_inner_validation"
+    assert split_id == "dep_hc_router_p3_outer1_inner2_seed42_123"
+    assert val == test
+    assert not set(metadata["outer_test_subjects"]) & test
+    assert not train & test
+
+    _train, _val, outer_test, _split_id, outer_metadata = _subjects_for_protocol(
+        trial_rows,
+        protocol="p3",
+        seed=42,
+        fold=0,
+        n_folds=5,
+        n_holdout_subjects=12,
+        holdout_seed=999,
+        outer_fold=1,
+        inner_fold=None,
+        outer_folds=3,
+        inner_folds=3,
+        outer_seed=42,
+        inner_seed=123,
+    )
+    assert outer_metadata["eval_scope"] == "p3_outer_test"
+    assert outer_test == set(metadata["outer_test_subjects"])
 
 
 def test_select_subject_threshold_uses_validation_subjects():

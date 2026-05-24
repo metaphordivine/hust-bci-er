@@ -30,6 +30,12 @@ FIELDS = [
     "protocol",
     "fold",
     "holdout_seed",
+    "outer_fold",
+    "inner_fold",
+    "outer_folds",
+    "inner_folds",
+    "outer_seed",
+    "inner_seed",
     "seed",
     "model",
     "epochs",
@@ -63,6 +69,12 @@ class RouteJob:
     stride_sec: float | None
     n_crops: int
     preprocessing: str
+    outer_fold: int | None = None
+    inner_fold: int | None = None
+    outer_folds: int | None = None
+    inner_folds: int | None = None
+    outer_seed: int | None = None
+    inner_seed: int | None = None
 
     def row(self) -> dict[str, str]:
         return {
@@ -70,6 +82,12 @@ class RouteJob:
             "protocol": self.protocol,
             "fold": str(self.fold),
             "holdout_seed": str(self.holdout_seed),
+            "outer_fold": _format_optional_int(self.outer_fold),
+            "inner_fold": _format_optional_int(self.inner_fold),
+            "outer_folds": _format_optional_int(self.outer_folds),
+            "inner_folds": _format_optional_int(self.inner_folds),
+            "outer_seed": _format_optional_int(self.outer_seed),
+            "inner_seed": _format_optional_int(self.inner_seed),
             "seed": str(self.seed),
             "model": self.model,
             "epochs": str(self.epochs),
@@ -93,6 +111,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--p1-fold", type=int, action="append", default=None, help="P1 fold to include. Repeatable.")
     parser.add_argument("--p2-holdout-seed", type=int, action="append", default=None, help="P2 holdout seed. Repeatable.")
+    parser.add_argument("--p3-outer-fold", type=int, action="append", default=None, help="P3 outer fold to include. Repeatable.")
+    parser.add_argument("--p3-inner-folds", type=int, default=3)
+    parser.add_argument("--p3-outer-folds", type=int, default=5)
+    parser.add_argument("--outer-seed", type=int, default=42)
+    parser.add_argument("--inner-seed", type=int, default=123)
     parser.add_argument("--epochs-override", type=int, default=None)
     parser.add_argument("--batch-size-override", type=int, default=None)
     parser.add_argument("--threshold-objective", action="append", default=None)
@@ -117,6 +140,11 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
                 p1_folds=args.p1_fold or [0, 3],
                 p2_holdout_seeds=args.p2_holdout_seed or [123, 666, 999],
+                p3_outer_folds=args.p3_outer_fold,
+                p3_inner_folds=args.p3_inner_folds,
+                p3_outer_fold_count=args.p3_outer_folds,
+                outer_seed=args.outer_seed,
+                inner_seed=args.inner_seed,
                 epochs_override=args.epochs_override,
                 batch_size_override=args.batch_size_override,
                 threshold_objective=args.threshold_objective or ["balanced_accuracy"],
@@ -138,10 +166,15 @@ def plan_jobs_for_route(
     seed: int,
     p1_folds: list[int],
     p2_holdout_seeds: list[int],
-    epochs_override: int | None,
-    batch_size_override: int | None,
-    threshold_objective: str | list[str],
-    subject_aggregation: str | list[str],
+    p3_outer_folds: list[int] | None = None,
+    p3_inner_folds: int = 3,
+    p3_outer_fold_count: int = 5,
+    outer_seed: int = 42,
+    inner_seed: int = 123,
+    epochs_override: int | None = None,
+    batch_size_override: int | None = None,
+    threshold_objective: str | list[str] = "balanced_accuracy",
+    subject_aggregation: str | list[str] = "mean",
     drop_preprocessing: set[str] | None = None,
 ) -> list[RouteJob]:
     route_data = yaml.safe_load(route_config.read_text(encoding="utf-8")) or {}
@@ -192,6 +225,12 @@ def plan_jobs_for_route(
                     protocol="p2",
                     fold=0,
                     holdout_seed=int(holdout_seed),
+                    outer_fold=None,
+                    inner_fold=None,
+                    outer_folds=None,
+                    inner_folds=None,
+                    outer_seed=None,
+                    inner_seed=None,
                     seed=int(seed),
                     model=model_name,
                     epochs=epochs,
@@ -213,7 +252,67 @@ def plan_jobs_for_route(
                     protocol="p1",
                     fold=int(fold),
                     holdout_seed=0,
+                    outer_fold=None,
+                    inner_fold=None,
+                    outer_folds=None,
+                    inner_folds=None,
+                    outer_seed=None,
+                    inner_seed=None,
                     seed=int(seed),
+                    model=model_name,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    threshold_objective=threshold_item,
+                    subject_aggregation=aggregation_item,
+                    model_kwargs_json=model_kwargs_json,
+                    source_trial_sec=source_trial_sec,
+                    window_sec=window_sec,
+                    stride_sec=stride_sec,
+                    n_crops=n_crops,
+                    preprocessing=preprocessing_token,
+                )
+            )
+        for outer_fold in p3_outer_folds or []:
+            for inner_fold in range(int(p3_inner_folds)):
+                jobs.append(
+                    RouteJob(
+                        run_id=f"{run_prefix}_{route_slug}{combo_suffix}_p3_o{int(outer_fold)}_i{int(inner_fold)}",
+                        protocol="p3",
+                        fold=0,
+                        holdout_seed=0,
+                        outer_fold=int(outer_fold),
+                        inner_fold=int(inner_fold),
+                        outer_folds=int(p3_outer_fold_count),
+                        inner_folds=int(p3_inner_folds),
+                        outer_seed=int(outer_seed),
+                        inner_seed=int(inner_seed),
+                        seed=int(inner_seed) + int(outer_fold) * 1000 + int(inner_fold) * 100,
+                        model=model_name,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        threshold_objective=threshold_item,
+                        subject_aggregation=aggregation_item,
+                        model_kwargs_json=model_kwargs_json,
+                        source_trial_sec=source_trial_sec,
+                        window_sec=window_sec,
+                        stride_sec=stride_sec,
+                        n_crops=n_crops,
+                        preprocessing=preprocessing_token,
+                    )
+                )
+            jobs.append(
+                RouteJob(
+                    run_id=f"{run_prefix}_{route_slug}{combo_suffix}_p3_o{int(outer_fold)}_final",
+                    protocol="p3",
+                    fold=0,
+                    holdout_seed=0,
+                    outer_fold=int(outer_fold),
+                    inner_fold=None,
+                    outer_folds=int(p3_outer_fold_count),
+                    inner_folds=int(p3_inner_folds),
+                    outer_seed=int(outer_seed),
+                    inner_seed=int(inner_seed),
+                    seed=int(outer_seed) + int(outer_fold),
                     model=model_name,
                     epochs=epochs,
                     batch_size=batch_size,
@@ -297,6 +396,10 @@ def _format_float(value: float) -> str:
 
 def _format_optional_float(value: float | None) -> str:
     return "default" if value is None else _format_float(value)
+
+
+def _format_optional_int(value: int | None) -> str:
+    return "" if value is None else str(int(value))
 
 
 def _slug(value: str) -> str:

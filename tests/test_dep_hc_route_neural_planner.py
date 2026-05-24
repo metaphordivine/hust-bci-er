@@ -126,6 +126,39 @@ def test_plan_dep_hc_route_neural_jobs_expands_threshold_aggregation_sweep(tmp_p
     assert {job.subject_aggregation for job in jobs} == {"mean", "vote_frac"}
 
 
+def test_plan_dep_hc_route_neural_jobs_can_emit_p3_inner_and_final_jobs(tmp_path: Path) -> None:
+    route = _write_route(tmp_path / "route.yaml", route_id="p01_wide_carz_s7")
+
+    jobs = plan_jobs_for_route(
+        route,
+        run_prefix="screen",
+        seed=42,
+        p1_folds=[],
+        p2_holdout_seeds=[],
+        p3_outer_folds=[1],
+        p3_inner_folds=2,
+        p3_outer_fold_count=5,
+        outer_seed=42,
+        inner_seed=123,
+        epochs_override=2,
+        batch_size_override=16,
+        threshold_objective="balanced_accuracy",
+        subject_aggregation="mean",
+        drop_preprocessing={"euclidean_alignment"},
+    )
+
+    assert [job.run_id for job in jobs] == [
+        "screen_p01_wide_carz_s7_p3_o1_i0",
+        "screen_p01_wide_carz_s7_p3_o1_i1",
+        "screen_p01_wide_carz_s7_p3_o1_final",
+    ]
+    assert {job.protocol for job in jobs} == {"p3"}
+    assert [job.inner_fold for job in jobs] == [0, 1, None]
+    assert {job.outer_fold for job in jobs} == {1}
+    assert {job.outer_folds for job in jobs} == {5}
+    assert {job.inner_folds for job in jobs} == {2}
+
+
 def test_plan_dep_hc_route_neural_jobs_preserves_parameterized_preprocessing(tmp_path: Path) -> None:
     route = _write_route(tmp_path / "route.yaml")
     payload = yaml.safe_load(route.read_text(encoding="utf-8"))

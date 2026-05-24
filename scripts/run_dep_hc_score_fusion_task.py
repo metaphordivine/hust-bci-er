@@ -54,13 +54,20 @@ def main(argv: list[str] | None = None) -> int:
         choices=["mean", "median", "trimmed_mean", "vote_frac"],
         default="vote_frac",
     )
-    parser.add_argument("--protocol", choices=["p1", "p2"], default=None)
+    parser.add_argument("--protocol", choices=["p1", "p2", "p3"], default=None)
     parser.add_argument("--split-id", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--fold", type=int, default=None)
     parser.add_argument("--n-folds", type=int, default=None)
     parser.add_argument("--n-holdout-subjects", type=int, default=None)
     parser.add_argument("--holdout-seed", type=int, default=None)
+    parser.add_argument("--outer-fold", type=int, default=None)
+    parser.add_argument("--inner-fold", type=int, default=None)
+    parser.add_argument("--outer-folds", type=int, default=None)
+    parser.add_argument("--inner-folds", type=int, default=None)
+    parser.add_argument("--outer-seed", type=int, default=None)
+    parser.add_argument("--inner-seed", type=int, default=None)
+    parser.add_argument("--eval-scope", default=None)
     args = parser.parse_args(argv)
 
     component_roots = _named_roots(args.component_run_dir)
@@ -141,6 +148,13 @@ def _split_metadata_for_output(args: argparse.Namespace, component_roots: dict[s
         "n_folds": args.n_folds,
         "n_holdout_subjects": args.n_holdout_subjects,
         "holdout_seed": args.holdout_seed,
+        "outer_fold": args.outer_fold,
+        "inner_fold": args.inner_fold,
+        "outer_folds": args.outer_folds,
+        "inner_folds": args.inner_folds,
+        "outer_seed": args.outer_seed,
+        "inner_seed": args.inner_seed,
+        "eval_scope": args.eval_scope,
     }
     metadata.update({key: value for key, value in overrides.items() if value is not None})
     if not metadata.get("protocol"):
@@ -152,7 +166,22 @@ def _split_metadata_for_output(args: argparse.Namespace, component_roots: dict[s
 
 
 def _common_component_metadata(component_roots: dict[str, Path]) -> dict[str, object]:
-    keys = ("protocol", "split_id", "seed", "fold", "n_folds", "n_holdout_subjects", "holdout_seed")
+    keys = (
+        "protocol",
+        "split_id",
+        "seed",
+        "fold",
+        "n_folds",
+        "n_holdout_subjects",
+        "holdout_seed",
+        "outer_fold",
+        "inner_fold",
+        "outer_folds",
+        "inner_folds",
+        "outer_seed",
+        "inner_seed",
+        "eval_scope",
+    )
     values_by_key: dict[str, set[object]] = {key: set() for key in keys}
     for name, root in component_roots.items():
         path = root / "dep_hc_task_diagnostic.json"
@@ -179,7 +208,19 @@ def _common_component_metadata(component_roots: dict[str, Path]) -> dict[str, ob
 def _metadata_value(key: str, value: object) -> object:
     if value is None or value == "":
         return None
-    if key in {"seed", "fold", "n_folds", "n_holdout_subjects", "holdout_seed"}:
+    if key in {
+        "seed",
+        "fold",
+        "n_folds",
+        "n_holdout_subjects",
+        "holdout_seed",
+        "outer_fold",
+        "inner_fold",
+        "outer_folds",
+        "inner_folds",
+        "outer_seed",
+        "inner_seed",
+    }:
         return int(value)
     return str(value)
 

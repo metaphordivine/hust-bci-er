@@ -480,7 +480,67 @@ def test_dep_hc_score_fusion_task_writes_jsonable_split_config(tmp_path):
     assert config["selection_component_roots"] == {}
 
 
-def _write_score_component_run(root, *, hc_p_dep: str, dep_p_dep: str) -> None:
+def test_dep_hc_score_fusion_task_inherits_p3_split_metadata(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    _write_score_component_run(
+        component_a,
+        hc_p_dep="0.20",
+        dep_p_dep="0.70",
+        config_overrides={
+            "protocol": "p3",
+            "split_id": "dep_hc_router_p3_outer1_inner2_seed42_123",
+            "outer_fold": 1,
+            "inner_fold": 2,
+            "outer_folds": 5,
+            "inner_folds": 3,
+            "outer_seed": 42,
+            "inner_seed": 123,
+            "eval_scope": "p3_inner_validation",
+        },
+    )
+    _write_score_component_run(
+        component_b,
+        hc_p_dep="0.30",
+        dep_p_dep="0.80",
+        config_overrides={
+            "protocol": "p3",
+            "split_id": "dep_hc_router_p3_outer1_inner2_seed42_123",
+            "outer_fold": 1,
+            "inner_fold": 2,
+            "outer_folds": 5,
+            "inner_folds": 3,
+            "outer_seed": 42,
+            "inner_seed": 123,
+            "eval_scope": "p3_inner_validation",
+        },
+    )
+    out_dir = tmp_path / "fusion"
+
+    assert (
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(out_dir),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"traditional={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+            ]
+        )
+        == 0
+    )
+
+    config = json.loads((out_dir / "dep_hc_task_diagnostic.json").read_text(encoding="utf-8"))["config"]
+    assert config["protocol"] == "p3"
+    assert config["outer_fold"] == 1
+    assert config["inner_fold"] == 2
+    assert config["eval_scope"] == "p3_inner_validation"
+
+
+def _write_score_component_run(root, *, hc_p_dep: str, dep_p_dep: str, config_overrides: dict | None = None) -> None:
     root.mkdir()
     rows = [
         {
@@ -516,6 +576,7 @@ def _write_score_component_run(root, *, hc_p_dep: str, dep_p_dep: str) -> None:
                     "seed": 42,
                     "n_holdout_subjects": 12,
                     "holdout_seed": 123,
+                    **(config_overrides or {}),
                 },
                 "metrics": {},
             },

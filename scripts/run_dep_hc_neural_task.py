@@ -21,12 +21,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a DEP/HC neural sanity baseline.")
     parser.add_argument("--data-root", type=Path, help="HUST EEG .mat data root.")
     parser.add_argument("--out-dir", type=Path, required=True)
-    parser.add_argument("--protocol", choices=["p1", "p2"], default="p1")
+    parser.add_argument("--protocol", choices=["p1", "p2", "p3"], default="p1")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fold", type=int, default=0)
     parser.add_argument("--n-folds", type=int, default=5)
     parser.add_argument("--n-holdout-subjects", type=int, default=12)
     parser.add_argument("--holdout-seed", type=int, default=999)
+    parser.add_argument("--outer-fold", type=int, default=0)
+    parser.add_argument("--inner-fold", type=int, default=None)
+    parser.add_argument("--outer-folds", type=int, default=5)
+    parser.add_argument("--inner-folds", type=int, default=3)
+    parser.add_argument("--outer-seed", type=int, default=42)
+    parser.add_argument("--inner-seed", type=int, default=123)
     parser.add_argument("--source-trial-sec", type=float, default=50.0)
     parser.add_argument("--window-sec", type=float, default=10.0)
     parser.add_argument("--stride-sec", type=float, default=None)
@@ -69,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         {"subject_id": str(trial["subject_id"]), "trial_id": str(trial["trial_id"]), "cohort": str(trial["cohort"])}
         for trial in trials
     ]
-    train_subjects, val_subjects, test_subjects, split_id = _subjects_for_protocol(
+    train_subjects, val_subjects, test_subjects, split_id, split_metadata = _subjects_for_protocol(
         trial_rows,
         protocol=args.protocol,
         seed=args.seed,
@@ -77,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
         n_folds=args.n_folds,
         n_holdout_subjects=args.n_holdout_subjects,
         holdout_seed=args.holdout_seed,
+        outer_fold=args.outer_fold,
+        inner_fold=args.inner_fold,
+        outer_folds=args.outer_folds,
+        inner_folds=args.inner_folds,
+        outer_seed=args.outer_seed,
+        inner_seed=args.inner_seed,
     )
     train_trials = [trial for trial in trials if trial["subject_id"] in train_subjects]
     val_trials = [trial for trial in trials if trial["subject_id"] in val_subjects]
@@ -154,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_folds": args.n_folds,
         "n_holdout_subjects": args.n_holdout_subjects,
         "holdout_seed": args.holdout_seed,
+        **split_metadata,
         "source_trial_sec": args.source_trial_sec,
         "window_sec": args.window_sec,
         "stride_sec": args.stride_sec,
