@@ -57,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
         default="mean",
     )
     args = parser.parse_args(argv)
+    if args.stride_sec is not None and args.stride_sec <= 0.0:
+        parser.error("--stride-sec must be positive when supplied")
 
     model_kwargs = _parse_model_kwargs(args.model_kwargs_json)
     preprocessing = resolve_preprocessing(args.preprocessing)

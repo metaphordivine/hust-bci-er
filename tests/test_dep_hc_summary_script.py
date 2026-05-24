@@ -217,3 +217,30 @@ def test_summarize_dep_hc_diagnostics_labels_score_fusion_and_robust_rank(tmp_pa
     assert row["primary_recall_gap"] == "0.1000"
     assert aggregate[0]["mean_worst_combo_ba"] == "0.6250"
     assert robust[0]["feature_or_fusion"] == "score:deformer+traditional_tf"
+
+
+def test_robust_recommendation_rows_do_not_promote_missing_recall_gap() -> None:
+    complete = {
+        "eval_scope": "p2",
+        "feature_or_fusion": "complete",
+        "threshold_objective": "balanced_accuracy",
+        "subject_aggregation": "vote_frac",
+        "split_coverage": "holdouts=123",
+        "n": "1",
+        "mean_primary_ba": "0.7000",
+        "mean_worst_combo_ba": "0.5000",
+        "mean_min_recall": "0.6000",
+        "mean_recall_gap": "0.1000",
+    }
+    missing_gap = {
+        **complete,
+        "feature_or_fusion": "missing_gap",
+        "mean_primary_ba": "0.9000",
+        "mean_worst_combo_ba": "0.9000",
+        "mean_min_recall": "0.9000",
+        "mean_recall_gap": "",
+    }
+
+    robust = summarize_dep_hc_diagnostics.robust_recommendation_rows([missing_gap, complete])
+
+    assert robust[0]["feature_or_fusion"] == "complete"

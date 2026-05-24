@@ -41,6 +41,7 @@ from hust_bci_er.tasks.dep_hc.features import (
     time_frequency_summary_features,
 )
 from scripts.run_dep_hc_router import resolve_preprocessing
+from scripts import run_dep_hc_neural_task
 
 
 def _window(seed_text: str, *, scale: float = 1.0) -> np.ndarray:
@@ -55,6 +56,18 @@ def _sample(subject: str, cohort: str, *, crop_id: int = 0) -> RouterSample:
         x=_window(f"{subject}-{cohort}-{crop_id}", scale=scale),
         subject_id=subject,
         trial_id=f"{subject}_t{crop_id}",
+        crop_id=crop_id,
+        window_start_sec=float(crop_id),
+        cohort=cohort,
+    )
+
+
+def _trial_crop_sample(subject: str, cohort: str, *, trial_id: str = "t0", crop_id: int = 0) -> RouterSample:
+    scale = 0.5 if cohort == "HC" else 1.4
+    return RouterSample(
+        x=_window(f"{subject}-{cohort}-{trial_id}-{crop_id}", scale=scale),
+        subject_id=subject,
+        trial_id=f"{subject}_{trial_id}",
         crop_id=crop_id,
         window_start_sec=float(crop_id),
         cohort=cohort,
@@ -122,10 +135,10 @@ def test_dep_hc_task_feature_matrix_and_eval():
         _sample("DEP002", "DEP"),
     ]
     eval_samples = [
-        _sample("HC101", "HC", crop_id=0),
-        _sample("HC101", "HC", crop_id=1),
-        _sample("DEP101", "DEP", crop_id=0),
-        _sample("DEP101", "DEP", crop_id=1),
+        _trial_crop_sample("HC101", "HC", crop_id=0),
+        _trial_crop_sample("HC101", "HC", crop_id=1),
+        _trial_crop_sample("DEP101", "DEP", crop_id=0),
+        _trial_crop_sample("DEP101", "DEP", crop_id=1),
     ]
 
     features = extract_dep_hc_task_features(train, feature_set="traditional_graph", sfreq=128.0)
@@ -146,6 +159,9 @@ def test_dep_hc_task_feature_matrix_and_eval():
     assert result["metrics"]["classifier"] == "logistic"
     assert result["metrics"]["class_weight_mode"] == "uniform"
     assert result["metrics"]["n_eval_subjects"] == 2
+    assert result["metrics"]["crop_combo_status"] == "computed"
+    assert result["metrics"]["crop_combo_expected_trials"] == 1
+    assert result["metrics"]["crop_combo_expected_crops"] == 2
     assert {"DEP101", "HC101"} == {row["subject_id"] for row in result["subject_rows"]}
 
 
@@ -381,6 +397,9 @@ def test_dep_hc_score_fusion_reads_aligned_prediction_probabilities():
     assert result["metrics"]["score_fusion_components"] == ["deformer", "traditional_tf"]
     assert result["metrics"]["fusion_weight_source"] == "fixed"
     assert result["metrics"]["subject_ba"] == pytest.approx(1.0)
+    assert result["metrics"]["crop_combo_status"] == "computed"
+    assert result["metrics"]["crop_combo_expected_trials"] == 1
+    assert result["metrics"]["crop_combo_expected_crops"] == 1
     by_subject = {row["subject_id"]: row["p_dep"] for row in result["prediction_rows"]}
     assert by_subject == {"HC101": "0.25", "DEP101": "0.75"}
 
@@ -400,6 +419,27 @@ def test_dep_hc_score_fusion_requires_validation_for_nonfixed_threshold():
     with pytest.raises(ValueError, match="validation component predictions"):
         evaluate_dep_hc_score_fusion(
             {"a": rows, "b": rows},
+            threshold_objective="balanced_accuracy",
+        )
+
+
+def test_dep_hc_score_fusion_validates_selection_component_names():
+    rows = [
+        {
+            "subject_id": "HC101",
+            "trial_id": "HC101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "HC",
+            "y_true": "0",
+            "p_dep": "0.20",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="component names must match"):
+        evaluate_dep_hc_score_fusion(
+            {"a": rows, "b": rows},
+            val_component_prediction_rows={"a": rows, "typo": rows},
             threshold_objective="balanced_accuracy",
         )
 
@@ -429,6 +469,41 @@ def test_dep_hc_neural_task_smoke_uses_cohort_target():
     assert result["metrics"]["model_name"] == "eegnet"
     assert result["metrics"]["n_eval_subjects"] == 2
     assert {"HC101", "DEP101"} == {row["subject_id"] for row in result["subject_rows"]}
+
+
+def test_dep_hc_neural_task_uses_actual_crop_combo_shape():
+    pytest.importorskip("torch")
+    train = [
+        _sample("HC001", "HC"),
+        _sample("HC002", "HC"),
+        _sample("DEP001", "DEP"),
+        _sample("DEP002", "DEP"),
+    ]
+    val = [_sample("HC011", "HC"), _sample("DEP011", "DEP")]
+    eval_samples = [
+        _trial_crop_sample(subject, cohort, crop_id=crop_id)
+        for subject, cohort in [("HC101", "HC"), ("DEP101", "DEP")]
+        for crop_id in range(6)
+    ]
+
+    result = evaluate_dep_hc_neural_task(
+        train,
+        eval_samples,
+        val_samples=val,
+        model_name="eegnet",
+        epochs=1,
+        batch_size=2,
+        seed=7,
+    )
+
+    assert result["metrics"]["crop_combo_status"] == "computed"
+    assert result["metrics"]["crop_combo_expected_trials"] == 1
+    assert result["metrics"]["crop_combo_expected_crops"] == 6
+
+
+def test_run_dep_hc_neural_task_rejects_nonpositive_stride(tmp_path):
+    with pytest.raises(SystemExit):
+        run_dep_hc_neural_task.main(["--out-dir", str(tmp_path), "--stride-sec", "0"])
 
 
 def test_dep_hc_neural_task_supports_calibration_and_subject_balanced_sampling():

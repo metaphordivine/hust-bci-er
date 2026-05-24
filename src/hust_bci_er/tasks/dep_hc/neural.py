@@ -21,6 +21,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     brier_score,
     cohort_label,
     crop_combo_subject_metrics,
+    infer_crop_combo_shape,
     subject_threshold_diagnostic,
 )
 from hust_bci_er.tasks.dep_hc.experiment import dep_hc_prediction_rows
@@ -246,7 +247,16 @@ def evaluate_dep_hc_neural_task(
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
-    metrics.update(crop_combo_subject_metrics(prediction_rows, threshold=threshold, aggregation=subject_aggregation))
+    n_trials, n_crops = infer_crop_combo_shape(prediction_rows)
+    metrics.update(
+        crop_combo_subject_metrics(
+            prediction_rows,
+            threshold=threshold,
+            aggregation=subject_aggregation,
+            n_trials=n_trials,
+            n_crops=n_crops,
+        )
+    )
     return {"model": model, "metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
 
 

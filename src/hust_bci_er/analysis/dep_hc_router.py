@@ -247,7 +247,16 @@ def evaluate_router(
     for cohort, label in COHORT_TO_LABEL.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
-    metrics.update(crop_combo_subject_metrics(prediction_rows, threshold=threshold, aggregation=subject_aggregation))
+    n_trials, n_crops = infer_crop_combo_shape(prediction_rows)
+    metrics.update(
+        crop_combo_subject_metrics(
+            prediction_rows,
+            threshold=threshold,
+            aggregation=subject_aggregation,
+            n_trials=n_trials,
+            n_crops=n_crops,
+        )
+    )
     return {"model": model, "metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
 
 
@@ -561,6 +570,32 @@ def crop_combo_subject_metrics(
         "crop_combo_aggregation": aggregation,
         "crop_combo_threshold": float(threshold),
     }
+
+
+def infer_crop_combo_shape(prediction_rows: Sequence[Mapping[str, str]]) -> tuple[int, int]:
+    """Infer trial/crop dimensions from materialized prediction rows.
+
+    The DEP/HC diagnostic scripts can evaluate fixed 5-crop data, sliding
+    windows, and score-fusion rows from already completed runs. Using the actual
+    row shape avoids falling back to the legacy 5x8 default when a run used a
+    different crop count.
+    """
+
+    subject_trials: dict[str, dict[str, set[int]]] = {}
+    for row in prediction_rows:
+        subject_id = str(row["subject_id"])
+        trial_id = str(row["trial_id"])
+        crop_id = int(row["crop_id"])
+        subject_trials.setdefault(subject_id, {}).setdefault(trial_id, set()).add(crop_id)
+    if not subject_trials:
+        return (8, 5)
+    n_trials = max(len(trials) for trials in subject_trials.values())
+    max_crop_id = max(
+        (crop_id for trials in subject_trials.values() for crop_ids in trials.values() for crop_id in crop_ids),
+        default=4,
+    )
+    n_crops = max_crop_id + 1
+    return int(n_trials), int(n_crops)
 
 
 def _assignment_subject_scores(selected: np.ndarray, *, threshold: float, aggregation: str) -> np.ndarray:

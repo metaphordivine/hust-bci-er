@@ -15,6 +15,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     cohort_label,
     crop_combo_subject_metrics,
     fit_logistic_router,
+    infer_crop_combo_shape,
     predict_dep_probability,
     subject_threshold_diagnostic,
 )
@@ -131,7 +132,16 @@ def evaluate_dep_hc_feature_fusion(
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
-    metrics.update(crop_combo_subject_metrics(prediction_rows, threshold=threshold, aggregation=subject_aggregation))
+    n_trials, n_crops = infer_crop_combo_shape(prediction_rows)
+    metrics.update(
+        crop_combo_subject_metrics(
+            prediction_rows,
+            threshold=threshold,
+            aggregation=subject_aggregation,
+            n_trials=n_trials,
+            n_crops=n_crops,
+        )
+    )
     return {"metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
 
 
@@ -250,6 +260,13 @@ def evaluate_dep_hc_score_fusion(
         raise ValueError("score fusion requires at least two component prediction tables")
     aligned_eval = _align_prediction_components(component_prediction_rows)
     aligned_val = _align_prediction_components(val_component_prediction_rows) if val_component_prediction_rows else None
+    if aligned_val is not None and set(aligned_val) != set(names):
+        missing = sorted(set(names) - set(aligned_val))
+        extra = sorted(set(aligned_val) - set(names))
+        raise ValueError(
+            "validation score-fusion component names must match evaluation components "
+            f"(missing={missing}, extra={extra})"
+        )
     y_eval = _labels_from_aligned(aligned_eval, names[0])
 
     if weights is not None and select_two_way_weight:
@@ -315,7 +332,16 @@ def evaluate_dep_hc_score_fusion(
     for cohort, label in {"HC": 0, "DEP": 1}.items():
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
-    metrics.update(crop_combo_subject_metrics(prediction_rows, threshold=threshold, aggregation=subject_aggregation))
+    n_trials, n_crops = infer_crop_combo_shape(prediction_rows)
+    metrics.update(
+        crop_combo_subject_metrics(
+            prediction_rows,
+            threshold=threshold,
+            aggregation=subject_aggregation,
+            n_trials=n_trials,
+            n_crops=n_crops,
+        )
+    )
     return {"metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
 
 

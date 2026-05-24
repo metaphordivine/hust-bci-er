@@ -17,6 +17,7 @@ from hust_bci_er.analysis.dep_hc_router import (
     crop_combo_subject_metrics,
     evaluate_router,
     extract_router_features,
+    infer_crop_combo_shape,
     router_features_for_sample,
     select_subject_threshold,
     write_router_outputs,
@@ -150,6 +151,38 @@ def test_crop_combo_subject_metrics_enumerates_heldout_10s_assignments():
     assert metrics["crop_combo_expected_ba"] == pytest.approx(0.75)
     assert metrics["crop_combo_worst_ba"] == pytest.approx(0.5)
     assert metrics["crop_combo_best_ba"] == pytest.approx(1.0)
+
+
+def test_infer_crop_combo_shape_uses_materialized_prediction_rows():
+    rows = []
+    for subject_id, cohort, y_true in [("HC001", "HC", "0"), ("DEP001", "DEP", "1")]:
+        for trial_id in ("t0", "t1", "t2"):
+            for crop_id in range(6):
+                rows.append(
+                    {
+                        "subject_id": subject_id,
+                        "trial_id": trial_id,
+                        "crop_id": str(crop_id),
+                        "window_start_sec": str(float(crop_id)),
+                        "cohort": cohort,
+                        "y_true": y_true,
+                        "p_dep": "0.8" if y_true == "1" else "0.2",
+                    }
+                )
+
+    n_trials, n_crops = infer_crop_combo_shape(rows)
+    metrics = crop_combo_subject_metrics(
+        rows,
+        threshold=0.5,
+        aggregation="mean",
+        n_trials=n_trials,
+        n_crops=n_crops,
+    )
+
+    assert (n_trials, n_crops) == (3, 6)
+    assert metrics["crop_combo_status"] == "computed"
+    assert metrics["crop_combo_expected_trials"] == 3
+    assert metrics["crop_combo_expected_crops"] == 6
 
 
 def test_vote_frac_threshold_candidates_include_discrete_boundaries():

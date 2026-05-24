@@ -409,6 +409,7 @@ def robust_recommendation_rows(rows: list[dict[str, str]]) -> list[dict[str, str
     return sorted(
         p2_rows,
         key=lambda row: (
+            _has_finite(row["mean_recall_gap"]),
             _sort_float(row["mean_min_recall"]),
             _sort_float(row["mean_worst_combo_ba"]),
             _sort_float(row["mean_primary_ba"]),
@@ -476,6 +477,10 @@ def _format_float(value: float) -> str:
 def _sort_float(value: str) -> float:
     parsed = _parse_optional_float(value)
     return parsed if math.isfinite(parsed) else -1.0
+
+
+def _has_finite(value: str) -> int:
+    return int(math.isfinite(_parse_optional_float(value)))
 
 
 def _hard_error_type(cohort: str) -> str:
