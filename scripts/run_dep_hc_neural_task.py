@@ -157,6 +157,12 @@ def main(argv: list[str] | None = None) -> int:
         calibration_method=args.calibration_method,
         sampling_strategy=args.sampling_strategy,
     )
+    actual_n_crops = (
+        _actual_n_crops_from_samples(eval_samples)
+        or _actual_n_crops_from_samples(val_samples)
+        or _actual_n_crops_from_samples(train_samples)
+        or args.n_crops
+    )
     config = {
         "task": "dep_hc_neural",
         "protocol": args.protocol,
@@ -170,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         "source_trial_sec": args.source_trial_sec,
         "window_sec": args.window_sec,
         "stride_sec": args.stride_sec,
-        "n_crops": args.n_crops,
+        "n_crops": actual_n_crops,
+        "requested_n_crops": args.n_crops,
         "preprocessing": preprocessing,
         "model_name": args.model_name,
         "model_kwargs": result["metrics"].get("model_kwargs", {}),
@@ -196,6 +203,23 @@ def _parse_model_kwargs(raw: str | None) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise SystemExit("--model-kwargs-json must decode to a JSON object")
     return dict(parsed)
+
+
+def _actual_n_crops_from_samples(samples: list[object]) -> int:
+    crops_by_trial: dict[str, set[int]] = {}
+    for sample in samples:
+        trial_id = str(getattr(sample, "trial_id", ""))
+        crop_id = getattr(sample, "crop_id", None)
+        if not trial_id or crop_id is None:
+            continue
+        try:
+            parsed_crop = int(crop_id)
+        except (TypeError, ValueError):
+            continue
+        crops_by_trial.setdefault(trial_id, set()).add(parsed_crop)
+    if not crops_by_trial:
+        return 0
+    return max(len(crops) for crops in crops_by_trial.values())
 
 
 if __name__ == "__main__":

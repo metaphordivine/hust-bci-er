@@ -139,7 +139,17 @@ def _string_roots(roots: dict[str, Path]) -> dict[str, str]:
 
 
 def _split_metadata_for_output(args: argparse.Namespace, component_roots: dict[str, Path]) -> dict[str, object]:
-    metadata = _common_component_metadata(component_roots)
+    metadata, missing_diagnostics = _common_component_metadata(component_roots)
+    if missing_diagnostics:
+        missing_args = _missing_explicit_split_args(args)
+        if missing_args:
+            missing_components = "; ".join(missing_diagnostics)
+            missing_options = ", ".join(f"--{name.replace('_', '-')}" for name in missing_args)
+            raise SystemExit(
+                "score fusion component runs are missing dep_hc_task_diagnostic.json: "
+                f"{missing_components}. Provide complete explicit split metadata including {missing_options}."
+            )
+        metadata = {}
     overrides = {
         "protocol": args.protocol,
         "split_id": args.split_id,
@@ -165,7 +175,7 @@ def _split_metadata_for_output(args: argparse.Namespace, component_roots: dict[s
     return metadata
 
 
-def _common_component_metadata(component_roots: dict[str, Path]) -> dict[str, object]:
+def _common_component_metadata(component_roots: dict[str, Path]) -> tuple[dict[str, object], list[str]]:
     keys = (
         "protocol",
         "split_id",
@@ -197,9 +207,11 @@ def _common_component_metadata(component_roots: dict[str, Path]) -> dict[str, ob
         "eval_scope",
     }
     values_by_key: dict[str, set[object]] = {key: set() for key in keys}
+    missing_diagnostics: list[str] = []
     for name, root in component_roots.items():
         path = root / "dep_hc_task_diagnostic.json"
         if not path.exists():
+            missing_diagnostics.append(f"{name}={path}")
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         config = payload.get("config", {})
@@ -218,7 +230,20 @@ def _common_component_metadata(component_roots: dict[str, Path]) -> dict[str, ob
             continue
         if values:
             metadata[key] = next(iter(values))
-    return metadata
+    return metadata, missing_diagnostics
+
+
+def _missing_explicit_split_args(args: argparse.Namespace) -> list[str]:
+    required = ["protocol", "split_id"]
+    if args.protocol == "p1":
+        required.extend(["seed", "fold", "n_folds"])
+    elif args.protocol == "p2":
+        required.extend(["holdout_seed", "n_holdout_subjects"])
+    elif args.protocol == "p3":
+        required.extend(["eval_scope", "outer_fold", "outer_folds", "outer_seed"])
+        if args.eval_scope == "p3_inner_validation" or args.inner_fold is not None:
+            required.extend(["inner_fold", "inner_folds", "inner_seed"])
+    return [name for name in required if getattr(args, name) is None]
 
 
 def _metadata_value(key: str, value: object) -> object:

@@ -72,7 +72,7 @@ def _subjects_for_protocol(
     if protocol == "p1":
         train, val, test = p1_subject_split(trial_rows, seed=seed, fold=fold, n_folds=n_folds)
         split_id = f"dep_hc_router_p1_seed{seed}_fold{fold}"
-        metadata: dict[str, Any] = {"eval_scope": "p1_test"}
+        metadata: dict[str, Any] = {"eval_scope": "p1_full"}
     elif protocol == "p2":
         train, val, test = p2_subject_split(
             trial_rows,

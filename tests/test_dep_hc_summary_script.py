@@ -290,6 +290,46 @@ def test_summarize_dep_hc_diagnostics_preserves_config_eval_scope(tmp_path: Path
     assert {row["eval_scope"] for row in aggregate} == {"p3_inner_validation", "p3_outer_test"}
 
 
+def test_summarize_dep_hc_diagnostics_normalizes_p1_scope_and_dynamic_n_folds(tmp_path: Path) -> None:
+    for fold in range(3):
+        root = tmp_path / f"p1_fold{fold}"
+        root.mkdir(parents=True)
+        payload = {
+            "task": "dep_hc",
+            "config": {
+                "protocol": "p1",
+                "eval_scope": "p1_test",
+                "split_id": f"dep_hc_router_p1_seed7_fold{fold}",
+                "seed": 7,
+                "fold": fold,
+                "n_folds": 3,
+                "model_name": "deformer_lite",
+            },
+            "metrics": {
+                "task": "dep_hc",
+                "model_name": "deformer_lite",
+                "subject_ba": 0.75,
+                "hc_subject_recall": 0.5,
+                "dep_subject_recall": 1.0,
+                "threshold_objective": "fixed_0_5",
+                "threshold_source": "fixed_0.5",
+                "subject_aggregation": "mean",
+            },
+        }
+        (root / "dep_hc_task_diagnostic.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        (root / "dep_hc_subject_metrics.csv").write_text(
+            "subject_id,cohort,subject_score_p_dep,predicted_cohort\nDEP001,DEP,0.8,DEP\n",
+            encoding="utf-8",
+        )
+
+    rows = [summarize_dep_hc_diagnostics.board_row(run) for run in summarize_dep_hc_diagnostics.load_dep_hc_runs([tmp_path])]
+    aggregate = summarize_dep_hc_diagnostics.aggregate_rows(rows)
+
+    assert {row["eval_scope"] for row in rows} == {"p1_full"}
+    assert {row["n_folds"] for row in rows} == {"3"}
+    assert aggregate[0]["split_coverage"] == "complete; seeds=7; folds=0,1,2"
+
+
 def test_robust_recommendation_rows_do_not_promote_missing_recall_gap() -> None:
     complete = {
         "eval_scope": "p2",

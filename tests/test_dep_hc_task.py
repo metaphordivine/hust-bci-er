@@ -593,6 +593,67 @@ def test_dep_hc_score_fusion_task_allows_p3_component_training_seed_mismatch(tmp
     assert "seed" not in config
 
 
+def test_dep_hc_score_fusion_task_rejects_missing_component_metadata_without_explicit_split(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    _write_score_component_run(component_a, hc_p_dep="0.20", dep_p_dep="0.70")
+    _write_score_component_run(component_b, hc_p_dep="0.30", dep_p_dep="0.80")
+    (component_b / "dep_hc_task_diagnostic.json").unlink()
+
+    with pytest.raises(SystemExit, match="missing dep_hc_task_diagnostic.json"):
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(tmp_path / "fusion"),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"traditional={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+            ]
+        )
+
+
+def test_dep_hc_score_fusion_task_allows_missing_metadata_with_explicit_p2_split(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    _write_score_component_run(component_a, hc_p_dep="0.20", dep_p_dep="0.70")
+    _write_score_component_run(component_b, hc_p_dep="0.30", dep_p_dep="0.80")
+    (component_b / "dep_hc_task_diagnostic.json").unlink()
+    out_dir = tmp_path / "fusion"
+
+    assert (
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(out_dir),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"traditional={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+                "--protocol",
+                "p2",
+                "--split-id",
+                "manual_p2_holdout321",
+                "--holdout-seed",
+                "321",
+                "--n-holdout-subjects",
+                "12",
+            ]
+        )
+        == 0
+    )
+
+    config = json.loads((out_dir / "dep_hc_task_diagnostic.json").read_text(encoding="utf-8"))["config"]
+    assert config["protocol"] == "p2"
+    assert config["split_id"] == "manual_p2_holdout321"
+    assert config["holdout_seed"] == 321
+    assert config["n_holdout_subjects"] == 12
+
+
 def _write_score_component_run(root, *, hc_p_dep: str, dep_p_dep: str, config_overrides: dict | None = None) -> None:
     root.mkdir()
     rows = [
@@ -695,6 +756,16 @@ def test_dep_hc_neural_task_uses_actual_crop_combo_shape():
     assert result["metrics"]["crop_combo_status"] == "computed"
     assert result["metrics"]["crop_combo_expected_trials"] == 1
     assert result["metrics"]["crop_combo_expected_crops"] == 6
+
+
+def test_run_dep_hc_neural_task_counts_actual_n_crops_from_samples():
+    samples = [
+        _trial_crop_sample(subject, cohort, trial_id="trial0", crop_id=crop_id)
+        for subject, cohort in [("HC101", "HC"), ("DEP101", "DEP")]
+        for crop_id in range(6)
+    ]
+
+    assert run_dep_hc_neural_task._actual_n_crops_from_samples(samples) == 6
 
 
 def test_run_dep_hc_neural_task_rejects_nonpositive_stride(tmp_path):

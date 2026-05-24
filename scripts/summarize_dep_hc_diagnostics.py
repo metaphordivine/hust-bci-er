@@ -29,6 +29,7 @@ BOARD_FIELDS = [
     "split_id",
     "seed",
     "fold",
+    "n_folds",
     "holdout_seed",
     "feature_or_fusion",
     "classifier",
@@ -206,6 +207,7 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
         "split_id": split_id,
         "seed": str(config.get("seed", "")),
         "fold": str(config.get("fold", "")),
+        "n_folds": str(config.get("n_folds", "")),
         "holdout_seed": holdout_seed,
         "feature_or_fusion": feature_or_fusion,
         "classifier": classifier,
@@ -427,7 +429,7 @@ def robust_recommendation_rows(rows: list[dict[str, str]]) -> list[dict[str, str
 def _eval_scope(config: dict[str, Any]) -> str:
     explicit_scope = str(config.get("eval_scope", "")).strip()
     if explicit_scope:
-        return explicit_scope
+        return _canonical_eval_scope(explicit_scope)
     protocol = str(config.get("protocol", ""))
     if protocol == "p1":
         return "p1_full"
@@ -436,8 +438,14 @@ def _eval_scope(config: dict[str, Any]) -> str:
     return protocol
 
 
+def _canonical_eval_scope(eval_scope: str) -> str:
+    if eval_scope == "p1_test":
+        return "p1_full"
+    return eval_scope
+
+
 def _row_split_label(row: dict[str, str]) -> str:
-    if row["eval_scope"] == "p1_full":
+    if _canonical_eval_scope(row["eval_scope"]) == "p1_full":
         return f"seed{row['seed']}_fold{row['fold']}"
     if row["eval_scope"] in {"p2", "p2_holdout"}:
         return f"holdout{row['holdout_seed']}" if row["holdout_seed"] else row["split_id"]
@@ -445,15 +453,43 @@ def _row_split_label(row: dict[str, str]) -> str:
 
 
 def _split_coverage(eval_scope: str, rows: list[dict[str, str]]) -> str:
-    if eval_scope == "p1_full":
-        folds = sorted({row["fold"] for row in rows if row["fold"] != ""}, key=lambda value: int(value))
-        seeds = sorted({row["seed"] for row in rows if row["seed"] != ""}, key=lambda value: int(value))
-        complete = "complete" if {"0", "1", "2", "3", "4"}.issubset(set(folds)) else "partial"
+    if _canonical_eval_scope(eval_scope) == "p1_full":
+        folds = sorted({row["fold"] for row in rows if row["fold"] != ""}, key=_numeric_sort_key)
+        seeds = sorted({row["seed"] for row in rows if row["seed"] != ""}, key=_numeric_sort_key)
+        required_folds = _required_p1_folds(rows)
+        complete = "complete" if required_folds.issubset(set(folds)) else "partial"
         return f"{complete}; seeds={','.join(seeds) or '-'}; folds={','.join(folds) or '-'}"
     if eval_scope in {"p2", "p2_holdout"}:
-        holdouts = sorted({row["holdout_seed"] for row in rows if row["holdout_seed"] not in {"", "0"}}, key=lambda value: int(value))
+        holdouts = sorted({row["holdout_seed"] for row in rows if row["holdout_seed"] not in {"", "0"}}, key=_numeric_sort_key)
         return f"holdouts={','.join(holdouts) or '-'}"
     return "-"
+
+
+def _required_p1_folds(rows: list[dict[str, str]]) -> set[str]:
+    n_folds_values = sorted(
+        {
+            parsed
+            for row in rows
+            for parsed in [_parse_optional_int(row.get("n_folds", ""))]
+            if parsed is not None and parsed > 0
+        }
+    )
+    n_folds = max(n_folds_values) if n_folds_values else 5
+    return {str(fold) for fold in range(n_folds)}
+
+
+def _numeric_sort_key(value: str) -> tuple[int, int | str]:
+    parsed = _parse_optional_int(value)
+    if parsed is None:
+        return (1, value)
+    return (0, parsed)
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _holdout_seed_from_config(config: dict[str, Any]) -> str:
