@@ -27,7 +27,12 @@ DEFAULT_PREPROCESSING: tuple[str, ...] = ("car", "zscore")
 def resolve_preprocessing(values: list[str] | None) -> list[str]:
     if values is None:
         return list(DEFAULT_PREPROCESSING)
-    normalized = [str(value).strip() for value in values if str(value).strip()]
+    normalized = [
+        step
+        for value in values
+        for step in (part.strip() for part in str(value).split(","))
+        if step
+    ]
     if any(value.lower() in {"none", "raw"} for value in normalized):
         if len(normalized) != 1:
             raise ValueError("--preprocessing none cannot be combined with other preprocessing steps")

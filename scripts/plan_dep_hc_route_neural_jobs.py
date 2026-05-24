@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from hust_bci_er.tasks.dep_hc.neural import DEP_HC_NEURAL_MODELS  # noqa: E402
+from hust_bci_er.config.schema import sliding_window_count  # noqa: E402
 
 
 FIELDS = [
@@ -232,7 +233,7 @@ def _route_window_plan(route_data: dict[str, Any]) -> tuple[float, float, float 
         stride_sec = float(augmentation["stride_sec"])
         if stride_sec <= 0:
             raise ValueError("sliding-window route stride_sec must be positive")
-        n_crops = int((source_trial_sec - window_sec) // stride_sec) + 1
+        n_crops = sliding_window_count(source_trial_sec, window_sec, stride_sec)
     else:
         n_crops = 5
     if source_trial_sec <= 0:

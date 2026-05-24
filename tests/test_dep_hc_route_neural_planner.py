@@ -28,6 +28,9 @@ def _write_route(path: Path, *, route_id: str = "fixed_crop_ea_deformer") -> Pat
 
 def test_plan_dep_hc_route_neural_jobs_preserves_route_model_and_preprocessing(tmp_path: Path) -> None:
     route = _write_route(tmp_path / "route.yaml")
+    payload = yaml.safe_load(route.read_text(encoding="utf-8"))
+    payload["preprocessing"] = ["euclidean_alignment", "car", "zscore"]
+    route.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     jobs = plan_jobs_for_route(
         route,
@@ -48,7 +51,7 @@ def test_plan_dep_hc_route_neural_jobs_preserves_route_model_and_preprocessing(t
         "screen_fixed_crop_ea_deformer_p1_f3",
     ]
     assert {job.model for job in jobs} == {"deformer_lite"}
-    assert {job.preprocessing for job in jobs} == {"zscore"}
+    assert {job.preprocessing for job in jobs} == {"car,zscore"}
     assert {job.source_trial_sec for job in jobs} == {50.0}
     assert {job.window_sec for job in jobs} == {10.0}
     assert {job.stride_sec for job in jobs} == {None}
@@ -127,6 +130,34 @@ def test_plan_dep_hc_route_neural_jobs_converts_sliding_window_contract(tmp_path
     assert {job.stride_sec for job in jobs} == {1.0}
     assert {job.n_crops for job in jobs} == {5}
     assert {job.subject_aggregation for job in jobs} == {"vote_frac"}
+
+
+def test_plan_dep_hc_route_neural_jobs_uses_stable_sliding_window_count(tmp_path: Path) -> None:
+    route = _write_route(tmp_path / "route.yaml", route_id="sliding_ea_deformer_w6_s0p8")
+    payload = yaml.safe_load(route.read_text(encoding="utf-8"))
+    payload["input_window_sec"] = 6
+    payload["augmentation"] = {
+        "name": "split_first_sliding_window",
+        "source_trial_sec": 10,
+        "window_sec": 6,
+        "stride_sec": 0.8,
+    }
+    route.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    jobs = plan_jobs_for_route(
+        route,
+        run_prefix="screen",
+        seed=42,
+        p1_folds=[0],
+        p2_holdout_seeds=[123],
+        epochs_override=None,
+        batch_size_override=None,
+        threshold_objective="balanced_accuracy",
+        subject_aggregation="vote_frac",
+        drop_preprocessing=None,
+    )
+
+    assert {job.n_crops for job in jobs} == {6}
 
 
 def test_plan_dep_hc_route_neural_jobs_drops_ea_by_default(tmp_path: Path) -> None:
