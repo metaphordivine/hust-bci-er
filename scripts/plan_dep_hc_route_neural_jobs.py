@@ -95,8 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--p2-holdout-seed", type=int, action="append", default=None, help="P2 holdout seed. Repeatable.")
     parser.add_argument("--epochs-override", type=int, default=None)
     parser.add_argument("--batch-size-override", type=int, default=None)
-    parser.add_argument("--threshold-objective", default="balanced_accuracy")
-    parser.add_argument("--subject-aggregation", default="mean")
+    parser.add_argument("--threshold-objective", action="append", default=None)
+    parser.add_argument("--subject-aggregation", action="append", default=None)
     parser.add_argument(
         "--drop-preprocessing",
         action="append",
@@ -119,8 +119,8 @@ def main(argv: list[str] | None = None) -> int:
                 p2_holdout_seeds=args.p2_holdout_seed or [123, 666, 999],
                 epochs_override=args.epochs_override,
                 batch_size_override=args.batch_size_override,
-                threshold_objective=args.threshold_objective,
-                subject_aggregation=args.subject_aggregation,
+                threshold_objective=args.threshold_objective or ["balanced_accuracy"],
+                subject_aggregation=args.subject_aggregation or ["mean"],
                 drop_preprocessing=set(args.drop_preprocessing or []),
             )
         )
@@ -140,8 +140,8 @@ def plan_jobs_for_route(
     p2_holdout_seeds: list[int],
     epochs_override: int | None,
     batch_size_override: int | None,
-    threshold_objective: str,
-    subject_aggregation: str,
+    threshold_objective: str | list[str],
+    subject_aggregation: str | list[str],
     drop_preprocessing: set[str] | None = None,
 ) -> list[RouteJob]:
     route_data = yaml.safe_load(route_config.read_text(encoding="utf-8")) or {}
@@ -177,50 +177,56 @@ def plan_jobs_for_route(
         raise ValueError("batch size must be positive")
     model_kwargs_json = json.dumps(model_kwargs, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     route_slug = _slug(route_id)
+    threshold_objectives = _as_list(threshold_objective)
+    subject_aggregations = _as_list(subject_aggregation)
+    combos = [(objective, aggregation) for objective in threshold_objectives for aggregation in subject_aggregations]
+    multi_combo = len(combos) > 1
 
     jobs: list[RouteJob] = []
-    for holdout_seed in p2_holdout_seeds:
-        jobs.append(
-            RouteJob(
-                run_id=f"{run_prefix}_{route_slug}_p2_h{int(holdout_seed)}",
-                protocol="p2",
-                fold=0,
-                holdout_seed=int(holdout_seed),
-                seed=int(seed),
-                model=model_name,
-                epochs=epochs,
-                batch_size=batch_size,
-                threshold_objective=threshold_objective,
-                subject_aggregation=subject_aggregation,
-                model_kwargs_json=model_kwargs_json,
-                source_trial_sec=source_trial_sec,
-                window_sec=window_sec,
-                stride_sec=stride_sec,
-                n_crops=n_crops,
-                preprocessing=preprocessing_token,
+    for threshold_item, aggregation_item in combos:
+        combo_suffix = f"_thr{_slug(threshold_item)}_agg{_slug(aggregation_item)}" if multi_combo else ""
+        for holdout_seed in p2_holdout_seeds:
+            jobs.append(
+                RouteJob(
+                    run_id=f"{run_prefix}_{route_slug}{combo_suffix}_p2_h{int(holdout_seed)}",
+                    protocol="p2",
+                    fold=0,
+                    holdout_seed=int(holdout_seed),
+                    seed=int(seed),
+                    model=model_name,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    threshold_objective=threshold_item,
+                    subject_aggregation=aggregation_item,
+                    model_kwargs_json=model_kwargs_json,
+                    source_trial_sec=source_trial_sec,
+                    window_sec=window_sec,
+                    stride_sec=stride_sec,
+                    n_crops=n_crops,
+                    preprocessing=preprocessing_token,
+                )
             )
-        )
-    for fold in p1_folds:
-        jobs.append(
-            RouteJob(
-                run_id=f"{run_prefix}_{route_slug}_p1_f{int(fold)}",
-                protocol="p1",
-                fold=int(fold),
-                holdout_seed=0,
-                seed=int(seed),
-                model=model_name,
-                epochs=epochs,
-                batch_size=batch_size,
-                threshold_objective=threshold_objective,
-                subject_aggregation=subject_aggregation,
-                model_kwargs_json=model_kwargs_json,
-                source_trial_sec=source_trial_sec,
-                window_sec=window_sec,
-                stride_sec=stride_sec,
-                n_crops=n_crops,
-                preprocessing=preprocessing_token,
+        for fold in p1_folds:
+            jobs.append(
+                RouteJob(
+                    run_id=f"{run_prefix}_{route_slug}{combo_suffix}_p1_f{int(fold)}",
+                    protocol="p1",
+                    fold=int(fold),
+                    holdout_seed=0,
+                    seed=int(seed),
+                    model=model_name,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    threshold_objective=threshold_item,
+                    subject_aggregation=aggregation_item,
+                    model_kwargs_json=model_kwargs_json,
+                    source_trial_sec=source_trial_sec,
+                    window_sec=window_sec,
+                    stride_sec=stride_sec,
+                    n_crops=n_crops,
+                    preprocessing=preprocessing_token,
+                )
             )
-        )
     return jobs
 
 
@@ -273,6 +279,16 @@ def _serialize_preprocessing(preprocessing: list[Any]) -> str:
     if len(preprocessing) == 1 and isinstance(preprocessing[0], str):
         return preprocessing[0]
     return json.dumps(preprocessing, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _as_list(value: str | list[str]) -> list[str]:
+    if isinstance(value, list):
+        out = [str(item) for item in value]
+    else:
+        out = [str(value)]
+    if not out or any(not item for item in out):
+        raise ValueError("planner sweep values must be non-empty")
+    return out
 
 
 def _format_float(value: float) -> str:

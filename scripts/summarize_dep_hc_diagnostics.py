@@ -40,6 +40,8 @@ BOARD_FIELDS = [
     "primary_ba",
     "primary_hc_recall",
     "primary_dep_recall",
+    "primary_min_recall",
+    "primary_recall_gap",
     "primary_dep_vs_hc_ratio",
     "primary_metric_source",
     "crop_combo_status",
@@ -58,7 +60,10 @@ BOARD_FIELDS = [
 HARD_FIELDS = [
     "subject_id",
     "cohort",
+    "error_type",
     "n_errors",
+    "false_negative_errors",
+    "false_positive_errors",
     "runs",
     "mean_subject_score_p_dep",
 ]
@@ -147,7 +152,13 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
     payload = run["payload"]
     metrics = payload.get("metrics", {})
     config = payload.get("config", {})
-    if "fusion_feature_sets" in metrics:
+    if "score_fusion_components" in metrics:
+        components = [str(component) for component in metrics["score_fusion_components"]]
+        feature_or_fusion = "score:" + "+".join(components)
+        fusion_weight_by_feature = json.dumps(metrics.get("score_fusion_weights_by_component", {}), sort_keys=True)
+        fusion_weight_source = str(metrics.get("fusion_weight_source", ""))
+        classifier = "score_fusion"
+    elif "fusion_feature_sets" in metrics:
         feature_or_fusion = "+".join(canonical_feature_order(metrics["fusion_feature_sets"]))
         fusion_weight_by_feature = json.dumps(metrics.get("fusion_weight_by_feature", {}), sort_keys=True)
         fusion_weight_source = str(metrics.get("fusion_weight_source", "validation_subjects"))
@@ -176,8 +187,12 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
         ratio = float("nan")
     if math.isfinite(primary_hc) and math.isfinite(primary_dep):
         primary_ratio = primary_dep / primary_hc if primary_hc != 0.0 else float("inf")
+        primary_min_recall = min(primary_hc, primary_dep)
+        primary_recall_gap = abs(primary_dep - primary_hc)
     else:
         primary_ratio = float("nan")
+        primary_min_recall = float("nan")
+        primary_recall_gap = float("nan")
     split_id = str(config.get("split_id", ""))
     holdout_seed = _holdout_seed_from_config(config)
     return {
@@ -198,6 +213,8 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
         "primary_ba": _format_float(primary_ba),
         "primary_hc_recall": _format_float(primary_hc),
         "primary_dep_recall": _format_float(primary_dep),
+        "primary_min_recall": _format_float(primary_min_recall),
+        "primary_recall_gap": _format_float(primary_recall_gap),
         "primary_dep_vs_hc_ratio": _format_float(primary_ratio),
         "primary_metric_source": primary_source,
         "crop_combo_status": combo_status,
@@ -216,6 +233,8 @@ def board_row(run: dict[str, Any]) -> dict[str, str]:
 
 def hard_subject_rows(runs: list[dict[str, Any]]) -> list[dict[str, str]]:
     counts: Counter[tuple[str, str]] = Counter()
+    false_negative_counts: Counter[tuple[str, str]] = Counter()
+    false_positive_counts: Counter[tuple[str, str]] = Counter()
     run_names: dict[tuple[str, str], list[str]] = defaultdict(list)
     scores: dict[tuple[str, str], list[float]] = defaultdict(list)
     for run in runs:
@@ -225,6 +244,10 @@ def hard_subject_rows(runs: list[dict[str, Any]]) -> list[dict[str, str]]:
                 continue
             key = (str(row.get("subject_id", "")), str(row.get("cohort", "")))
             counts[key] += 1
+            if row.get("cohort") == "DEP" and row.get("predicted_cohort") == "HC":
+                false_negative_counts[key] += 1
+            elif row.get("cohort") == "HC" and row.get("predicted_cohort") == "DEP":
+                false_positive_counts[key] += 1
             run_names[key].append(run_id)
             score = _parse_optional_float(row.get("subject_score_p_dep", row.get("mean_p_dep", "")))
             if math.isfinite(score):
@@ -237,7 +260,10 @@ def hard_subject_rows(runs: list[dict[str, Any]]) -> list[dict[str, str]]:
             {
                 "subject_id": subject_id,
                 "cohort": cohort,
+                "error_type": _hard_error_type(cohort),
                 "n_errors": str(count),
+                "false_negative_errors": str(false_negative_counts[(subject_id, cohort)]),
+                "false_positive_errors": str(false_positive_counts[(subject_id, cohort)]),
                 "runs": ";".join(run_names[(subject_id, cohort)]),
                 "mean_subject_score_p_dep": _format_float(mean_score),
             }
@@ -259,15 +285,32 @@ def render_markdown(board_rows: list[dict[str, str]], hard_rows: list[dict[str, 
         "This report is diagnostic-only. It does not change route status and is not candidate evidence.",
         "Primary comparison uses `crop_combo_expected_*` when available; legacy all-crop subject metrics are kept for audit only.",
         "",
-        "## Aggregate Summary",
+        "## Robust Recommendation",
         "",
-        "| scope | feature/fusion | threshold/agg | weight source | split coverage | n | mean primary BA | min primary BA | mean HC recall | mean DEP recall |",
-        "|---|---|---|---|---|---:|---:|---:|---:|---:|",
+        "For DEP/HC defaults, this ranking prioritizes P2 recall balance and worst-combo stability before mean BA. It is diagnostic guidance, not route promotion evidence.",
+        "",
+        "| rank | scope | feature/fusion | threshold/agg | split coverage | n | mean primary BA | mean worst combo BA | mean min recall | mean recall gap |",
+        "|---:|---|---|---|---|---:|---:|---:|---:|---:|",
     ]
+    for rank, row in enumerate(robust_recommendation_rows(aggregate_rows(board_rows))[:10], start=1):
+        lines.append(
+            "| {rank} | {eval_scope} | {feature_or_fusion} | {threshold_objective}/{subject_aggregation} | {split_coverage} | {n} | "
+            "{mean_primary_ba} | {mean_worst_combo_ba} | {mean_min_recall} | {mean_recall_gap} |".format(rank=rank, **row)
+        )
+    lines.extend(
+        [
+            "",
+            "## Aggregate Summary",
+            "",
+            "| scope | feature/fusion | threshold/agg | weight source | split coverage | n | mean primary BA | min primary BA | mean worst combo BA | mean HC recall | mean DEP recall | mean min recall | mean recall gap |",
+            "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
     for row in aggregate_rows(board_rows):
         lines.append(
             "| {eval_scope} | {feature_or_fusion} | {threshold_objective}/{subject_aggregation} | {fusion_weight_source} | "
-            "{split_coverage} | {n} | {mean_primary_ba} | {min_primary_ba} | {mean_hc_recall} | {mean_dep_recall} |".format(
+            "{split_coverage} | {n} | {mean_primary_ba} | {min_primary_ba} | {mean_worst_combo_ba} | "
+            "{mean_hc_recall} | {mean_dep_recall} | {mean_min_recall} | {mean_recall_gap} |".format(
                 **row
             )
         )
@@ -291,13 +334,14 @@ def render_markdown(board_rows: list[dict[str, str]], hard_rows: list[dict[str, 
             "",
             "## Repeated Hard Subjects",
             "",
-            "| subject | cohort | errors | mean p(DEP) when wrong | runs |",
-            "|---|---|---:|---:|---|",
+            "| subject | cohort | error type | errors | FN | FP | mean p(DEP) when wrong | runs |",
+            "|---|---|---|---:|---:|---:|---:|---|",
         ]
     )
     for row in hard_rows[:20]:
         lines.append(
-            "| {subject_id} | {cohort} | {n_errors} | {mean_subject_score_p_dep} | `{runs}` |".format(**row)
+            "| {subject_id} | {cohort} | {error_type} | {n_errors} | {false_negative_errors} | "
+            "{false_positive_errors} | {mean_subject_score_p_dep} | `{runs}` |".format(**row)
         )
     lines.extend(
         [
@@ -328,11 +372,17 @@ def aggregate_rows(board_rows: list[dict[str, str]]) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for (eval_scope, feature_or_fusion, fusion_weight_source, threshold_objective, subject_aggregation), rows in sorted(grouped.items()):
         bas = [_parse_optional_float(row["primary_ba"]) for row in rows]
+        worst = [_parse_optional_float(row["crop_combo_worst_ba"]) for row in rows]
         hc = [_parse_optional_float(row["primary_hc_recall"]) for row in rows]
         dep = [_parse_optional_float(row["primary_dep_recall"]) for row in rows]
+        min_recalls = [_parse_optional_float(row["primary_min_recall"]) for row in rows]
+        gaps = [_parse_optional_float(row["primary_recall_gap"]) for row in rows]
         bas = [value for value in bas if math.isfinite(value)]
+        worst = [value for value in worst if math.isfinite(value)]
         hc = [value for value in hc if math.isfinite(value)]
         dep = [value for value in dep if math.isfinite(value)]
+        min_recalls = [value for value in min_recalls if math.isfinite(value)]
+        gaps = [value for value in gaps if math.isfinite(value)]
         out.append(
             {
                 "eval_scope": eval_scope,
@@ -344,11 +394,29 @@ def aggregate_rows(board_rows: list[dict[str, str]]) -> list[dict[str, str]]:
                 "n": str(len(rows)),
                 "mean_primary_ba": _format_float(sum(bas) / len(bas) if bas else float("nan")),
                 "min_primary_ba": _format_float(min(bas) if bas else float("nan")),
+                "mean_worst_combo_ba": _format_float(sum(worst) / len(worst) if worst else float("nan")),
                 "mean_hc_recall": _format_float(sum(hc) / len(hc) if hc else float("nan")),
                 "mean_dep_recall": _format_float(sum(dep) / len(dep) if dep else float("nan")),
+                "mean_min_recall": _format_float(sum(min_recalls) / len(min_recalls) if min_recalls else float("nan")),
+                "mean_recall_gap": _format_float(sum(gaps) / len(gaps) if gaps else float("nan")),
             }
         )
     return out
+
+
+def robust_recommendation_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    p2_rows = [row for row in rows if row["eval_scope"] == "p2"]
+    return sorted(
+        p2_rows,
+        key=lambda row: (
+            _sort_float(row["mean_min_recall"]),
+            _sort_float(row["mean_worst_combo_ba"]),
+            _sort_float(row["mean_primary_ba"]),
+            -_sort_float(row["mean_recall_gap"]),
+            int(row["n"]),
+        ),
+        reverse=True,
+    )
 
 
 def _eval_scope(config: dict[str, Any]) -> str:
@@ -403,6 +471,19 @@ def _format_float(value: float) -> str:
     if math.isinf(value):
         return "inf"
     return f"{value:.4f}" if math.isfinite(value) else ""
+
+
+def _sort_float(value: str) -> float:
+    parsed = _parse_optional_float(value)
+    return parsed if math.isfinite(parsed) else -1.0
+
+
+def _hard_error_type(cohort: str) -> str:
+    if cohort == "DEP":
+        return "false_negative"
+    if cohort == "HC":
+        return "false_positive"
+    return "unknown"
 
 
 if __name__ == "__main__":

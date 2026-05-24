@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--class-weight-mode", choices=["balanced", "uniform"], default="balanced")
+    parser.add_argument("--calibration-method", choices=["none", "temperature", "platt", "isotonic"], default="none")
+    parser.add_argument("--sampling-strategy", choices=["window", "subject_balanced"], default="window")
     parser.add_argument(
         "--threshold-objective",
         choices=["balanced_accuracy", "min_recall", "fixed_0_5", "dep_recall_floor_0p8_hc"],
@@ -138,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         threshold_objective=args.threshold_objective,
         subject_aggregation=args.subject_aggregation,
         model_kwargs=model_kwargs,
+        calibration_method=args.calibration_method,
+        sampling_strategy=args.sampling_strategy,
     )
     config = {
         "task": "dep_hc_neural",
@@ -156,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
         "model_name": args.model_name,
         "model_kwargs": result["metrics"].get("model_kwargs", {}),
         "class_weight_mode": args.class_weight_mode,
+        "calibration_method": args.calibration_method,
+        "sampling_strategy": args.sampling_strategy,
         "threshold_objective": args.threshold_objective,
         "subject_aggregation": args.subject_aggregation,
         "label_source": "cohort field; subject/trial identifiers are split and audit metadata only",

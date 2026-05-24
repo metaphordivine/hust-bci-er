@@ -91,11 +91,15 @@ def test_summarize_dep_hc_diagnostics_writes_board_and_hard_subjects(tmp_path: P
 
     hard_rows = list(csv.DictReader((out_dir / "board_hard_subjects.csv").open(encoding="utf-8")))
     assert hard_rows[0]["subject_id"] == "DEP001"
+    assert hard_rows[0]["error_type"] == "false_negative"
     assert hard_rows[0]["n_errors"] == "2"
+    assert hard_rows[0]["false_negative_errors"] == "2"
+    assert hard_rows[0]["false_positive_errors"] == "0"
     assert "single" in hard_rows[0]["runs"]
     markdown = (out_dir / "board.md").read_text(encoding="utf-8")
+    assert "## Robust Recommendation" in markdown
     assert "## Aggregate Summary" in markdown
-    assert "| p2 | traditional+time_frequency | fixed_0_5/mean | fixed | holdouts=123 | 1 | 0.7500 | 0.7500 | 0.5000 | 1.0000 |" in markdown
+    assert "| p2 | traditional+time_frequency | fixed_0_5/mean | fixed | holdouts=123 | 1 | 0.7500 | 0.7500 |  | 0.5000 | 1.0000 | 0.5000 | 0.5000 |" in markdown
 
 
 def test_summarize_dep_hc_diagnostics_glob_only_expands_diagnostic_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,3 +174,46 @@ def test_summarize_dep_hc_diagnostics_labels_neural_models(tmp_path: Path) -> No
 
     assert row["feature_or_fusion"] == "neural:deformer_lite"
     assert row["classifier"] == "neural"
+
+
+def test_summarize_dep_hc_diagnostics_labels_score_fusion_and_robust_rank(tmp_path: Path) -> None:
+    root = tmp_path / "dep_hc_score_fusion"
+    root.mkdir(parents=True)
+    payload = {
+        "task": "dep_hc",
+        "config": {"protocol": "p2", "split_id": "split_h999"},
+        "metrics": {
+            "task": "dep_hc",
+            "score_fusion_components": ["deformer", "traditional_tf"],
+            "score_fusion_weights_by_component": {"deformer": 0.7, "traditional_tf": 0.3},
+            "fusion_weight_source": "fixed",
+            "subject_ba": 0.75,
+            "hc_subject_recall": 0.5,
+            "dep_subject_recall": 1.0,
+            "threshold_objective": "fixed_0_5",
+            "threshold_source": "fixed_0.5",
+            "subject_aggregation": "vote_frac",
+            "crop_combo_status": "computed",
+            "crop_combo_expected_ba": 0.8,
+            "crop_combo_worst_ba": 0.625,
+            "crop_combo_expected_hc_recall": 0.75,
+            "crop_combo_expected_dep_recall": 0.85,
+        },
+    }
+    (root / "dep_hc_task_diagnostic.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    (root / "dep_hc_subject_metrics.csv").write_text(
+        "subject_id,cohort,subject_score_p_dep,predicted_cohort\nDEP001,DEP,0.8,DEP\n",
+        encoding="utf-8",
+    )
+
+    run = summarize_dep_hc_diagnostics.load_dep_hc_runs([root])[0]
+    row = summarize_dep_hc_diagnostics.board_row(run)
+    aggregate = summarize_dep_hc_diagnostics.aggregate_rows([row])
+    robust = summarize_dep_hc_diagnostics.robust_recommendation_rows(aggregate)
+
+    assert row["feature_or_fusion"] == "score:deformer+traditional_tf"
+    assert row["classifier"] == "score_fusion"
+    assert row["primary_min_recall"] == "0.7500"
+    assert row["primary_recall_gap"] == "0.1000"
+    assert aggregate[0]["mean_worst_combo_ba"] == "0.6250"
+    assert robust[0]["feature_or_fusion"] == "score:deformer+traditional_tf"

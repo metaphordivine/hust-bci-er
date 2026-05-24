@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from scripts.plan_dep_hc_route_neural_jobs import FIELDS, main, plan_jobs_for_route
+from scripts.run_dep_hc_router import resolve_preprocessing
 
 
 def _write_route(path: Path, *, route_id: str = "fixed_crop_ea_deformer") -> Path:
@@ -100,6 +101,31 @@ def test_plan_dep_hc_route_neural_jobs_writes_tsv(tmp_path: Path) -> None:
     assert b"\r" not in out.read_bytes()
 
 
+def test_plan_dep_hc_route_neural_jobs_expands_threshold_aggregation_sweep(tmp_path: Path) -> None:
+    route = _write_route(tmp_path / "route.yaml", route_id="p01_wide_carz_s7")
+
+    jobs = plan_jobs_for_route(
+        route,
+        run_prefix="screen",
+        seed=42,
+        p1_folds=[0],
+        p2_holdout_seeds=[123],
+        epochs_override=2,
+        batch_size_override=None,
+        threshold_objective=["balanced_accuracy", "min_recall"],
+        subject_aggregation=["mean", "vote_frac"],
+        drop_preprocessing={"euclidean_alignment"},
+    )
+
+    assert len(jobs) == 8
+    assert len({job.run_id for job in jobs}) == len(jobs)
+    assert "screen_p01_wide_carz_s7_thrbalanced_accuracy_aggvote_frac_p2_h123" in {
+        job.run_id for job in jobs
+    }
+    assert {job.threshold_objective for job in jobs} == {"balanced_accuracy", "min_recall"}
+    assert {job.subject_aggregation for job in jobs} == {"mean", "vote_frac"}
+
+
 def test_plan_dep_hc_route_neural_jobs_preserves_parameterized_preprocessing(tmp_path: Path) -> None:
     route = _write_route(tmp_path / "route.yaml")
     payload = yaml.safe_load(route.read_text(encoding="utf-8"))
@@ -125,6 +151,33 @@ def test_plan_dep_hc_route_neural_jobs_preserves_parameterized_preprocessing(tmp
 
     parsed = json.loads(jobs[0].preprocessing)
     assert parsed == [{"high_hz": 40.0, "low_hz": 1.0, "name": "bandpass"}, "zscore"]
+    assert resolve_preprocessing([jobs[0].preprocessing]) == [
+        {"high_hz": 40.0, "low_hz": 1.0, "name": "bandpass"},
+        "zscore",
+    ]
+
+
+def test_plan_dep_hc_route_neural_jobs_outputs_runner_consumable_multistep_preprocessing(tmp_path: Path) -> None:
+    route = _write_route(tmp_path / "route.yaml")
+    payload = yaml.safe_load(route.read_text(encoding="utf-8"))
+    payload["preprocessing"] = ["euclidean_alignment", "car", "zscore"]
+    route.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    jobs = plan_jobs_for_route(
+        route,
+        run_prefix="screen",
+        seed=42,
+        p1_folds=[0],
+        p2_holdout_seeds=[123],
+        epochs_override=None,
+        batch_size_override=None,
+        threshold_objective="balanced_accuracy",
+        subject_aggregation="vote_frac",
+        drop_preprocessing={"euclidean_alignment"},
+    )
+
+    assert jobs[0].preprocessing == '["car","zscore"]'
+    assert resolve_preprocessing([jobs[0].preprocessing]) == ["car", "zscore"]
 
 
 def test_plan_dep_hc_route_neural_jobs_converts_sliding_window_contract(tmp_path: Path) -> None:

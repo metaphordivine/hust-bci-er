@@ -13,11 +13,19 @@ from hust_bci_er.tasks.dep_hc.experiment import (
     fit_dep_hc_classifier,
     write_dep_hc_task_outputs,
 )
-from hust_bci_er.tasks.dep_hc.fusion import _fusion_selection_key, _weight_candidates, evaluate_dep_hc_feature_fusion
+from hust_bci_er.tasks.dep_hc.fusion import (
+    _fusion_selection_key,
+    _weight_candidates,
+    evaluate_dep_hc_feature_fusion,
+    evaluate_dep_hc_score_fusion,
+)
 from hust_bci_er.tasks.dep_hc.neural import (
     DEP_HC_NEURAL_MODELS,
+    _apply_probability_calibrator,
     _build_model_kwargs,
+    _fit_probability_calibrator,
     _output_logits,
+    _subject_balanced_sample_weights,
     evaluate_dep_hc_neural_task,
 )
 from hust_bci_er.tasks.dep_hc.channel_graph import (
@@ -337,6 +345,65 @@ def test_dep_hc_fusion_weight_selection_respects_objective_and_endpoints():
     )
 
 
+def test_dep_hc_score_fusion_reads_aligned_prediction_probabilities():
+    rows_a = [
+        {
+            "subject_id": "HC101",
+            "trial_id": "HC101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "HC",
+            "y_true": "0",
+            "p_dep": "0.20",
+        },
+        {
+            "subject_id": "DEP101",
+            "trial_id": "DEP101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "DEP",
+            "y_true": "1",
+            "p_dep": "0.70",
+        },
+    ]
+    rows_b = [
+        {**rows_a[0], "p_dep": "0.40"},
+        {**rows_a[1], "p_dep": "0.90"},
+    ]
+
+    result = evaluate_dep_hc_score_fusion(
+        {"deformer": rows_a, "traditional_tf": rows_b},
+        weights={"deformer": 0.75, "traditional_tf": 0.25},
+        threshold_objective="fixed_0_5",
+        subject_aggregation="vote_frac",
+    )
+
+    assert result["metrics"]["score_fusion_components"] == ["deformer", "traditional_tf"]
+    assert result["metrics"]["fusion_weight_source"] == "fixed"
+    assert result["metrics"]["subject_ba"] == pytest.approx(1.0)
+    by_subject = {row["subject_id"]: row["p_dep"] for row in result["prediction_rows"]}
+    assert by_subject == {"HC101": "0.25", "DEP101": "0.75"}
+
+
+def test_dep_hc_score_fusion_requires_validation_for_nonfixed_threshold():
+    rows = [
+        {
+            "subject_id": "HC101",
+            "trial_id": "HC101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "HC",
+            "y_true": "0",
+            "p_dep": "0.20",
+        }
+    ]
+    with pytest.raises(ValueError, match="validation component predictions"):
+        evaluate_dep_hc_score_fusion(
+            {"a": rows, "b": rows},
+            threshold_objective="balanced_accuracy",
+        )
+
+
 def test_dep_hc_neural_task_smoke_uses_cohort_target():
     pytest.importorskip("torch")
     train = [
@@ -362,6 +429,64 @@ def test_dep_hc_neural_task_smoke_uses_cohort_target():
     assert result["metrics"]["model_name"] == "eegnet"
     assert result["metrics"]["n_eval_subjects"] == 2
     assert {"HC101", "DEP101"} == {row["subject_id"] for row in result["subject_rows"]}
+
+
+def test_dep_hc_neural_task_supports_calibration_and_subject_balanced_sampling():
+    pytest.importorskip("torch")
+    train = [
+        _sample("HC001", "HC", crop_id=0),
+        _sample("HC001", "HC", crop_id=1),
+        _sample("HC002", "HC", crop_id=0),
+        _sample("DEP001", "DEP", crop_id=0),
+    ]
+    val = [_sample("HC011", "HC"), _sample("DEP011", "DEP")]
+    eval_samples = [_sample("HC101", "HC"), _sample("DEP101", "DEP")]
+
+    result = evaluate_dep_hc_neural_task(
+        train,
+        eval_samples,
+        val_samples=val,
+        model_name="eegnet",
+        epochs=1,
+        batch_size=2,
+        seed=7,
+        calibration_method="temperature",
+        sampling_strategy="subject_balanced",
+    )
+
+    assert result["metrics"]["calibration_method"] == "temperature"
+    assert result["metrics"]["sampling_strategy"] == "subject_balanced"
+    assert "temperature" in result["metrics"]["calibration_params"]
+    assert "window_brier_raw" in result["metrics"]
+
+
+def test_dep_hc_neural_calibrators_and_subject_weights_are_metadata_safe():
+    torch = pytest.importorskip("torch")
+    labels = np.array([0, 0, 1, 1])
+    probs = np.array([0.2, 0.8, 0.6, 0.9])
+
+    temp = _fit_probability_calibrator(labels, probs, method="temperature")
+    platt = _fit_probability_calibrator(labels, probs, method="platt")
+
+    assert temp["method"] == "temperature"
+    assert platt["method"] == "platt"
+    assert _apply_probability_calibrator(probs, temp).shape == probs.shape
+    assert _apply_probability_calibrator(probs, platt).shape == probs.shape
+
+    samples = [
+        _sample("HC001", "HC", crop_id=0),
+        _sample("HC001", "HC", crop_id=1),
+        _sample("HC002", "HC", crop_id=0),
+        _sample("DEP001", "DEP", crop_id=0),
+        _sample("DEP001", "DEP", crop_id=1),
+    ]
+    weights = _subject_balanced_sample_weights(samples, torch.tensor([0, 0, 0, 1, 1]))
+    by_subject: dict[str, float] = {}
+    for sample, weight in zip(samples, weights.tolist()):
+        by_subject[sample.subject_id] = by_subject.get(sample.subject_id, 0.0) + float(weight)
+
+    assert by_subject["HC001"] == pytest.approx(by_subject["HC002"])
+    assert by_subject["DEP001"] == pytest.approx(0.5)
 
 
 def test_dep_hc_neural_task_supports_factory_backbone_dict_logits():

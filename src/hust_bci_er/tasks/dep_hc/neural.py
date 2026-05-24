@@ -136,6 +136,8 @@ def evaluate_dep_hc_neural_task(
     threshold_objective: str = "balanced_accuracy",
     subject_aggregation: str = "mean",
     model_kwargs: Mapping[str, Any] | None = None,
+    calibration_method: str = "none",
+    sampling_strategy: str = "window",
 ) -> dict[str, Any]:
     _require_torch()
     if not train_samples or not eval_samples:
@@ -146,6 +148,10 @@ def evaluate_dep_hc_neural_task(
         raise ValueError("neural DEP/HC diagnostics require validation subjects for threshold selection")
     if class_weight_mode not in {"balanced", "uniform"}:
         raise ValueError(f"unknown class_weight_mode: {class_weight_mode}")
+    if calibration_method not in {"none", "temperature", "platt", "isotonic"}:
+        raise ValueError(f"unknown calibration_method: {calibration_method}")
+    if sampling_strategy not in {"window", "subject_balanced"}:
+        raise ValueError(f"unknown sampling_strategy: {sampling_strategy}")
     if epochs <= 0:
         raise ValueError("epochs must be positive")
     if batch_size <= 0:
@@ -170,8 +176,16 @@ def evaluate_dep_hc_neural_task(
     criterion = nn.CrossEntropyLoss(weight=_class_weights(y_train, class_weight_mode=class_weight_mode).to(torch_device))
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
     generator = torch.Generator().manual_seed(int(seed))
+    sample_weights = (
+        _subject_balanced_sample_weights(train_samples, y_train)
+        if sampling_strategy == "subject_balanced"
+        else None
+    )
     for _epoch in range(int(epochs)):
-        order = torch.randperm(x_train.shape[0], generator=generator)
+        if sample_weights is None:
+            order = torch.randperm(x_train.shape[0], generator=generator)
+        else:
+            order = torch.multinomial(sample_weights, int(x_train.shape[0]), replacement=True, generator=generator)
         model.train()
         for start in range(0, int(order.numel()), int(batch_size)):
             idx = order[start : start + int(batch_size)]
@@ -182,7 +196,9 @@ def evaluate_dep_hc_neural_task(
             loss.backward()
             optimizer.step()
 
-    val_p_dep = _predict_dep_probabilities(model, x_val, device=torch_device, batch_size=batch_size)
+    val_p_dep_raw = _predict_dep_probabilities(model, x_val, device=torch_device, batch_size=batch_size)
+    calibrator = _fit_probability_calibrator(y_val.numpy(), val_p_dep_raw, method=calibration_method)
+    val_p_dep = _apply_probability_calibrator(val_p_dep_raw, calibrator)
     threshold_summary = subject_threshold_diagnostic(
         val_samples,
         y_val.numpy(),
@@ -191,7 +207,8 @@ def evaluate_dep_hc_neural_task(
         aggregation=subject_aggregation,
     )
     threshold = float(threshold_summary["threshold"])
-    eval_p_dep = _predict_dep_probabilities(model, x_eval, device=torch_device, batch_size=batch_size)
+    eval_p_dep_raw = _predict_dep_probabilities(model, x_eval, device=torch_device, batch_size=batch_size)
+    eval_p_dep = _apply_probability_calibrator(eval_p_dep_raw, calibrator)
     y_pred = (eval_p_dep >= threshold).astype(int)
     prediction_rows = dep_hc_prediction_rows(eval_samples, y_eval.numpy(), eval_p_dep, y_pred)
     subject_rows = aggregate_subject_rows(prediction_rows, threshold=threshold, aggregation=subject_aggregation)
@@ -203,6 +220,9 @@ def evaluate_dep_hc_neural_task(
         "window_ba": balanced_accuracy_binary(y_eval.numpy(), y_pred),
         "subject_ba": balanced_accuracy_binary(subject_truth, subject_pred),
         "window_brier": brier_score(y_eval.numpy(), eval_p_dep),
+        "window_brier_raw": brier_score(y_eval.numpy(), eval_p_dep_raw),
+        "validation_window_brier": brier_score(y_val.numpy(), val_p_dep),
+        "validation_window_brier_raw": brier_score(y_val.numpy(), val_p_dep_raw),
         "subject_brier": brier_score(subject_truth, np.array([float(row["subject_score_p_dep"]) for row in subject_rows])),
         "n_train_windows": int(x_train.shape[0]),
         "n_eval_windows": int(x_eval.shape[0]),
@@ -212,6 +232,9 @@ def evaluate_dep_hc_neural_task(
         "threshold_objective": threshold_objective,
         "class_weight_mode": class_weight_mode,
         "subject_aggregation": subject_aggregation,
+        "calibration_method": calibration_method,
+        "calibration_params": _jsonable_calibrator(calibrator),
+        "sampling_strategy": sampling_strategy,
         "epochs": int(epochs),
         "batch_size": int(batch_size),
         "model_kwargs": _jsonable_model_kwargs(build_kwargs),
@@ -323,6 +346,29 @@ def _class_weights(labels: torch.Tensor, *, class_weight_mode: str) -> torch.Ten
     return labels.numel() / (2.0 * counts)
 
 
+def _subject_balanced_sample_weights(samples: Sequence[RouterSample], labels: torch.Tensor) -> torch.Tensor:
+    """Weight windows so each cohort and subject has equal expected epoch mass."""
+
+    _require_torch()
+    if len(samples) != int(labels.numel()):
+        raise ValueError("samples and labels have incompatible lengths")
+    labels_np = labels.cpu().numpy().astype(int)
+    subject_keys = [str(sample.subject_id) for sample in samples]
+    class_to_subjects: dict[int, set[str]] = {0: set(), 1: set()}
+    subject_window_counts: dict[tuple[int, str], int] = {}
+    for label, subject_id in zip(labels_np, subject_keys):
+        class_to_subjects[int(label)].add(subject_id)
+        subject_window_counts[(int(label), subject_id)] = subject_window_counts.get((int(label), subject_id), 0) + 1
+    if not class_to_subjects[0] or not class_to_subjects[1]:
+        raise ValueError("training labels must contain both DEP and HC")
+    weights = []
+    for label, subject_id in zip(labels_np, subject_keys):
+        n_subjects = len(class_to_subjects[int(label)])
+        n_windows = subject_window_counts[(int(label), subject_id)]
+        weights.append(1.0 / (2.0 * float(n_subjects) * float(n_windows)))
+    return torch.as_tensor(weights, dtype=torch.float64)
+
+
 def _predict_dep_probabilities(
     model: Any,
     x: torch.Tensor,
@@ -339,6 +385,100 @@ def _predict_dep_probabilities(
             prob = torch.softmax(_output_logits(model(xb)), dim=1)[:, 1]
             probs.append(prob.cpu().numpy())
     return np.concatenate(probs).astype(np.float64, copy=False)
+
+
+def _fit_probability_calibrator(y_true: np.ndarray, p_dep: np.ndarray, *, method: str) -> dict[str, Any]:
+    labels = np.asarray(y_true, dtype=np.float64).reshape(-1)
+    probs = np.clip(np.asarray(p_dep, dtype=np.float64).reshape(-1), 1e-6, 1.0 - 1e-6)
+    if labels.shape[0] != probs.shape[0]:
+        raise ValueError("calibration labels and probabilities have incompatible lengths")
+    if method == "none":
+        return {"method": "none"}
+    logits = _logit(probs)
+    if method == "temperature":
+        candidates = np.logspace(-1.0, 1.0, num=41)
+        best_temp = 1.0
+        best_key: tuple[float, float] | None = None
+        for temp in candidates:
+            calibrated = _sigmoid(logits / float(temp))
+            key = (_binary_nll(labels, calibrated), abs(float(temp) - 1.0))
+            if best_key is None or key < best_key:
+                best_key = key
+                best_temp = float(temp)
+        return {"method": "temperature", "temperature": best_temp}
+    if method == "platt":
+        coef = np.array([1.0, 0.0], dtype=np.float64)
+        lr = 0.05
+        for _ in range(400):
+            calibrated = _sigmoid(coef[0] * logits + coef[1])
+            err = calibrated - labels
+            coef[0] -= lr * float(np.mean(err * logits))
+            coef[1] -= lr * float(np.mean(err))
+        return {"method": "platt", "coef": float(coef[0]), "intercept": float(coef[1])}
+    if method == "isotonic":
+        try:
+            from sklearn.isotonic import IsotonicRegression
+        except ModuleNotFoundError as exc:  # pragma: no cover - depends on optional local environment.
+            raise ModuleNotFoundError("scikit-learn is required for isotonic DEP/HC calibration") from exc
+        model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+        model.fit(probs, labels)
+        return {
+            "method": "isotonic",
+            "x_thresholds": [float(value) for value in model.X_thresholds_],
+            "y_thresholds": [float(value) for value in model.y_thresholds_],
+        }
+    raise ValueError(f"unknown calibration_method: {method}")
+
+
+def _apply_probability_calibrator(p_dep: np.ndarray, calibrator: Mapping[str, Any]) -> np.ndarray:
+    probs = np.clip(np.asarray(p_dep, dtype=np.float64), 1e-6, 1.0 - 1e-6)
+    method = str(calibrator.get("method", "none"))
+    if method == "none":
+        return probs
+    logits = _logit(probs)
+    if method == "temperature":
+        temp = max(float(calibrator.get("temperature", 1.0)), 1e-6)
+        return _sigmoid(logits / temp)
+    if method == "platt":
+        return _sigmoid(float(calibrator.get("coef", 1.0)) * logits + float(calibrator.get("intercept", 0.0)))
+    if method == "isotonic":
+        x = np.asarray(calibrator.get("x_thresholds", []), dtype=np.float64)
+        y = np.asarray(calibrator.get("y_thresholds", []), dtype=np.float64)
+        if x.size == 0 or y.size == 0:
+            raise ValueError("isotonic calibrator is missing thresholds")
+        return np.clip(np.interp(probs, x, y), 0.0, 1.0)
+    raise ValueError(f"unknown calibration_method: {method}")
+
+
+def _logit(probs: np.ndarray) -> np.ndarray:
+    clipped = np.clip(np.asarray(probs, dtype=np.float64), 1e-6, 1.0 - 1e-6)
+    return np.log(clipped / (1.0 - clipped))
+
+
+def _sigmoid(values: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-np.clip(values, -50.0, 50.0)))
+
+
+def _binary_nll(labels: np.ndarray, probs: np.ndarray) -> float:
+    clipped = np.clip(np.asarray(probs, dtype=np.float64), 1e-6, 1.0 - 1e-6)
+    y = np.asarray(labels, dtype=np.float64)
+    return float(-np.mean(y * np.log(clipped) + (1.0 - y) * np.log(1.0 - clipped)))
+
+
+def _jsonable_calibrator(calibrator: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in calibrator.items():
+        if isinstance(value, np.ndarray):
+            out[key] = [float(item) for item in value.tolist()]
+        elif isinstance(value, (list, tuple)):
+            out[key] = [float(item) if isinstance(item, (np.floating, float, int)) else item for item in value]
+        elif isinstance(value, (np.floating, float)):
+            out[key] = float(value)
+        elif isinstance(value, (np.integer, int)):
+            out[key] = int(value)
+        else:
+            out[key] = value
+    return out
 
 
 def _seed_torch(seed: int) -> None:
