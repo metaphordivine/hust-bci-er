@@ -59,3 +59,7 @@ This is a score ledger snapshot, not route-status promotion evidence. Route prom
 | `sliding_ea_dgcnn_masked_consistency_w6_s1` | 3 | 0.6637 | 0.6457 |
 
 Full CSV: `reports/model_deep_dive/remote_protocol_score_ledger_20260523.csv`
+
+Clean route-level P1/P2/P3 table: `reports/model_deep_dive/remote_protocol_route_score_table_20260523.md`
+
+All repository evaluation score table: `reports/model_deep_dive/all_evaluation_score_table_20260524.md`

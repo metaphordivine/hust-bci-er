@@ -22,7 +22,16 @@ SUMMARY_REQUIRED_STATUSES = {"CANDIDATE", "PROMOTED", "REJECTED", "ARCHIVED"}
 PENDING_AUDIT_PREFIXES = ("PENDING",)
 PLACEHOLDER_TOKENS = ("placeholder", "pending remote", "pending real", "temporary")
 SCORE_VALUE_RE = re.compile(r"[-+]?(?:\d+\.\d+|\d+)")
-SCORE_TEXT_TOKENS = ("ba", "metric", "score", "exact_single_crop_expected_ba")
+SCORE_HEADER_RE = re.compile(
+    r"(?:\bexact_single_crop_expected_ba\b|\bba\b|\bmetric(?:[_ -]?(?:value|mean|std|min|max))?\b|\bscore\b|\bdep/hc(?:\s+ratio)?\b)",
+    flags=re.IGNORECASE,
+)
+SCORE_BULLET_VALUE_RE = re.compile(
+    r"(?:\bexact_single_crop_expected_ba\b|\b(?:exact|mean|final|eval|crop\d+)\s+ba\b|\bba\b|"
+    r"\bmetric(?:[_ -]?(?:value|mean|std|min|max))?\b|\bscore\b|\bdep/hc(?:\s+ratio)?\b)"
+    r"\s*(?::|=|\s+)\s*[-+]?(?:\d+\.\d+|\d+)",
+    flags=re.IGNORECASE,
+)
 
 
 def route_files() -> list[Path]:
@@ -201,6 +210,7 @@ def remote_protocol_score_items_by_route() -> dict[str, list[str]]:
     for path in sorted(REMOTE_PROTOCOL_LEDGER_ROOT.glob("remote_protocol_score_ledger_*.csv")):
         with path.open(newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
+                row = normalize_csv_row(row)
                 route_id = str(row.get("route_id") or "").strip()
                 if not route_id:
                     continue
@@ -208,6 +218,14 @@ def remote_protocol_score_items_by_route() -> dict[str, list[str]]:
                 if item:
                     by_route.setdefault(route_id, []).append(item)
     return {route: unique_preserve_order(items) for route, items in by_route.items()}
+
+
+def normalize_csv_row(row: dict[str, str]) -> dict[str, str]:
+    return {
+        str(key).strip(): str(value).strip()
+        for key, value in row.items()
+        if key is not None
+    }
 
 
 def remote_protocol_score_item(row: dict[str, str], path: Path) -> str:
@@ -305,12 +323,10 @@ def markdown_bullet_score_items(text: str) -> list[str]:
         stripped = raw.strip()
         if not stripped.startswith("- "):
             continue
-        lowered = stripped.lower()
-        if not any(token in lowered for token in SCORE_TEXT_TOKENS):
+        item = stripped[2:].rstrip(".")
+        if not SCORE_BULLET_VALUE_RE.search(item):
             continue
-        if not has_number(stripped):
-            continue
-        items.append(clean_score_text(stripped[2:].rstrip(".")))
+        items.append(clean_score_text(item))
     return items
 
 
@@ -328,7 +344,7 @@ def is_markdown_separator(row: str) -> bool:
 
 def is_score_header(value: str) -> bool:
     lowered = clean_header(value).lower()
-    return any(token in lowered for token in SCORE_TEXT_TOKENS)
+    return bool(SCORE_HEADER_RE.search(lowered))
 
 
 def clean_header(value: str) -> str:
@@ -336,7 +352,7 @@ def clean_header(value: str) -> str:
 
 
 def clean_score_text(value: str) -> str:
-    return " ".join(str(value).strip().strip("`").split()).replace("|", "\\|")
+    return " ".join(str(value).strip().split()).replace("|", "\\|")
 
 
 def has_number(value: str) -> bool:
@@ -355,7 +371,15 @@ def unique_preserve_order(items: list[str]) -> list[str]:
 
 
 def format_score_items(items: list[str]) -> str:
-    return "<br>".join(f"`{item}`" for item in items)
+    return "<br>".join(format_inline_code(item) for item in items)
+
+
+def format_inline_code(value: str) -> str:
+    max_backtick_run = max((len(match.group(0)) for match in re.finditer(r"`+", value)), default=0)
+    delimiter = "`" * (max_backtick_run + 1)
+    if value.startswith("`") or value.endswith("`"):
+        return f"{delimiter} {value} {delimiter}"
+    return f"{delimiter}{value}{delimiter}"
 
 
 def main(argv: list[str] | None = None) -> int:
