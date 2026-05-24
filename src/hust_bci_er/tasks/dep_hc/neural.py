@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -25,6 +25,59 @@ from hust_bci_er.analysis.dep_hc_router import (
 from hust_bci_er.tasks.dep_hc.experiment import dep_hc_prediction_rows
 
 
+DEP_HC_NEURAL_MODELS = frozenset(
+    {
+        "eegnet",
+        "shallow_conv_net",
+        "conformer_lite",
+        "deformer_lite",
+        "fbstcnet",
+        "srfnet",
+        "tsception",
+        "dgcnn",
+        "lggnet",
+        "dual_graph_conformer",
+    }
+)
+
+_HUST_MONTAGE_MODELS = {"tsception", "dgcnn", "lggnet", "dual_graph_conformer"}
+
+_DIAGNOSTIC_MODEL_KWARGS: dict[str, dict[str, Any]] = {
+    "conformer_lite": {"emb_size": 32, "depth": 1, "num_heads": 4, "dropout": 0.4, "conv_dropout": 0.25},
+    "deformer_lite": {"conv_channels": 16, "transformer_depth": 1, "embedding_dim": 32, "dropout": 0.35},
+    "fbstcnet": {"variant": "M", "n_bands": 6, "F1": 18, "F2": 18, "gamma": 200, "pool_size": 80},
+    "srfnet": {"emb_size": 24, "depth": 1, "num_heads": 4, "feature_dim": 48, "dropout": 0.35},
+    "tsception": {"n_filters": 4, "temporal_kernel_sizes": (31, 63), "classifier_hidden_dim": 32, "dropout": 0.35},
+    "dgcnn": {
+        "node_features": 8,
+        "graph_hidden_dim": 8,
+        "k_order": 2,
+        "temporal_kernel_size": 31,
+        "classifier_hidden_dim": 16,
+        "dropout": 0.35,
+    },
+    "lggnet": {
+        "temporal_filters": 4,
+        "temporal_kernel_sizes": (15, 31),
+        "graph_hidden_dim": 8,
+        "classifier_hidden_dim": 16,
+        "dropout": 0.35,
+    },
+    "dual_graph_conformer": {
+        "embedding_dim": 16,
+        "graph_hidden_dim": 8,
+        "fusion_dim": 16,
+        "k_order": 2,
+        "num_heads": 4,
+        "transformer_depth": 1,
+        "temporal_kernel_size": 31,
+        "token_count": 4,
+        "classifier_hidden_dim": 16,
+        "dropout": 0.35,
+    },
+}
+
+
 def evaluate_dep_hc_neural_task(
     train_samples: Sequence[RouterSample],
     eval_samples: Sequence[RouterSample],
@@ -40,10 +93,13 @@ def evaluate_dep_hc_neural_task(
     class_weight_mode: str = "balanced",
     threshold_objective: str = "balanced_accuracy",
     subject_aggregation: str = "mean",
+    model_kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     _require_torch()
     if not train_samples or not eval_samples:
         raise ValueError("train_samples and eval_samples are required")
+    if model_name not in DEP_HC_NEURAL_MODELS:
+        raise ValueError(f"unknown DEP/HC neural model_name: {model_name}")
     if not val_samples:
         raise ValueError("neural DEP/HC diagnostics require validation subjects for threshold selection")
     if class_weight_mode not in {"balanced", "uniform"}:
@@ -59,11 +115,13 @@ def evaluate_dep_hc_neural_task(
     x_train, y_train = _sample_tensors(train_samples)
     x_val, y_val = _sample_tensors(val_samples)
     x_eval, y_eval = _sample_tensors(eval_samples)
+    build_kwargs = _build_model_kwargs(model_name, model_kwargs)
     model = build_model(
         model_name,
         n_channels=int(x_train.shape[1]),
         n_times=int(x_train.shape[2]),
         n_classes=2,
+        **build_kwargs,
     )
     torch_device = torch.device(device)
     model.to(torch_device)
@@ -78,7 +136,7 @@ def evaluate_dep_hc_neural_task(
             xb = x_train[idx].to(torch_device)
             yb = y_train[idx].to(torch_device)
             optimizer.zero_grad(set_to_none=True)
-            loss = criterion(model(xb), yb)
+            loss = criterion(_output_logits(model(xb)), yb)
             loss.backward()
             optimizer.step()
 
@@ -114,6 +172,7 @@ def evaluate_dep_hc_neural_task(
         "subject_aggregation": subject_aggregation,
         "epochs": int(epochs),
         "batch_size": int(batch_size),
+        "model_kwargs": _jsonable_model_kwargs(build_kwargs),
     }
     for key, value in threshold_summary.items():
         if key in {"objective", "threshold"}:
@@ -123,6 +182,34 @@ def evaluate_dep_hc_neural_task(
         mask = subject_truth == label
         metrics[f"{cohort.lower()}_subject_recall"] = float(np.mean(subject_pred[mask] == label)) if np.any(mask) else float("nan")
     return {"model": model, "metrics": metrics, "prediction_rows": prediction_rows, "subject_rows": subject_rows}
+
+
+def _build_model_kwargs(model_name: str, overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    kwargs = dict(_DIAGNOSTIC_MODEL_KWARGS.get(str(model_name), {}))
+    if model_name in _HUST_MONTAGE_MODELS:
+        kwargs.setdefault("channel_montage", "hust_30_a2")
+    if overrides:
+        kwargs.update(dict(overrides))
+    return kwargs
+
+
+def _jsonable_model_kwargs(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        if isinstance(value, tuple):
+            out[key] = list(value)
+        else:
+            out[key] = value
+    return out
+
+
+def _output_logits(output: Any) -> torch.Tensor:
+    _require_torch()
+    if isinstance(output, dict):
+        if "logits" not in output:
+            raise KeyError("model output dictionary must contain logits")
+        return output["logits"]
+    return output
 
 
 def _sample_tensors(samples: Sequence[RouterSample]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -155,7 +242,7 @@ def _predict_dep_probabilities(
     with torch.no_grad():
         for start in range(0, int(x.shape[0]), int(batch_size)):
             xb = x[start : start + int(batch_size)].to(device)
-            prob = torch.softmax(model(xb), dim=1)[:, 1]
+            prob = torch.softmax(_output_logits(model(xb)), dim=1)[:, 1]
             probs.append(prob.cpu().numpy())
     return np.concatenate(probs).astype(np.float64, copy=False)
 

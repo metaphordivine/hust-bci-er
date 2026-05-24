@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from hust_bci_er.tasks.dep_hc.experiment import write_dep_hc_task_outputs  # noqa: E402
-from hust_bci_er.tasks.dep_hc.neural import evaluate_dep_hc_neural_task  # noqa: E402
+from hust_bci_er.tasks.dep_hc.neural import DEP_HC_NEURAL_MODELS, evaluate_dep_hc_neural_task  # noqa: E402
 from hust_bci_er.training import _real_adapter_impl as real_adapter  # noqa: E402
 from scripts.run_dep_hc_router import _make_samples, _subjects_for_protocol, resolve_preprocessing  # noqa: E402
 
@@ -31,7 +31,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--window-sec", type=float, default=10.0)
     parser.add_argument("--n-crops", type=int, default=5)
     parser.add_argument("--preprocessing", action="append", default=None)
-    parser.add_argument("--model-name", choices=["eegnet", "shallow_conv_net"], default="eegnet")
+    parser.add_argument("--model-name", choices=sorted(DEP_HC_NEURAL_MODELS), default="eegnet")
+    parser.add_argument(
+        "--model-kwargs-json",
+        default=None,
+        help="Optional JSON object overriding the diagnostic defaults passed to build_model.",
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -50,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    model_kwargs = _parse_model_kwargs(args.model_kwargs_json)
     preprocessing = resolve_preprocessing(args.preprocessing)
     real_adapter._validate_adapter_preprocessing(preprocessing)
     data_root = real_adapter._resolve_data_root(args.data_root)
@@ -117,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         class_weight_mode=args.class_weight_mode,
         threshold_objective=args.threshold_objective,
         subject_aggregation=args.subject_aggregation,
+        model_kwargs=model_kwargs,
     )
     config = {
         "task": "dep_hc_neural",
@@ -132,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_crops": args.n_crops,
         "preprocessing": preprocessing,
         "model_name": args.model_name,
+        "model_kwargs": result["metrics"].get("model_kwargs", {}),
         "class_weight_mode": args.class_weight_mode,
         "threshold_objective": args.threshold_objective,
         "subject_aggregation": args.subject_aggregation,
@@ -143,6 +151,15 @@ def main(argv: list[str] | None = None) -> int:
     write_dep_hc_task_outputs(result, args.out_dir, config=config)
     print(json.dumps({"out_dir": str(args.out_dir.resolve()), "metrics": result["metrics"]}, ensure_ascii=False))
     return 0
+
+
+def _parse_model_kwargs(raw: str | None) -> dict[str, object]:
+    if raw in {None, ""}:
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise SystemExit("--model-kwargs-json must decode to a JSON object")
+    return dict(parsed)
 
 
 if __name__ == "__main__":
