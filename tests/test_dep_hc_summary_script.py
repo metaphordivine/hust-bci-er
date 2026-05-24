@@ -219,6 +219,77 @@ def test_summarize_dep_hc_diagnostics_labels_score_fusion_and_robust_rank(tmp_pa
     assert robust[0]["feature_or_fusion"] == "score:deformer+traditional_tf"
 
 
+def test_summarize_dep_hc_diagnostics_normalizes_score_fusion_component_order(tmp_path: Path) -> None:
+    for run_id, components in {
+        "score_a": ["deformer", "traditional_tf"],
+        "score_b": ["traditional_tf", "deformer"],
+    }.items():
+        root = tmp_path / run_id
+        root.mkdir(parents=True)
+        payload = {
+            "task": "dep_hc",
+            "config": {"protocol": "p2", "split_id": "split_h999"},
+            "metrics": {
+                "task": "dep_hc",
+                "score_fusion_components": components,
+                "score_fusion_weights_by_component": {"deformer": 0.7, "traditional_tf": 0.3},
+                "fusion_weight_source": "fixed",
+                "subject_ba": 0.75,
+                "hc_subject_recall": 0.5,
+                "dep_subject_recall": 1.0,
+                "threshold_objective": "fixed_0_5",
+                "threshold_source": "fixed_0.5",
+                "subject_aggregation": "mean",
+            },
+        }
+        (root / "dep_hc_task_diagnostic.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        (root / "dep_hc_subject_metrics.csv").write_text(
+            "subject_id,cohort,subject_score_p_dep,predicted_cohort\nDEP001,DEP,0.8,DEP\n",
+            encoding="utf-8",
+        )
+
+    rows = [summarize_dep_hc_diagnostics.board_row(run) for run in summarize_dep_hc_diagnostics.load_dep_hc_runs([tmp_path])]
+    aggregate = summarize_dep_hc_diagnostics.aggregate_rows(rows)
+
+    assert {row["feature_or_fusion"] for row in rows} == {"score:deformer+traditional_tf"}
+    assert len(aggregate) == 1
+    assert aggregate[0]["n"] == "2"
+
+
+def test_summarize_dep_hc_diagnostics_preserves_config_eval_scope(tmp_path: Path) -> None:
+    for run_id, scope in {
+        "p3_inner": "p3_inner_validation",
+        "p3_outer": "p3_outer_test",
+    }.items():
+        root = tmp_path / run_id
+        root.mkdir(parents=True)
+        payload = {
+            "task": "dep_hc",
+            "config": {"protocol": "p3", "eval_scope": scope, "split_id": f"split_{scope}"},
+            "metrics": {
+                "task": "dep_hc",
+                "model_name": "deformer_lite",
+                "subject_ba": 0.75,
+                "hc_subject_recall": 0.5,
+                "dep_subject_recall": 1.0,
+                "threshold_objective": "fixed_0_5",
+                "threshold_source": "fixed_0.5",
+                "subject_aggregation": "mean",
+            },
+        }
+        (root / "dep_hc_task_diagnostic.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        (root / "dep_hc_subject_metrics.csv").write_text(
+            "subject_id,cohort,subject_score_p_dep,predicted_cohort\nDEP001,DEP,0.8,DEP\n",
+            encoding="utf-8",
+        )
+
+    rows = [summarize_dep_hc_diagnostics.board_row(run) for run in summarize_dep_hc_diagnostics.load_dep_hc_runs([tmp_path])]
+    aggregate = summarize_dep_hc_diagnostics.aggregate_rows(rows)
+
+    assert {row["eval_scope"] for row in rows} == {"p3_inner_validation", "p3_outer_test"}
+    assert {row["eval_scope"] for row in aggregate} == {"p3_inner_validation", "p3_outer_test"}
+
+
 def test_robust_recommendation_rows_do_not_promote_missing_recall_gap() -> None:
     complete = {
         "eval_scope": "p2",

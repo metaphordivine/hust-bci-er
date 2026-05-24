@@ -147,13 +147,17 @@ def canonical_feature_order(features: list[Any]) -> list[str]:
     return sorted((str(feature) for feature in features), key=lambda feature: (preferred.get(feature, 100), feature))
 
 
+def canonical_score_component_order(components: list[Any]) -> list[str]:
+    return sorted(str(component) for component in components)
+
+
 def board_row(run: dict[str, Any]) -> dict[str, str]:
     root = Path(run["root"])
     payload = run["payload"]
     metrics = payload.get("metrics", {})
     config = payload.get("config", {})
     if "score_fusion_components" in metrics:
-        components = [str(component) for component in metrics["score_fusion_components"]]
+        components = canonical_score_component_order(metrics["score_fusion_components"])
         feature_or_fusion = "score:" + "+".join(components)
         fusion_weight_by_feature = json.dumps(metrics.get("score_fusion_weights_by_component", {}), sort_keys=True)
         fusion_weight_source = str(metrics.get("fusion_weight_source", ""))
@@ -405,7 +409,7 @@ def aggregate_rows(board_rows: list[dict[str, str]]) -> list[dict[str, str]]:
 
 
 def robust_recommendation_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    p2_rows = [row for row in rows if row["eval_scope"] == "p2"]
+    p2_rows = [row for row in rows if row["eval_scope"] in {"p2", "p2_holdout"}]
     return sorted(
         p2_rows,
         key=lambda row: (
@@ -421,6 +425,9 @@ def robust_recommendation_rows(rows: list[dict[str, str]]) -> list[dict[str, str
 
 
 def _eval_scope(config: dict[str, Any]) -> str:
+    explicit_scope = str(config.get("eval_scope", "")).strip()
+    if explicit_scope:
+        return explicit_scope
     protocol = str(config.get("protocol", ""))
     if protocol == "p1":
         return "p1_full"
@@ -432,7 +439,7 @@ def _eval_scope(config: dict[str, Any]) -> str:
 def _row_split_label(row: dict[str, str]) -> str:
     if row["eval_scope"] == "p1_full":
         return f"seed{row['seed']}_fold{row['fold']}"
-    if row["eval_scope"] == "p2":
+    if row["eval_scope"] in {"p2", "p2_holdout"}:
         return f"holdout{row['holdout_seed']}" if row["holdout_seed"] else row["split_id"]
     return row["split_id"]
 
@@ -443,7 +450,7 @@ def _split_coverage(eval_scope: str, rows: list[dict[str, str]]) -> str:
         seeds = sorted({row["seed"] for row in rows if row["seed"] != ""}, key=lambda value: int(value))
         complete = "complete" if {"0", "1", "2", "3", "4"}.issubset(set(folds)) else "partial"
         return f"{complete}; seeds={','.join(seeds) or '-'}; folds={','.join(folds) or '-'}"
-    if eval_scope == "p2":
+    if eval_scope in {"p2", "p2_holdout"}:
         holdouts = sorted({row["holdout_seed"] for row in rows if row["holdout_seed"] not in {"", "0"}}, key=lambda value: int(value))
         return f"holdouts={','.join(holdouts) or '-'}"
     return "-"
