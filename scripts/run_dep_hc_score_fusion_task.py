@@ -182,6 +182,20 @@ def _common_component_metadata(component_roots: dict[str, Path]) -> dict[str, ob
         "inner_seed",
         "eval_scope",
     )
+    required_alignment_keys = {
+        "protocol",
+        "split_id",
+        "n_folds",
+        "n_holdout_subjects",
+        "holdout_seed",
+        "outer_fold",
+        "inner_fold",
+        "outer_folds",
+        "inner_folds",
+        "outer_seed",
+        "inner_seed",
+        "eval_scope",
+    }
     values_by_key: dict[str, set[object]] = {key: set() for key in keys}
     for name, root in component_roots.items():
         path = root / "dep_hc_task_diagnostic.json"
@@ -199,7 +213,9 @@ def _common_component_metadata(component_roots: dict[str, Path]) -> dict[str, ob
     metadata: dict[str, object] = {}
     for key, values in values_by_key.items():
         if len(values) > 1:
-            raise SystemExit(f"component split metadata mismatch for {key}: {sorted(map(str, values))}")
+            if key in required_alignment_keys:
+                raise SystemExit(f"component split metadata mismatch for {key}: {sorted(map(str, values))}")
+            continue
         if values:
             metadata[key] = next(iter(values))
     return metadata

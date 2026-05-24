@@ -540,6 +540,59 @@ def test_dep_hc_score_fusion_task_inherits_p3_split_metadata(tmp_path):
     assert config["eval_scope"] == "p3_inner_validation"
 
 
+def test_dep_hc_score_fusion_task_allows_p3_component_training_seed_mismatch(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    p3_split = {
+        "protocol": "p3",
+        "split_id": "dep_hc_router_p3_outer2_final_seed42",
+        "seed": 10121,
+        "fold": 0,
+        "holdout_seed": 999,
+        "outer_fold": 2,
+        "inner_fold": None,
+        "outer_folds": 5,
+        "inner_folds": 3,
+        "outer_seed": 42,
+        "inner_seed": 123,
+        "eval_scope": "p3_outer_test",
+    }
+    _write_score_component_run(
+        component_a,
+        hc_p_dep="0.20",
+        dep_p_dep="0.70",
+        config_overrides=p3_split,
+    )
+    _write_score_component_run(
+        component_b,
+        hc_p_dep="0.30",
+        dep_p_dep="0.80",
+        config_overrides={**p3_split, "seed": 11221},
+    )
+    out_dir = tmp_path / "fusion"
+
+    assert (
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(out_dir),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"tsception={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+            ]
+        )
+        == 0
+    )
+
+    config = json.loads((out_dir / "dep_hc_task_diagnostic.json").read_text(encoding="utf-8"))["config"]
+    assert config["split_id"] == "dep_hc_router_p3_outer2_final_seed42"
+    assert config["outer_fold"] == 2
+    assert "seed" not in config
+
+
 def _write_score_component_run(root, *, hc_p_dep: str, dep_p_dep: str, config_overrides: dict | None = None) -> None:
     root.mkdir()
     rows = [
