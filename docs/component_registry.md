@@ -27,8 +27,13 @@
 ## Augmentation Transforms
 
 - `amplitude_scale`
+- `band_amplitude_scale`
 - `channel_dropout`
+- `channel_noise`
+- `dc_shift`
 - `gaussian_noise`
+- `random_bandstop`
+- `region_scale_down`
 - `smooth_time_mask`
 - `time_mask`
 - `time_shift`
