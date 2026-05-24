@@ -102,6 +102,9 @@ def validate_route_config(data: dict[str, Any], path: Path | None = None) -> lis
             errors.append(f"unknown feature component: {name}")
 
     validate_augmentation(data, errors)
+    validate_cleaning(data, errors)
+    validate_normalization(data, errors)
+    validate_quality_score(data, errors)
 
     name = model_name(data.get("model"))
     if name not in registry.MODELS:
@@ -262,6 +265,21 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         if not isinstance(apply_to_splits, list) or not apply_to_splits or any(split not in valid_splits for split in apply_to_splits):
             errors.append("augmentation.apply_to_splits must be a non-empty list drawn from train/val/test")
 
+    if "train_random_crop" in augmentation and not isinstance(augmentation["train_random_crop"], bool):
+        errors.append("augmentation.train_random_crop must be a boolean")
+    if "random_offset" in augmentation and not isinstance(augmentation["random_offset"], bool):
+        errors.append("augmentation.random_offset must be a boolean")
+    if (augmentation.get("train_random_crop") or augmentation.get("random_offset")) and name != "split_first_fixed_crops":
+        errors.append("augmentation train random crop is only supported for split_first_fixed_crops")
+    if augmentation.get("random_offset"):
+        offset_sec = validate_non_negative_number(
+            augmentation.get("random_offset_sec", 0.0),
+            "augmentation.random_offset_sec",
+            errors,
+        )
+        if offset_sec is not None and window_sec is not None and offset_sec >= window_sec:
+            errors.append("augmentation.random_offset_sec must be < augmentation.window_sec")
+
     validate_augmentation_transforms(augmentation, errors)
 
     validate_augmentation_search_space(data, augmentation, errors)
@@ -294,6 +312,7 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
         name = item.get("name")
         if name not in registry.AUGMENTATION_TRANSFORMS:
             errors.append(f"unknown augmentation transform: {name}")
+        validate_probability(item.get("prob", 1.0), f"{field}.prob", errors)
         splits = item.get("apply_to_splits", ["train"])
         if not isinstance(splits, list) or not splits or any(split not in {"train", "val", "test"} for split in splits):
             errors.append(f"{field}.apply_to_splits must be a non-empty list drawn from train/val/test")
@@ -302,20 +321,192 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
 
         if name == "gaussian_noise":
             validate_non_negative_number(item.get("std", 0.01), f"{field}.std", errors)
+            if "std_ratio" in item:
+                validate_non_negative_number(item.get("std_ratio"), f"{field}.std_ratio", errors)
+        elif name == "amplitude_scale":
+            scale_range = item.get("scale_range", [0.9, 1.1])
+            if not isinstance(scale_range, list) or len(scale_range) != 2:
+                errors.append(f"{field}.scale_range must be [low, high]")
+            else:
+                low = validate_positive_number(scale_range[0], f"{field}.scale_range[0]", errors)
+                high = validate_positive_number(scale_range[1], f"{field}.scale_range[1]", errors)
+                if low is not None and high is not None and low > high:
+                    errors.append(f"{field}.scale_range must be sorted")
+        elif name == "band_amplitude_scale":
+            sfreq = validate_positive_number(item.get("sfreq", DEFAULT_SFREQ), f"{field}.sfreq", errors)
+            scale_range = item.get("scale_range", [0.9, 1.1])
+            if not isinstance(scale_range, list) or len(scale_range) != 2:
+                errors.append(f"{field}.scale_range must be [low, high]")
+            else:
+                low = validate_positive_number(scale_range[0], f"{field}.scale_range[0]", errors)
+                high = validate_positive_number(scale_range[1], f"{field}.scale_range[1]", errors)
+                if low is not None and high is not None and low > high:
+                    errors.append(f"{field}.scale_range must be sorted")
+            bands = item.get("bands")
+            if bands is not None:
+                if not isinstance(bands, dict) or not bands:
+                    errors.append(f"{field}.bands must be a mapping")
+                else:
+                    for band_name, bounds in bands.items():
+                        if not isinstance(band_name, str) or not band_name:
+                            errors.append(f"{field}.bands keys must be non-empty strings")
+                            continue
+                        if not isinstance(bounds, list) or len(bounds) != 2:
+                            errors.append(f"{field}.bands.{band_name} must be [low, high]")
+                            continue
+                        low_hz = validate_non_negative_number(bounds[0], f"{field}.bands.{band_name}[0]", errors)
+                        high_hz = validate_positive_number(bounds[1], f"{field}.bands.{band_name}[1]", errors)
+                        if low_hz is not None and high_hz is not None:
+                            if low_hz >= high_hz:
+                                errors.append(f"{field}.bands.{band_name} must be sorted")
+                            if sfreq is not None and high_hz >= sfreq / 2.0:
+                                errors.append(f"{field}.bands.{band_name}[1] must be below Nyquist")
         elif name == "channel_dropout":
             p = validate_non_negative_number(item.get("p", 0.1), f"{field}.p", errors)
             if p is not None and p >= 1.0:
                 errors.append(f"{field}.p must be < 1")
+            if "max_drop_channels" in item:
+                validate_positive_int(item.get("max_drop_channels"), f"{field}.max_drop_channels", errors)
+            if "exclude_channels" in item:
+                exclude = item.get("exclude_channels")
+                if not isinstance(exclude, list) or any(not isinstance(ch, str) or not ch for ch in exclude):
+                    errors.append(f"{field}.exclude_channels must be a list of channel names")
+        elif name == "channel_noise":
+            validate_positive_int(item.get("max_channels", 2), f"{field}.max_channels", errors)
+            validate_non_negative_number(item.get("noise_std_ratio", 0.03), f"{field}.noise_std_ratio", errors)
+            if "exclude_channels" in item:
+                exclude = item.get("exclude_channels")
+                if not isinstance(exclude, list) or any(not isinstance(ch, str) or not ch for ch in exclude):
+                    errors.append(f"{field}.exclude_channels must be a list of channel names")
+        elif name == "dc_shift":
+            validate_non_negative_number(item.get("offset_std_ratio", 0.02), f"{field}.offset_std_ratio", errors)
+            if "per_channel" in item and not isinstance(item["per_channel"], bool):
+                errors.append(f"{field}.per_channel must be boolean")
+        elif name == "region_scale_down":
+            scale_range = item.get("scale_range", [0.5, 0.8])
+            if not isinstance(scale_range, list) or len(scale_range) != 2:
+                errors.append(f"{field}.scale_range must be [low, high]")
+            else:
+                low = validate_probability(scale_range[0], f"{field}.scale_range[0]", errors)
+                high = validate_probability(scale_range[1], f"{field}.scale_range[1]", errors)
+                if low is not None and high is not None and low > high:
+                    errors.append(f"{field}.scale_range must be sorted")
+            if "include_frontal" in item and not isinstance(item["include_frontal"], bool):
+                errors.append(f"{field}.include_frontal must be boolean")
         elif name == "time_mask":
             max_width = validate_positive_int(item.get("max_width", 25), f"{field}.max_width", errors)
             window_samples = augmentation_window_samples(augmentation)
             if max_width is not None and window_samples is not None and max_width >= window_samples:
                 errors.append(f"{field}.max_width must be < augmentation.window_sec * 250Hz")
+            if "mask_ratio" in item:
+                validate_open_probability(item.get("mask_ratio"), f"{field}.mask_ratio", errors)
+        elif name == "smooth_time_mask":
+            validate_open_probability(item.get("mask_ratio", 0.05), f"{field}.mask_ratio", errors)
+            validate_probability(item.get("attenuation", 0.0), f"{field}.attenuation", errors)
+            edge_ratio = validate_probability(item.get("edge_ratio", 0.2), f"{field}.edge_ratio", errors)
+            if edge_ratio is not None and edge_ratio >= 0.5:
+                errors.append(f"{field}.edge_ratio must be < 0.5")
         elif name == "time_shift":
             max_shift = validate_non_negative_number(item.get("max_shift", 12), f"{field}.max_shift", errors)
             window_samples = augmentation_window_samples(augmentation)
             if max_shift is not None and window_samples is not None and max_shift >= window_samples:
                 errors.append(f"{field}.max_shift must be < augmentation.window_sec * 250Hz")
+        elif name == "random_bandstop":
+            sfreq = validate_positive_number(item.get("sfreq", DEFAULT_SFREQ), f"{field}.sfreq", errors)
+            width_hz = validate_positive_number(item.get("width_hz", 1.0), f"{field}.width_hz", errors)
+            validate_probability(item.get("attenuation", 0.0), f"{field}.attenuation", errors)
+            freq_range = item.get("freq_range", [4.0, 40.0])
+            if not isinstance(freq_range, list) or len(freq_range) != 2:
+                errors.append(f"{field}.freq_range must be [low, high]")
+            else:
+                low = validate_non_negative_number(freq_range[0], f"{field}.freq_range[0]", errors)
+                high = validate_positive_number(freq_range[1], f"{field}.freq_range[1]", errors)
+                if low is not None and high is not None:
+                    if low > high:
+                        errors.append(f"{field}.freq_range must be sorted")
+                    if sfreq is not None and high >= sfreq / 2.0:
+                        errors.append(f"{field}.freq_range[1] must be below Nyquist")
+                    if width_hz is not None and width_hz > max(high - low, 1e-9) + 2.0:
+                        errors.append(f"{field}.width_hz is too wide for freq_range")
+
+
+def validate_cleaning(data: dict[str, Any], errors: list[str]) -> None:
+    cleaning = data.get("cleaning")
+    if cleaning is None:
+        return
+    if not isinstance(cleaning, dict):
+        errors.append("cleaning must be a mapping")
+        return
+    method = cleaning.get("method")
+    if method != "per_channel_robust_clip":
+        errors.append(f"unknown cleaning.method: {method}")
+        return
+    if cleaning.get("stats_source") != "train_fold_only":
+        errors.append("cleaning.stats_source must be train_fold_only")
+    clip_n_mad = validate_positive_number(
+        cleaning.get("clip_n_mad", cleaning.get("n_mad", 8.0)),
+        "cleaning.clip_n_mad",
+        errors,
+    )
+    if clip_n_mad is not None and clip_n_mad < 3.0:
+        errors.append("cleaning.clip_n_mad must be >= 3.0")
+    if "eps" in cleaning:
+        validate_positive_number(cleaning["eps"], "cleaning.eps", errors)
+    validate_split_list(
+        cleaning.get("apply_to_splits", cleaning.get("apply_to", ["train", "val", "test"])),
+        "cleaning.apply_to_splits",
+        errors,
+    )
+
+
+def validate_normalization(data: dict[str, Any], errors: list[str]) -> None:
+    normalization = data.get("normalization")
+    if normalization is None:
+        return
+    if not isinstance(normalization, dict):
+        errors.append("normalization must be a mapping")
+        return
+    if normalization.get("source") != "train_fold_only":
+        errors.append("normalization.source must be train_fold_only")
+    if normalization.get("scope") != "per_channel":
+        errors.append("normalization.scope must be per_channel")
+    if normalization.get("method") not in {"mean_std", "median_MAD"}:
+        errors.append(f"unknown normalization.method: {normalization.get('method')}")
+    if "eps" in normalization:
+        validate_positive_number(normalization["eps"], "normalization.eps", errors)
+    validate_split_list(
+        normalization.get("apply_to_splits", normalization.get("apply_to", ["train", "val", "test"])),
+        "normalization.apply_to_splits",
+        errors,
+    )
+
+
+def validate_quality_score(data: dict[str, Any], errors: list[str]) -> None:
+    quality = data.get("quality_score")
+    if quality is None:
+        return
+    if not isinstance(quality, dict):
+        errors.append("quality_score must be a mapping")
+        return
+    if "enabled" in quality and not isinstance(quality["enabled"], bool):
+        errors.append("quality_score.enabled must be boolean")
+    output = quality.get("output", "window_quality.csv")
+    if not isinstance(output, str) or not output or "/" in output or "\\" in output:
+        errors.append("quality_score.output must be a simple file name")
+
+
+def validate_split_list(value: Any, field: str, errors: list[str]) -> None:
+    allowed = {"train", "val", "valid", "test"}
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        errors.append(f"{field} must be a list of split names")
+        return
+    for item in items:
+        if item not in allowed:
+            errors.append(f"{field} has unsupported split: {item}")
 
 
 def augmentation_window_samples(augmentation: dict[str, Any]) -> int | None:
@@ -490,6 +681,20 @@ def validate_augmentation_search_space(data: dict[str, Any], augmentation: dict[
 def validate_non_negative_number(value: Any, field: str, errors: list[str]) -> float | None:
     if not isinstance(value, (int, float)) or value < 0:
         errors.append(f"{field} must be non-negative")
+        return None
+    return float(value)
+
+
+def validate_probability(value: Any, field: str, errors: list[str]) -> float | None:
+    if not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0:
+        errors.append(f"{field} must be in [0, 1]")
+        return None
+    return float(value)
+
+
+def validate_open_probability(value: Any, field: str, errors: list[str]) -> float | None:
+    if not isinstance(value, (int, float)) or not 0.0 < float(value) < 1.0:
+        errors.append(f"{field} must be in (0, 1)")
         return None
     return float(value)
 

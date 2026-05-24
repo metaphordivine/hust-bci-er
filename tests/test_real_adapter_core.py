@@ -343,6 +343,66 @@ def test_p3_selected_checkpoint_context_allows_inner_split_seed_reuse():
     )
 
 
+def test_reuse_checkpoint_rejects_mismatched_train_only_route_configs():
+    from hust_bci_er.training.real_adapter import _validate_reuse_checkpoint
+
+    base_payload = {
+        "artifact_kind": "torch_classifier_checkpoint",
+        "route_id": "route_a",
+        "split_id": "split_a",
+        "seed": 42,
+        "model_name": "shallow_conv_net",
+        "model_kwargs": {"drop_prob": 0.25},
+        "adaptation": "none",
+        "n_times": 2000,
+        "preprocessing": ["car"],
+        "augmentation": {
+            "name": "split_first_fixed_crops",
+            "source_trial_sec": 60,
+            "window_sec": 10,
+            "n_crops": 5,
+            "transforms": [{"name": "channel_noise", "prob": 0.3, "max_channels": 2}],
+        },
+        "cleaning": {"method": "per_channel_robust_clip", "source": "train_fold_only", "n_mad": 8},
+        "normalization": {"source": "train_fold_only", "scope": "per_channel", "method": "median_mad"},
+        "training_epochs_overridden": False,
+        "model_state_dict": {},
+    }
+
+    kwargs = {
+        "route_id": "route_a",
+        "split_id": "split_a",
+        "seed": 42,
+        "model_name": "shallow_conv_net",
+        "model_kwargs": {"drop_prob": 0.25},
+        "n_times": 2000,
+        "preproc": ["car"],
+        "augmentation": dict(base_payload["augmentation"]),
+        "cleaning_config": dict(base_payload["cleaning"]),
+        "normalization_config": dict(base_payload["normalization"]),
+        "run_mode": "candidate",
+    }
+    _validate_reuse_checkpoint(base_payload, **kwargs)
+
+    bad_aug = dict(base_payload)
+    bad_aug["augmentation"] = {
+        **base_payload["augmentation"],
+        "transforms": [{"name": "channel_noise", "prob": 0.1, "max_channels": 2}],
+    }
+    with pytest.raises(ValueError, match="augmentation"):
+        _validate_reuse_checkpoint(bad_aug, **kwargs)
+
+    bad_cleaning = dict(base_payload)
+    bad_cleaning["cleaning"] = {**base_payload["cleaning"], "n_mad": 5}
+    with pytest.raises(ValueError, match="cleaning"):
+        _validate_reuse_checkpoint(bad_cleaning, **kwargs)
+
+    bad_norm = dict(base_payload)
+    bad_norm["normalization"] = {**base_payload["normalization"], "method": "mean_std"}
+    with pytest.raises(ValueError, match="normalization"):
+        _validate_reuse_checkpoint(bad_norm, **kwargs)
+
+
 def test_build_score_matrix_preserves_y_true():
     rows = _make_window_rows("t1", n_windows=1, y_true=0)
     result, _ = _build_score_matrix(rows, crop_policy="single", seed=42)
@@ -495,6 +555,47 @@ def test_make_fixed_crops_returns_non_overlapping_crops():
     assert [crop["crop_id"] for crop in crops] == [0, 1, 2, 3, 4]
     assert [crop["window_start_sec"] for crop in crops] == [0.0, 10.0, 20.0, 30.0, 40.0]
     np.testing.assert_array_equal(crops[1]["x"], x[:, 2500:5000])
+
+
+def test_make_fixed_crops_train_jitter_is_deterministic_and_bounded():
+    x = np.arange(30 * 2500 * 5, dtype=np.float32).reshape(30, 2500 * 5)
+    trials = [{
+        "x": x,
+        "y": 1,
+        "subject_id": "S01",
+        "trial_id": "S01_pos1",
+        "cohort": "HC",
+    }]
+
+    crops = _make_fixed_crops(
+        trials,
+        source_trial_sec=50,
+        window_sec=10,
+        n_crops=5,
+        preproc=[],
+        skip_preproc=True,
+        random_offset=True,
+        random_offset_sec=2.0,
+        random_seed=42,
+    )
+    repeat = _make_fixed_crops(
+        trials,
+        source_trial_sec=50,
+        window_sec=10,
+        n_crops=5,
+        preproc=[],
+        skip_preproc=True,
+        random_offset=True,
+        random_offset_sec=2.0,
+        random_seed=42,
+    )
+
+    assert [crop["window_start_sec"] for crop in crops] == [crop["window_start_sec"] for crop in repeat]
+    assert [crop["crop_id"] for crop in crops] == [0, 1, 2, 3, 4]
+    for crop in crops:
+        base_start = float(crop["crop_id"]) * 10.0
+        assert abs(float(crop["window_start_sec"]) - base_start) <= 2.0 + 1 / 250
+        assert crop["x"].shape == (30, 2500)
 
 
 def test_validate_fixed_crop_coverage_requires_source_duration():
