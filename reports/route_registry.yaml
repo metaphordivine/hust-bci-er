@@ -79,6 +79,9 @@ routes:
   - route_id: fixed_crop_ea_dgcnn
     owner: metaphordivine
     blocker: missing_real_candidate_run
+  - route_id: fixed_crop_dgcnn_noea_zscore
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_deformer_depth1_emb64
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
@@ -191,6 +194,9 @@ routes:
     owner: metaphordivine
     blocker: single_split_only_pending_multisplit
   - route_id: fixed_crop_ea_lggnet
+    owner: metaphordivine
+    blocker: missing_real_candidate_run
+  - route_id: fixed_crop_lggnet_noea_zscore
     owner: metaphordivine
     blocker: missing_real_candidate_run
   - route_id: fixed_crop_ea_riemannian_tangent
