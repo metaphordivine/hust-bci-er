@@ -9,22 +9,33 @@ Checkpoint and run-output binaries remain outside git. The repository only
 records the storage layout, archive scope, integrity hashes, and uncovered
 machine state.
 
-## Local Layout
+## Release Layout
 
-Archive root:
+Canonical delivery is the GitHub Release, not the local staging directory:
 
 ```text
-E:\hust-bci-er_checkpoints\20260526\remote_checkpoint_archives
-E:\hust-bci-er_checkpoints\20260526\remote_essential_archives
+https://github.com/metaphordivine/hust-bci-er/releases/tag/v2026.05.26-remote-artifacts
 ```
 
-Each available remote machine has local tar archives and manifests:
+Release tag:
+
+```text
+v2026.05.26-remote-artifacts
+```
+
+Each archived remote machine has release assets:
 
 ```text
 <machine>_checkpoint_pull_20260526.tar
 <machine>_checkpoint_pull_20260526.manifest.tsv
 <machine>_essential_pull_20260526.tar
 <machine>_essential_pull_20260526.manifest.tsv
+```
+
+The release also includes:
+
+```text
+SHA256SUMS_GM_20260526.txt
 ```
 
 The tar files preserve the remote relative tree under `root/autodl-tmp/`.
@@ -55,9 +66,11 @@ Included run roots:
 /root/autodl-tmp/moe5_expert_protocol_rung0_20260526_1542
 ```
 
-The essential archive pull included the selected run directories as tar files,
-excluding `__pycache__`, to avoid exploding thousands of small files onto the
-local exFAT drive:
+The essential archive pull included the selected run directories as tar files.
+Its only file-level prune was `__pycache__`, so it preserves run-level
+handoff context such as manifests, logs, reports, and score files when present
+inside those selected roots. This keeps the release recoverable while still
+avoiding extracted small-file expansion on the local exFAT staging drive:
 
 ```text
 /root/autodl-tmp/full_strict_top7_p1_*_20260526_1144
@@ -68,12 +81,12 @@ local exFAT drive:
 /root/autodl-tmp/moe5_expert_protocol_rung0_20260526_1542
 ```
 
-Excluded by design:
+The checkpoint-only archive excludes non-checkpoint run outputs by design:
 
 ```text
 predictions.csv
 score_matrix.csv
-logs
+logs and reports
 raw outputs
 temporary experiment dumps
 ```
@@ -90,7 +103,7 @@ temporary experiment dumps
 | L | `L_checkpoint_pull_20260526.tar` | 87961600 | 96 | `23B20F22D58C8AF26FE5248BB8676A6F1958CACAD015B02FD97D8965D7603232` |
 | M | `M_checkpoint_pull_20260526.tar` | 78284800 | 93 | `3563459EDFD3D0B9574BC81B2469E7A7FFE4162BB885687A7FB907560E2BABCF` |
 
-Total archived tar size: 821370240 bytes.
+Total checkpoint tar size: 815370240 bytes.
 
 ## Essential Archive Inventory
 
@@ -126,17 +139,31 @@ The machine became reachable after restart. Its F-specific roots were:
 ```
 
 Remote tar creation completed for F with 91 checkpoint entries and 44006
-essential entries. The local F transfer was still in progress when this handoff
-was written, so F is not included in the verified local hash tables above.
+essential entries. The local F transfer was interrupted, so F is deliberately
+excluded from the release assets and from the verified hash tables above.
+
+## Local Staging Provenance
+
+The local staging directories used before release upload were:
+
+```text
+E:\hust-bci-er_checkpoints\20260526\remote_checkpoint_archives
+E:\hust-bci-er_checkpoints\20260526\remote_essential_archives
+```
+
+They are provenance only. The release URL above is the handoff entry point.
 
 ## Recovery Notes
 
-To restore one archive into a temporary inspection directory, use a directory
-outside the repository and extract there:
+To restore one archive into a temporary inspection directory, download from the
+release, verify with `SHA256SUMS_GM_20260526.txt`, then extract outside the
+repository:
 
 ```text
-mkdir E:\hust-bci-er_checkpoints\20260526\inspect_G
-tar -xf E:\hust-bci-er_checkpoints\20260526\remote_checkpoint_archives\G_checkpoint_pull_20260526.tar -C E:\hust-bci-er_checkpoints\20260526\inspect_G
+gh release download v2026.05.26-remote-artifacts --pattern G_checkpoint_pull_20260526.tar --pattern SHA256SUMS_GM_20260526.txt
+sha256sum -c SHA256SUMS_GM_20260526.txt --ignore-missing
+mkdir inspect_G
+tar -xf G_checkpoint_pull_20260526.tar -C inspect_G
 ```
 
 Do not commit extracted checkpoints, prediction tables, score matrices, or raw
