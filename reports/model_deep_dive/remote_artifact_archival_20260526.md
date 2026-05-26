@@ -139,19 +139,14 @@ The machine became reachable after restart. Its F-specific roots were:
 ```
 
 Remote tar creation completed for F with 91 checkpoint entries and 44006
-essential entries. The local F transfer was interrupted, so F is deliberately
-excluded from the release assets and from the verified hash tables above.
+essential entries. F was not uploaded to the release bundle used by this PR, so
+it is deliberately excluded from the release assets and from the verified hash
+tables above.
 
 ## Local Staging Provenance
 
-The local staging directories used before release upload were:
-
-```text
-E:\hust-bci-er_checkpoints\20260526\remote_checkpoint_archives
-E:\hust-bci-er_checkpoints\20260526\remote_essential_archives
-```
-
-They are provenance only. The release URL above is the handoff entry point.
+Local staging paths were temporary transfer state only and are intentionally not
+listed as a handoff target. The release URL above is the canonical entry point.
 
 ## Recovery Notes
 
