@@ -21,14 +21,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a DEP/HC neural sanity baseline.")
     parser.add_argument("--data-root", type=Path, help="HUST EEG .mat data root.")
     parser.add_argument("--out-dir", type=Path, required=True)
-    parser.add_argument("--protocol", choices=["p1", "p2"], default="p1")
+    parser.add_argument("--protocol", choices=["p1", "p2", "p3"], default="p1")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fold", type=int, default=0)
     parser.add_argument("--n-folds", type=int, default=5)
     parser.add_argument("--n-holdout-subjects", type=int, default=12)
     parser.add_argument("--holdout-seed", type=int, default=999)
+    parser.add_argument("--outer-fold", type=int, default=0)
+    parser.add_argument("--inner-fold", type=int, default=None)
+    parser.add_argument("--outer-folds", type=int, default=5)
+    parser.add_argument("--inner-folds", type=int, default=3)
+    parser.add_argument("--outer-seed", type=int, default=42)
+    parser.add_argument("--inner-seed", type=int, default=123)
     parser.add_argument("--source-trial-sec", type=float, default=50.0)
     parser.add_argument("--window-sec", type=float, default=10.0)
+    parser.add_argument("--stride-sec", type=float, default=None)
     parser.add_argument("--n-crops", type=int, default=5)
     parser.add_argument("--preprocessing", action="append", default=None)
     parser.add_argument("--model-name", choices=sorted(DEP_HC_NEURAL_MODELS), default="eegnet")
@@ -43,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--class-weight-mode", choices=["balanced", "uniform"], default="balanced")
+    parser.add_argument("--calibration-method", choices=["none", "temperature", "platt", "isotonic"], default="none")
+    parser.add_argument("--sampling-strategy", choices=["window", "subject_balanced"], default="window")
     parser.add_argument(
         "--threshold-objective",
         choices=["balanced_accuracy", "min_recall", "fixed_0_5", "dep_recall_floor_0p8_hc"],
@@ -54,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
         default="mean",
     )
     args = parser.parse_args(argv)
+    if args.stride_sec is not None and args.stride_sec <= 0.0:
+        parser.error("--stride-sec must be positive when supplied")
 
     model_kwargs = _parse_model_kwargs(args.model_kwargs_json)
     preprocessing = resolve_preprocessing(args.preprocessing)
@@ -64,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         {"subject_id": str(trial["subject_id"]), "trial_id": str(trial["trial_id"]), "cohort": str(trial["cohort"])}
         for trial in trials
     ]
-    train_subjects, val_subjects, test_subjects, split_id = _subjects_for_protocol(
+    train_subjects, val_subjects, test_subjects, split_id, split_metadata = _subjects_for_protocol(
         trial_rows,
         protocol=args.protocol,
         seed=args.seed,
@@ -72,18 +83,34 @@ def main(argv: list[str] | None = None) -> int:
         n_folds=args.n_folds,
         n_holdout_subjects=args.n_holdout_subjects,
         holdout_seed=args.holdout_seed,
+        outer_fold=args.outer_fold,
+        inner_fold=args.inner_fold,
+        outer_folds=args.outer_folds,
+        inner_folds=args.inner_folds,
+        outer_seed=args.outer_seed,
+        inner_seed=args.inner_seed,
     )
     train_trials = [trial for trial in trials if trial["subject_id"] in train_subjects]
     val_trials = [trial for trial in trials if trial["subject_id"] in val_subjects]
     eval_trials = [trial for trial in trials if trial["subject_id"] in test_subjects]
-    raw_train = real_adapter._make_fixed_crops(
-        train_trials,
-        source_trial_sec=args.source_trial_sec,
-        window_sec=args.window_sec,
-        n_crops=args.n_crops,
-        preproc=preprocessing,
-        skip_preproc=True,
-    )
+    if args.stride_sec is None:
+        raw_train = real_adapter._make_fixed_crops(
+            train_trials,
+            source_trial_sec=args.source_trial_sec,
+            window_sec=args.window_sec,
+            n_crops=args.n_crops,
+            preproc=preprocessing,
+            skip_preproc=True,
+        )
+    else:
+        raw_train = real_adapter._make_sliding_windows(
+            train_trials,
+            source_trial_sec=args.source_trial_sec,
+            window_sec=args.window_sec,
+            stride_sec=args.stride_sec,
+            preproc=preprocessing,
+            skip_preproc=True,
+        )
     ea_transform = real_adapter._fit_ea_on_windows(raw_train, preprocessing)
     train_samples = _make_samples(
         train_trials,
@@ -91,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
+        stride_sec=args.stride_sec,
         ea_transform=ea_transform,
     )
     val_samples = _make_samples(
@@ -99,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
+        stride_sec=args.stride_sec,
         ea_transform=ea_transform,
     )
     eval_samples = _make_samples(
@@ -107,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         source_trial_sec=args.source_trial_sec,
         window_sec=args.window_sec,
         n_crops=args.n_crops,
+        stride_sec=args.stride_sec,
         ea_transform=ea_transform,
     )
     result = evaluate_dep_hc_neural_task(
@@ -124,6 +154,14 @@ def main(argv: list[str] | None = None) -> int:
         threshold_objective=args.threshold_objective,
         subject_aggregation=args.subject_aggregation,
         model_kwargs=model_kwargs,
+        calibration_method=args.calibration_method,
+        sampling_strategy=args.sampling_strategy,
+    )
+    actual_n_crops = (
+        _actual_n_crops_from_samples(eval_samples)
+        or _actual_n_crops_from_samples(val_samples)
+        or _actual_n_crops_from_samples(train_samples)
+        or args.n_crops
     )
     config = {
         "task": "dep_hc_neural",
@@ -134,13 +172,18 @@ def main(argv: list[str] | None = None) -> int:
         "n_folds": args.n_folds,
         "n_holdout_subjects": args.n_holdout_subjects,
         "holdout_seed": args.holdout_seed,
+        **split_metadata,
         "source_trial_sec": args.source_trial_sec,
         "window_sec": args.window_sec,
-        "n_crops": args.n_crops,
+        "stride_sec": args.stride_sec,
+        "n_crops": actual_n_crops,
+        "requested_n_crops": args.n_crops,
         "preprocessing": preprocessing,
         "model_name": args.model_name,
         "model_kwargs": result["metrics"].get("model_kwargs", {}),
         "class_weight_mode": args.class_weight_mode,
+        "calibration_method": args.calibration_method,
+        "sampling_strategy": args.sampling_strategy,
         "threshold_objective": args.threshold_objective,
         "subject_aggregation": args.subject_aggregation,
         "label_source": "cohort field; subject/trial identifiers are split and audit metadata only",
@@ -160,6 +203,23 @@ def _parse_model_kwargs(raw: str | None) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise SystemExit("--model-kwargs-json must decode to a JSON object")
     return dict(parsed)
+
+
+def _actual_n_crops_from_samples(samples: list[object]) -> int:
+    crops_by_trial: dict[str, set[int]] = {}
+    for sample in samples:
+        trial_id = str(getattr(sample, "trial_id", ""))
+        crop_id = getattr(sample, "crop_id", None)
+        if not trial_id or crop_id is None:
+            continue
+        try:
+            parsed_crop = int(crop_id)
+        except (TypeError, ValueError):
+            continue
+        crops_by_trial.setdefault(trial_id, set()).add(parsed_crop)
+    if not crops_by_trial:
+        return 0
+    return max(len(crops) for crops in crops_by_trial.values())
 
 
 if __name__ == "__main__":

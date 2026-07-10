@@ -14,13 +14,15 @@ from hust_bci_er.analysis.dep_hc_router import (
     balanced_accuracy_binary,
     bandpower_features,
     covariance_tangent_features,
+    crop_combo_subject_metrics,
     evaluate_router,
     extract_router_features,
+    infer_crop_combo_shape,
     router_features_for_sample,
     select_subject_threshold,
     write_router_outputs,
 )
-from scripts.run_dep_hc_router import resolve_preprocessing
+from scripts.run_dep_hc_router import _subjects_for_protocol, resolve_preprocessing
 from scripts import run_dep_hc_router
 
 
@@ -129,6 +131,84 @@ def test_aggregate_subject_rows_supports_alternate_rules():
         aggregate_subject_rows(rows, aggregation="subject_id")
 
 
+def test_crop_combo_subject_metrics_enumerates_heldout_10s_assignments():
+    rows = [
+        {"subject_id": "HC001", "trial_id": "t0", "crop_id": "0", "cohort": "HC", "y_true": "0", "p_dep": "0.1"},
+        {"subject_id": "HC001", "trial_id": "t0", "crop_id": "1", "cohort": "HC", "y_true": "0", "p_dep": "0.9"},
+        {"subject_id": "HC001", "trial_id": "t1", "crop_id": "0", "cohort": "HC", "y_true": "0", "p_dep": "0.1"},
+        {"subject_id": "HC001", "trial_id": "t1", "crop_id": "1", "cohort": "HC", "y_true": "0", "p_dep": "0.1"},
+        {"subject_id": "DEP001", "trial_id": "t0", "crop_id": "0", "cohort": "DEP", "y_true": "1", "p_dep": "0.9"},
+        {"subject_id": "DEP001", "trial_id": "t0", "crop_id": "1", "cohort": "DEP", "y_true": "1", "p_dep": "0.9"},
+        {"subject_id": "DEP001", "trial_id": "t1", "crop_id": "0", "cohort": "DEP", "y_true": "1", "p_dep": "0.1"},
+        {"subject_id": "DEP001", "trial_id": "t1", "crop_id": "1", "cohort": "DEP", "y_true": "1", "p_dep": "0.9"},
+    ]
+
+    metrics = crop_combo_subject_metrics(rows, threshold=0.5, aggregation="mean", n_trials=2, n_crops=2)
+
+    assert metrics["crop_combo_status"] == "computed"
+    assert metrics["crop_combo_n_assignments"] == 4
+    assert metrics["crop_combo_complete_subjects"] == 2
+    assert metrics["crop_combo_expected_ba"] == pytest.approx(0.75)
+    assert metrics["crop_combo_worst_ba"] == pytest.approx(0.5)
+    assert metrics["crop_combo_best_ba"] == pytest.approx(1.0)
+
+
+def test_crop_combo_subject_metrics_skips_explosive_assignment_grid():
+    rows = []
+    for subject_id, cohort, y_true, p_dep in [("HC001", "HC", "0", "0.1"), ("DEP001", "DEP", "1", "0.9")]:
+        for trial_idx in range(8):
+            for crop_id in range(41):
+                rows.append(
+                    {
+                        "subject_id": subject_id,
+                        "trial_id": f"t{trial_idx}",
+                        "crop_id": str(crop_id),
+                        "cohort": cohort,
+                        "y_true": y_true,
+                        "p_dep": p_dep,
+                    }
+                )
+
+    metrics = crop_combo_subject_metrics(rows, threshold=0.5, aggregation="mean", n_trials=8, n_crops=41)
+
+    assert metrics["crop_combo_status"] == "skipped_too_many_assignments"
+    assert metrics["crop_combo_n_assignments"] == 41**8
+    assert metrics["crop_combo_max_assignments"] == 500_000
+    assert metrics["crop_combo_complete_subjects"] == 2
+
+
+def test_infer_crop_combo_shape_uses_materialized_prediction_rows():
+    rows = []
+    for subject_id, cohort, y_true in [("HC001", "HC", "0"), ("DEP001", "DEP", "1")]:
+        for trial_id in ("t0", "t1", "t2"):
+            for crop_id in range(6):
+                rows.append(
+                    {
+                        "subject_id": subject_id,
+                        "trial_id": trial_id,
+                        "crop_id": str(crop_id),
+                        "window_start_sec": str(float(crop_id)),
+                        "cohort": cohort,
+                        "y_true": y_true,
+                        "p_dep": "0.8" if y_true == "1" else "0.2",
+                    }
+                )
+
+    n_trials, n_crops = infer_crop_combo_shape(rows)
+    metrics = crop_combo_subject_metrics(
+        rows,
+        threshold=0.5,
+        aggregation="mean",
+        n_trials=n_trials,
+        n_crops=n_crops,
+    )
+
+    assert (n_trials, n_crops) == (3, 6)
+    assert metrics["crop_combo_status"] == "computed"
+    assert metrics["crop_combo_expected_trials"] == 3
+    assert metrics["crop_combo_expected_crops"] == 6
+
+
 def test_vote_frac_threshold_candidates_include_discrete_boundaries():
     candidates = _threshold_boundary_candidates(
         {
@@ -148,11 +228,66 @@ def test_resolve_preprocessing_overrides_default_when_cli_supplies_values():
     assert resolve_preprocessing(None) == ["car", "zscore"]
     assert resolve_preprocessing(["bandpass"]) == ["bandpass"]
     assert resolve_preprocessing(["bandpass", "zscore"]) == ["bandpass", "zscore"]
+    assert resolve_preprocessing(["car,zscore"]) == ["car", "zscore"]
+    assert resolve_preprocessing(["car, zscore", "bandpass"]) == ["car", "zscore", "bandpass"]
+    assert resolve_preprocessing(['["car","zscore"]']) == ["car", "zscore"]
+    assert resolve_preprocessing(['[{"name":"bandpass","low_hz":1.0,"high_hz":40.0},"zscore"]']) == [
+        {"name": "bandpass", "low_hz": 1.0, "high_hz": 40.0},
+        "zscore",
+    ]
 
 
 def test_run_dep_hc_router_rejects_unknown_preprocessing(tmp_path):
     with pytest.raises(ValueError, match="unknown preprocessing step"):
         run_dep_hc_router.main(["--out-dir", str(tmp_path), "--preprocessing", "zscroe"])
+
+
+def test_subject_protocol_supports_p3_inner_and_outer_without_outer_leakage():
+    trial_rows = [
+        {"subject_id": f"{cohort}{1000 + idx}", "trial_id": f"{cohort}{1000 + idx}_t0", "cohort": cohort}
+        for cohort in ("HC", "DEP")
+        for idx in range(6)
+    ]
+
+    train, val, test, split_id, metadata = _subjects_for_protocol(
+        trial_rows,
+        protocol="p3",
+        seed=42,
+        fold=0,
+        n_folds=5,
+        n_holdout_subjects=12,
+        holdout_seed=999,
+        outer_fold=1,
+        inner_fold=2,
+        outer_folds=3,
+        inner_folds=3,
+        outer_seed=42,
+        inner_seed=123,
+    )
+
+    assert metadata["eval_scope"] == "p3_inner_validation"
+    assert split_id == "dep_hc_router_p3_outer1_inner2_seed42_123"
+    assert val == test
+    assert not set(metadata["outer_test_subjects"]) & test
+    assert not train & test
+
+    _train, _val, outer_test, _split_id, outer_metadata = _subjects_for_protocol(
+        trial_rows,
+        protocol="p3",
+        seed=42,
+        fold=0,
+        n_folds=5,
+        n_holdout_subjects=12,
+        holdout_seed=999,
+        outer_fold=1,
+        inner_fold=None,
+        outer_folds=3,
+        inner_folds=3,
+        outer_seed=42,
+        inner_seed=123,
+    )
+    assert outer_metadata["eval_scope"] == "p3_outer_test"
+    assert outer_test == set(metadata["outer_test_subjects"])
 
 
 def test_select_subject_threshold_uses_validation_subjects():

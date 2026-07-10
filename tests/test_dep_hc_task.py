@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import zlib
+import csv
 import json
+import zlib
 
 import numpy as np
 import pytest
@@ -13,11 +14,19 @@ from hust_bci_er.tasks.dep_hc.experiment import (
     fit_dep_hc_classifier,
     write_dep_hc_task_outputs,
 )
-from hust_bci_er.tasks.dep_hc.fusion import _fusion_selection_key, _weight_candidates, evaluate_dep_hc_feature_fusion
+from hust_bci_er.tasks.dep_hc.fusion import (
+    _fusion_selection_key,
+    _weight_candidates,
+    evaluate_dep_hc_feature_fusion,
+    evaluate_dep_hc_score_fusion,
+)
 from hust_bci_er.tasks.dep_hc.neural import (
     DEP_HC_NEURAL_MODELS,
+    _apply_probability_calibrator,
     _build_model_kwargs,
+    _fit_probability_calibrator,
     _output_logits,
+    _subject_balanced_sample_weights,
     evaluate_dep_hc_neural_task,
 )
 from hust_bci_er.tasks.dep_hc.channel_graph import (
@@ -32,6 +41,8 @@ from hust_bci_er.tasks.dep_hc.features import (
     dep_hc_features,
     time_frequency_summary_features,
 )
+from scripts.run_dep_hc_router import resolve_preprocessing
+from scripts import run_dep_hc_neural_task, run_dep_hc_score_fusion_task
 
 
 def _window(seed_text: str, *, scale: float = 1.0) -> np.ndarray:
@@ -50,6 +61,26 @@ def _sample(subject: str, cohort: str, *, crop_id: int = 0) -> RouterSample:
         window_start_sec=float(crop_id),
         cohort=cohort,
     )
+
+
+def _trial_crop_sample(subject: str, cohort: str, *, trial_id: str = "t0", crop_id: int = 0) -> RouterSample:
+    scale = 0.5 if cohort == "HC" else 1.4
+    return RouterSample(
+        x=_window(f"{subject}-{cohort}-{trial_id}-{crop_id}", scale=scale),
+        subject_id=subject,
+        trial_id=f"{subject}_{trial_id}",
+        crop_id=crop_id,
+        window_start_sec=float(crop_id),
+        cohort=cohort,
+    )
+
+
+def test_resolve_preprocessing_supports_explicit_raw_windows():
+    assert resolve_preprocessing(None) == ["car", "zscore"]
+    assert resolve_preprocessing(["none"]) == []
+    assert resolve_preprocessing(["raw"]) == []
+    with pytest.raises(ValueError, match="cannot be combined"):
+        resolve_preprocessing(["none", "zscore"])
 
 
 def test_dep_hc_task_feature_sets_are_numeric_and_metadata_free():
@@ -105,10 +136,10 @@ def test_dep_hc_task_feature_matrix_and_eval():
         _sample("DEP002", "DEP"),
     ]
     eval_samples = [
-        _sample("HC101", "HC", crop_id=0),
-        _sample("HC101", "HC", crop_id=1),
-        _sample("DEP101", "DEP", crop_id=0),
-        _sample("DEP101", "DEP", crop_id=1),
+        _trial_crop_sample("HC101", "HC", crop_id=0),
+        _trial_crop_sample("HC101", "HC", crop_id=1),
+        _trial_crop_sample("DEP101", "DEP", crop_id=0),
+        _trial_crop_sample("DEP101", "DEP", crop_id=1),
     ]
 
     features = extract_dep_hc_task_features(train, feature_set="traditional_graph", sfreq=128.0)
@@ -129,6 +160,9 @@ def test_dep_hc_task_feature_matrix_and_eval():
     assert result["metrics"]["classifier"] == "logistic"
     assert result["metrics"]["class_weight_mode"] == "uniform"
     assert result["metrics"]["n_eval_subjects"] == 2
+    assert result["metrics"]["crop_combo_status"] == "computed"
+    assert result["metrics"]["crop_combo_expected_trials"] == 1
+    assert result["metrics"]["crop_combo_expected_crops"] == 2
     assert {"DEP101", "HC101"} == {row["subject_id"] for row in result["subject_rows"]}
 
 
@@ -328,6 +362,345 @@ def test_dep_hc_fusion_weight_selection_respects_objective_and_endpoints():
     )
 
 
+def test_dep_hc_score_fusion_reads_aligned_prediction_probabilities():
+    rows_a = [
+        {
+            "subject_id": "HC101",
+            "trial_id": "HC101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "HC",
+            "y_true": "0",
+            "p_dep": "0.20",
+        },
+        {
+            "subject_id": "DEP101",
+            "trial_id": "DEP101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "DEP",
+            "y_true": "1",
+            "p_dep": "0.70",
+        },
+    ]
+    rows_b = [
+        {**rows_a[0], "p_dep": "0.40"},
+        {**rows_a[1], "p_dep": "0.90"},
+    ]
+
+    result = evaluate_dep_hc_score_fusion(
+        {"deformer": rows_a, "traditional_tf": rows_b},
+        weights={"deformer": 0.75, "traditional_tf": 0.25},
+        threshold_objective="fixed_0_5",
+        subject_aggregation="vote_frac",
+    )
+
+    assert result["metrics"]["score_fusion_components"] == ["deformer", "traditional_tf"]
+    assert result["metrics"]["fusion_weight_source"] == "fixed"
+    assert result["metrics"]["subject_ba"] == pytest.approx(1.0)
+    assert result["metrics"]["crop_combo_status"] == "computed"
+    assert result["metrics"]["crop_combo_expected_trials"] == 1
+    assert result["metrics"]["crop_combo_expected_crops"] == 1
+    by_subject = {row["subject_id"]: row["p_dep"] for row in result["prediction_rows"]}
+    assert by_subject == {"HC101": "0.25", "DEP101": "0.75"}
+
+
+def test_dep_hc_score_fusion_requires_validation_for_nonfixed_threshold():
+    rows = [
+        {
+            "subject_id": "HC101",
+            "trial_id": "HC101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "HC",
+            "y_true": "0",
+            "p_dep": "0.20",
+        }
+    ]
+    with pytest.raises(ValueError, match="validation component predictions"):
+        evaluate_dep_hc_score_fusion(
+            {"a": rows, "b": rows},
+            threshold_objective="balanced_accuracy",
+        )
+
+
+def test_dep_hc_score_fusion_validates_selection_component_names():
+    rows = [
+        {
+            "subject_id": "HC101",
+            "trial_id": "HC101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "HC",
+            "y_true": "0",
+            "p_dep": "0.20",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="component names must match"):
+        evaluate_dep_hc_score_fusion(
+            {"a": rows, "b": rows},
+            val_component_prediction_rows={"a": rows, "typo": rows},
+            threshold_objective="balanced_accuracy",
+        )
+
+
+def test_dep_hc_score_fusion_task_writes_jsonable_split_config(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    _write_score_component_run(component_a, hc_p_dep="0.20", dep_p_dep="0.70")
+    _write_score_component_run(component_b, hc_p_dep="0.30", dep_p_dep="0.80")
+    out_dir = tmp_path / "fusion"
+
+    assert (
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(out_dir),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"traditional={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads((out_dir / "dep_hc_task_diagnostic.json").read_text(encoding="utf-8"))
+    config = payload["config"]
+    assert config["protocol"] == "p2"
+    assert config["split_id"] == "dep_hc_router_p2_holdout123_train42"
+    assert config["holdout_seed"] == 123
+    assert config["component_roots"] == {
+        "deformer": str(component_a),
+        "traditional": str(component_b),
+    }
+    assert config["selection_component_roots"] == {}
+
+
+def test_dep_hc_score_fusion_task_inherits_p3_split_metadata(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    _write_score_component_run(
+        component_a,
+        hc_p_dep="0.20",
+        dep_p_dep="0.70",
+        config_overrides={
+            "protocol": "p3",
+            "split_id": "dep_hc_router_p3_outer1_inner2_seed42_123",
+            "outer_fold": 1,
+            "inner_fold": 2,
+            "outer_folds": 5,
+            "inner_folds": 3,
+            "outer_seed": 42,
+            "inner_seed": 123,
+            "eval_scope": "p3_inner_validation",
+        },
+    )
+    _write_score_component_run(
+        component_b,
+        hc_p_dep="0.30",
+        dep_p_dep="0.80",
+        config_overrides={
+            "protocol": "p3",
+            "split_id": "dep_hc_router_p3_outer1_inner2_seed42_123",
+            "outer_fold": 1,
+            "inner_fold": 2,
+            "outer_folds": 5,
+            "inner_folds": 3,
+            "outer_seed": 42,
+            "inner_seed": 123,
+            "eval_scope": "p3_inner_validation",
+        },
+    )
+    out_dir = tmp_path / "fusion"
+
+    assert (
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(out_dir),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"traditional={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+            ]
+        )
+        == 0
+    )
+
+    config = json.loads((out_dir / "dep_hc_task_diagnostic.json").read_text(encoding="utf-8"))["config"]
+    assert config["protocol"] == "p3"
+    assert config["outer_fold"] == 1
+    assert config["inner_fold"] == 2
+    assert config["eval_scope"] == "p3_inner_validation"
+
+
+def test_dep_hc_score_fusion_task_allows_p3_component_training_seed_mismatch(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    p3_split = {
+        "protocol": "p3",
+        "split_id": "dep_hc_router_p3_outer2_final_seed42",
+        "seed": 10121,
+        "fold": 0,
+        "holdout_seed": 999,
+        "outer_fold": 2,
+        "inner_fold": None,
+        "outer_folds": 5,
+        "inner_folds": 3,
+        "outer_seed": 42,
+        "inner_seed": 123,
+        "eval_scope": "p3_outer_test",
+    }
+    _write_score_component_run(
+        component_a,
+        hc_p_dep="0.20",
+        dep_p_dep="0.70",
+        config_overrides=p3_split,
+    )
+    _write_score_component_run(
+        component_b,
+        hc_p_dep="0.30",
+        dep_p_dep="0.80",
+        config_overrides={**p3_split, "seed": 11221},
+    )
+    out_dir = tmp_path / "fusion"
+
+    assert (
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(out_dir),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"tsception={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+            ]
+        )
+        == 0
+    )
+
+    config = json.loads((out_dir / "dep_hc_task_diagnostic.json").read_text(encoding="utf-8"))["config"]
+    assert config["split_id"] == "dep_hc_router_p3_outer2_final_seed42"
+    assert config["outer_fold"] == 2
+    assert "seed" not in config
+
+
+def test_dep_hc_score_fusion_task_rejects_missing_component_metadata_without_explicit_split(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    _write_score_component_run(component_a, hc_p_dep="0.20", dep_p_dep="0.70")
+    _write_score_component_run(component_b, hc_p_dep="0.30", dep_p_dep="0.80")
+    (component_b / "dep_hc_task_diagnostic.json").unlink()
+
+    with pytest.raises(SystemExit, match="missing dep_hc_task_diagnostic.json"):
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(tmp_path / "fusion"),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"traditional={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+            ]
+        )
+
+
+def test_dep_hc_score_fusion_task_allows_missing_metadata_with_explicit_p2_split(tmp_path):
+    component_a = tmp_path / "component_a"
+    component_b = tmp_path / "component_b"
+    _write_score_component_run(component_a, hc_p_dep="0.20", dep_p_dep="0.70")
+    _write_score_component_run(component_b, hc_p_dep="0.30", dep_p_dep="0.80")
+    (component_b / "dep_hc_task_diagnostic.json").unlink()
+    out_dir = tmp_path / "fusion"
+
+    assert (
+        run_dep_hc_score_fusion_task.main(
+            [
+                "--out-dir",
+                str(out_dir),
+                "--component-run-dir",
+                f"deformer={component_a}",
+                "--component-run-dir",
+                f"traditional={component_b}",
+                "--threshold-objective",
+                "fixed_0_5",
+                "--protocol",
+                "p2",
+                "--split-id",
+                "manual_p2_holdout321",
+                "--holdout-seed",
+                "321",
+                "--n-holdout-subjects",
+                "12",
+            ]
+        )
+        == 0
+    )
+
+    config = json.loads((out_dir / "dep_hc_task_diagnostic.json").read_text(encoding="utf-8"))["config"]
+    assert config["protocol"] == "p2"
+    assert config["split_id"] == "manual_p2_holdout321"
+    assert config["holdout_seed"] == 321
+    assert config["n_holdout_subjects"] == 12
+
+
+def _write_score_component_run(root, *, hc_p_dep: str, dep_p_dep: str, config_overrides: dict | None = None) -> None:
+    root.mkdir()
+    rows = [
+        {
+            "subject_id": "HC101",
+            "trial_id": "HC101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "HC",
+            "y_true": "0",
+            "p_dep": hc_p_dep,
+        },
+        {
+            "subject_id": "DEP101",
+            "trial_id": "DEP101_t0",
+            "crop_id": "0",
+            "window_start_sec": "0.0",
+            "cohort": "DEP",
+            "y_true": "1",
+            "p_dep": dep_p_dep,
+        },
+    ]
+    with (root / "dep_hc_predictions.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    (root / "dep_hc_task_diagnostic.json").write_text(
+        json.dumps(
+            {
+                "task": "dep_hc",
+                "config": {
+                    "protocol": "p2",
+                    "split_id": "dep_hc_router_p2_holdout123_train42",
+                    "seed": 42,
+                    "n_holdout_subjects": 12,
+                    "holdout_seed": 123,
+                    **(config_overrides or {}),
+                },
+                "metrics": {},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_dep_hc_neural_task_smoke_uses_cohort_target():
     pytest.importorskip("torch")
     train = [
@@ -355,9 +728,122 @@ def test_dep_hc_neural_task_smoke_uses_cohort_target():
     assert {"HC101", "DEP101"} == {row["subject_id"] for row in result["subject_rows"]}
 
 
+def test_dep_hc_neural_task_uses_actual_crop_combo_shape():
+    pytest.importorskip("torch")
+    train = [
+        _sample("HC001", "HC"),
+        _sample("HC002", "HC"),
+        _sample("DEP001", "DEP"),
+        _sample("DEP002", "DEP"),
+    ]
+    val = [_sample("HC011", "HC"), _sample("DEP011", "DEP")]
+    eval_samples = [
+        _trial_crop_sample(subject, cohort, crop_id=crop_id)
+        for subject, cohort in [("HC101", "HC"), ("DEP101", "DEP")]
+        for crop_id in range(6)
+    ]
+
+    result = evaluate_dep_hc_neural_task(
+        train,
+        eval_samples,
+        val_samples=val,
+        model_name="eegnet",
+        epochs=1,
+        batch_size=2,
+        seed=7,
+    )
+
+    assert result["metrics"]["crop_combo_status"] == "computed"
+    assert result["metrics"]["crop_combo_expected_trials"] == 1
+    assert result["metrics"]["crop_combo_expected_crops"] == 6
+
+
+def test_run_dep_hc_neural_task_counts_actual_n_crops_from_samples():
+    samples = [
+        _trial_crop_sample(subject, cohort, trial_id="trial0", crop_id=crop_id)
+        for subject, cohort in [("HC101", "HC"), ("DEP101", "DEP")]
+        for crop_id in range(6)
+    ]
+
+    assert run_dep_hc_neural_task._actual_n_crops_from_samples(samples) == 6
+
+
+def test_run_dep_hc_neural_task_rejects_nonpositive_stride(tmp_path):
+    with pytest.raises(SystemExit):
+        run_dep_hc_neural_task.main(["--out-dir", str(tmp_path), "--stride-sec", "0"])
+
+
+def test_dep_hc_neural_task_supports_calibration_and_subject_balanced_sampling():
+    pytest.importorskip("torch")
+    train = [
+        _sample("HC001", "HC", crop_id=0),
+        _sample("HC001", "HC", crop_id=1),
+        _sample("HC002", "HC", crop_id=0),
+        _sample("DEP001", "DEP", crop_id=0),
+    ]
+    val = [_sample("HC011", "HC"), _sample("DEP011", "DEP")]
+    eval_samples = [_sample("HC101", "HC"), _sample("DEP101", "DEP")]
+
+    result = evaluate_dep_hc_neural_task(
+        train,
+        eval_samples,
+        val_samples=val,
+        model_name="eegnet",
+        epochs=1,
+        batch_size=2,
+        seed=7,
+        calibration_method="temperature",
+        sampling_strategy="subject_balanced",
+    )
+
+    assert result["metrics"]["calibration_method"] == "temperature"
+    assert result["metrics"]["sampling_strategy"] == "subject_balanced"
+    assert "temperature" in result["metrics"]["calibration_params"]
+    assert "window_brier_raw" in result["metrics"]
+
+
+def test_dep_hc_neural_calibrators_and_subject_weights_are_metadata_safe():
+    torch = pytest.importorskip("torch")
+    labels = np.array([0, 0, 1, 1])
+    probs = np.array([0.2, 0.8, 0.6, 0.9])
+
+    temp = _fit_probability_calibrator(labels, probs, method="temperature")
+    platt = _fit_probability_calibrator(labels, probs, method="platt")
+
+    assert temp["method"] == "temperature"
+    assert platt["method"] == "platt"
+    assert _apply_probability_calibrator(probs, temp).shape == probs.shape
+    assert _apply_probability_calibrator(probs, platt).shape == probs.shape
+
+    samples = [
+        _sample("HC001", "HC", crop_id=0),
+        _sample("HC001", "HC", crop_id=1),
+        _sample("HC002", "HC", crop_id=0),
+        _sample("DEP001", "DEP", crop_id=0),
+        _sample("DEP001", "DEP", crop_id=1),
+    ]
+    weights = _subject_balanced_sample_weights(samples, torch.tensor([0, 0, 0, 1, 1]))
+    by_subject: dict[str, float] = {}
+    for sample, weight in zip(samples, weights.tolist()):
+        by_subject[sample.subject_id] = by_subject.get(sample.subject_id, 0.0) + float(weight)
+
+    assert by_subject["HC001"] == pytest.approx(by_subject["HC002"])
+    assert by_subject["DEP001"] == pytest.approx(0.5)
+
+
 def test_dep_hc_neural_task_supports_factory_backbone_dict_logits():
     torch = pytest.importorskip("torch")
-    assert {"fbstcnet", "srfnet", "conformer_lite", "dgcnn"} <= DEP_HC_NEURAL_MODELS
+    assert {
+        "cbramod",
+        "conformer_lite",
+        "dgcnn",
+        "fbcnet",
+        "fbstcnet",
+        "riemannian_tangent",
+        "srf_fbstcnet_gate",
+        "srfnet",
+        "tri_context_gate",
+    } <= DEP_HC_NEURAL_MODELS
 
     logits = torch.randn(2, 2)
     assert torch.equal(_output_logits(logits), logits)
@@ -370,6 +856,47 @@ def test_dep_hc_neural_task_supports_factory_backbone_dict_logits():
     fbstcnet_kwargs = _build_model_kwargs("fbstcnet", {"variant": "C", "gamma": 123})
     assert fbstcnet_kwargs["variant"] == "C"
     assert fbstcnet_kwargs["gamma"] == 123
+    cbramod_kwargs = _build_model_kwargs("cbramod")
+    assert cbramod_kwargs["classifier_pooling"] == "mean"
+    assert cbramod_kwargs["d_model"] == 64
+    route_cbramod_kwargs = _build_model_kwargs("cbramod", {"patch_size": 250, "d_model": 250, "nhead": 10})
+    assert route_cbramod_kwargs["conv_out_channels"] == 25
+    assert route_cbramod_kwargs["group_norm_groups"] == 5
+    from hust_bci_er.models.factory import build_model
+
+    build_model("cbramod", n_channels=30, n_times=2500, n_classes=2, **route_cbramod_kwargs)
+    fbcnet_kwargs = _build_model_kwargs("fbcnet")
+    assert fbcnet_kwargs["n_segments"] == 5
+    gate_kwargs = _build_model_kwargs("tri_context_gate")
+    assert gate_kwargs["gate_hidden_dim"] == 16
+    assert gate_kwargs["fbstcnet"]["variant"] == "M"
+
+
+def test_dep_hc_sample_maker_supports_sliding_windows():
+    from scripts.run_dep_hc_router import _make_samples
+
+    trial = {
+        "x": _window("sliding-source", scale=1.0).repeat(10, axis=1)[:, :2500],
+        "y": 0,
+        "subject_id": "HC001",
+        "cohort": "HC",
+        "trial_id": "HC001_neu1",
+    }
+
+    samples = _make_samples(
+        [trial],
+        preprocessing=[],
+        source_trial_sec=10,
+        window_sec=6,
+        n_crops=5,
+        stride_sec=1,
+        ea_transform=None,
+    )
+
+    assert len(samples) == 5
+    assert [sample.crop_id for sample in samples] == [0, 1, 2, 3, 4]
+    assert [sample.window_start_sec for sample in samples] == [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert {sample.x.shape for sample in samples} == {(30, 1500)}
 
 
 def test_dep_hc_neural_task_rejects_unknown_model_name():
