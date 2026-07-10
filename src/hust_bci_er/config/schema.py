@@ -271,7 +271,7 @@ def validate_augmentation(data: dict[str, Any], errors: list[str]) -> None:
         errors.append("augmentation.random_offset must be a boolean")
     if (augmentation.get("train_random_crop") or augmentation.get("random_offset")) and name != "split_first_fixed_crops":
         errors.append("augmentation train random crop is only supported for split_first_fixed_crops")
-    if augmentation.get("random_offset"):
+    if augmentation.get("train_random_crop") or augmentation.get("random_offset"):
         offset_sec = validate_non_negative_number(
             augmentation.get("random_offset_sec", 0.0),
             "augmentation.random_offset_sec",
@@ -394,12 +394,13 @@ def validate_augmentation_transforms(augmentation: dict[str, Any], errors: list[
             if "include_frontal" in item and not isinstance(item["include_frontal"], bool):
                 errors.append(f"{field}.include_frontal must be boolean")
         elif name == "time_mask":
-            max_width = validate_positive_int(item.get("max_width", 25), f"{field}.max_width", errors)
-            window_samples = augmentation_window_samples(augmentation)
-            if max_width is not None and window_samples is not None and max_width >= window_samples:
-                errors.append(f"{field}.max_width must be < augmentation.window_sec * 250Hz")
             if "mask_ratio" in item:
                 validate_open_probability(item.get("mask_ratio"), f"{field}.mask_ratio", errors)
+            else:
+                max_width = validate_positive_int(item.get("max_width", 25), f"{field}.max_width", errors)
+                window_samples = augmentation_window_samples(augmentation)
+                if max_width is not None and window_samples is not None and max_width >= window_samples:
+                    errors.append(f"{field}.max_width must be < augmentation.window_sec * 250Hz")
         elif name == "smooth_time_mask":
             validate_open_probability(item.get("mask_ratio", 0.05), f"{field}.mask_ratio", errors)
             validate_probability(item.get("attenuation", 0.0), f"{field}.attenuation", errors)

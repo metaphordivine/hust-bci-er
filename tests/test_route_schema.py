@@ -257,6 +257,33 @@ def test_time_mask_width_must_fit_window_samples():
     assert any("max_width" in err and "250Hz" in err for err in errors)
 
 
+def test_train_random_crop_validates_random_offset_sec_even_without_random_offset():
+    data = load_route("configs/routes/models/fixed_crop_ea_tsception_train_aug.yaml")
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["train_random_crop"] = True
+    data["augmentation"]["random_offset"] = False
+    data["augmentation"]["random_offset_sec"] = -1.0
+
+    errors = validate_route_config(data, path=Path("fixed_crop_ea_tsception_train_aug.yaml"))
+
+    assert any("random_offset_sec" in err and "non-negative" in err for err in errors)
+
+
+def test_time_mask_ratio_does_not_validate_unused_default_max_width():
+    data = load_route("configs/routes/models/fixed_crop_ea_tsception_train_aug.yaml")
+    data["input_window_sec"] = 0.05
+    data["augmentation"] = dict(data["augmentation"])
+    data["augmentation"]["window_sec"] = 0.05
+    data["augmentation"]["source_trial_sec"] = 0.25
+    data["augmentation"]["transforms"] = [
+        {"name": "time_mask", "mask_ratio": 0.2, "apply_to_splits": ["train"]}
+    ]
+
+    errors = validate_route_config(data, path=Path("fixed_crop_ea_tsception_train_aug.yaml"))
+
+    assert not any("max_width" in err and "250Hz" in err for err in errors)
+
+
 def test_graph_and_hemisphere_routes_require_declared_montage():
     data = load_route("configs/routes/models/fixed_crop_ea_tsception.yaml")
     data["model"] = dict(data["model"])
